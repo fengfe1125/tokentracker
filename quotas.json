@@ -1,0 +1,38 @@
+{
+  "note": "固定窗口配额进度条（5小时 / 7天 / 月度），不随页面时间范围变化。每项必填 tool；窗口上限二选一：limit_tokens（token 数）或 limit_usd（美元，用量按本地成本统计）。official 为官方抓取通道（claude-oauth / kimi），凭据有效时显示官方百分比+重置倒计时，失效自动降级本地估算并在卡片标注原因。OpenCode Go 的 $12/$30/$60 为官方公开固定值；claude/kimi/codex 的 token 上限请按你的真实订阅填写。",
+  "entries": [
+    {
+      "id": "claude", "name": "Claude Code", "plan": "Pro / Max",
+      "tool": "claude", "official": "claude-oauth",
+      "windows": {
+        "5h": { "label": "5 小时", "limit_tokens": 100000000 },
+        "7d": { "label": "周 (7天)", "limit_tokens": 400000000 }
+      }
+    },
+    {
+      "id": "kimi", "name": "Kimi", "plan": "Kimi for Coding（官方=请求次数）",
+      "tool": "kimi", "official": "kimi",
+      "windows": {
+        "5h": { "label": "5 小时", "limit_tokens": 50000000 },
+        "7d": { "label": "周 (7天)", "limit_tokens": 200000000 },
+        "month": { "label": "月度", "limit_tokens": 800000000 }
+      }
+    },
+    {
+      "id": "go", "name": "OpenCode Go", "plan": "GO 订阅：$12 / 5小时 · $30 / 周 · $60 / 月",
+      "tool": "dsh", "model_prefix": "deepseek", "official": "go",
+      "windows": {
+        "5h": { "label": "5 小时", "limit_usd": 12 },
+        "7d": { "label": "周 (7天)", "limit_usd": 30 },
+        "month": { "label": "月度", "limit_usd": 60 }
+      }
+    },
+    {
+      "id": "codex", "name": "Codex", "plan": "ChatGPT 订阅",
+      "tool": "codex", "official": "codex",
+      "windows": {
+        "7d": { "label": "周 (7天)", "limit_tokens": 500000000 }
+      }
+    }
+  ]
+}

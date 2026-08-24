@@ -1,0 +1,23 @@
+{
+  "note": "单位：美元 / 每百万 token。可自由增删改；模型名匹配规则：先精确，再子串（不区分大小写）。删除某模型即不计费；显式 0 = 免费模型。改完执行 ./tt scan（自动 reprice 回填）。",
+  "default": { "input": 2.0, "output": 10.0, "cache_read": 0.4, "cache_write": 2.0 },
+  "models": {
+    "claude-opus-4-5":   { "input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 1.25 },
+    "claude-opus-5":     { "input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 1.25 },
+    "claude-sonnet-4-5": { "input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 0.75 },
+    "claude-sonnet-5":   { "input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 0.75 },
+    "claude-haiku":      { "input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 0.25 },
+    "gpt-5":             { "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 1.25 },
+    "gpt-5.6-luna":      { "input": 2.0,  "output": 12.0, "cache_read": 0.2,  "cache_write": 2.0 },
+    "codex-auto-review": { "input": 1.0,  "output": 8.0,  "cache_read": 0.1,  "cache_write": 1.0 },
+    "deepseek-v4-flash": { "input": 0.22, "output": 0.66, "cache_read": 0.007, "cache_write": 0.22 },
+    "deepseek-v4-pro":   { "input": 0.66, "output": 1.98, "cache_read": 0.022, "cache_write": 0.66 },
+    "kimi-k2":           { "input": 0.6,  "output": 2.5,  "cache_read": 0.1,  "cache_write": 0.6 },
+    "kimi-k3":           { "input": 0.6,  "output": 2.5,  "cache_read": 0.1,  "cache_write": 0.6 },
+    "kimi-code":         { "input": 0.6,  "output": 2.5,  "cache_read": 0.1,  "cache_write": 0.6 },
+    "grok-4.6":          { "input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.0 },
+    "minimax-m3":        { "input": 0.3,  "output": 1.0,  "cache_read": 0.03, "cache_write": 0.3 },
+    "gemini-3.1-pro-preview": { "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 1.25 },
+    "stepfun/step-3.7-flash:free": { "input": 0, "output": 0 }
+  }
+}

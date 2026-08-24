@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TokenTracker — AI 工具 Token 用量</title>
+<script src="/vendor/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#151b23; --panel2:#1b2430; --line:#232d3a;
+    --fg:#e6edf3; --mut:#8b98a9; --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --danger:#f85149;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg)}
+  body{font:13px/1.6 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--fg);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto;padding:16px 20px 48px}
+
+  /* ---------- 顶栏 ---------- */
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:4px}
+  h1{font-size:17px;font-weight:700;letter-spacing:.2px;display:flex;align-items:baseline;gap:10px}
+  h1 .sub{font-size:12px;color:var(--mut);font-weight:400}
+  .sp{flex:1}
+  .tabs{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .tabs button{border:0;background:transparent;color:var(--mut);padding:5px 13px;font-size:12.5px;cursor:pointer}
+  .tabs button:hover{color:var(--fg)}
+  .tabs button.on{background:var(--acc);color:#04101f;font-weight:600}
+  button,select{border:1px solid var(--line);background:var(--panel2);color:var(--fg);border-radius:8px;padding:5px 12px;font-size:12.5px;cursor:pointer;font-family:inherit}
+  button:hover,select:hover{border-color:var(--acc)}
+  button:disabled{opacity:.5;cursor:default}
+  #status{font-size:12px;color:var(--mut);min-width:110px;text-align:right}
+  #status.running{color:var(--warn)}
+
+  /* ---------- 分区标题 ---------- */
+  .sect{font-size:11.5px;font-weight:600;color:var(--mut);letter-spacing:.12em;text-transform:uppercase;margin:20px 0 10px}
+
+  /* ---------- 配额卡 ---------- */
+  .quota{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .qhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .qname{font-weight:600;font-size:13.5px}
+  .qbadge{font-size:10px;padding:1px 6px;border-radius:4px;white-space:nowrap}
+  .qbadge.official{background:rgba(88,166,255,.14);color:var(--acc);border:1px solid rgba(88,166,255,.35)}
+  .qbadge.local{background:rgba(139,152,169,.12);color:var(--mut);border:1px solid rgba(139,152,169,.3)}
+  .qplan{font-size:11px;color:var(--mut);margin-left:auto;text-align:right;line-height:1.4}
+  .qwin{margin-top:9px}
+  .qw-top{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;margin-bottom:4px}
+  .qw-label{color:var(--mut)}
+  .qw-val{font-variant-numeric:tabular-nums;color:var(--fg)}
+  .qw-val .cnt{color:var(--mut)}
+  .qtrack{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden}
+  .qfill{height:100%;border-radius:3px;transition:width .5s ease}
+  .qfill.ok{background:var(--ok)}.qfill.warn{background:var(--warn)}.qfill.danger{background:var(--danger)}.qfill.none{background:#3b4654}
+  .qnote{font-size:11px;color:var(--mut);margin-top:9px;line-height:1.45}
+
+  /* ---------- 总览数字卡 ---------- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+  .stat .k{font-size:11.5px;color:var(--mut)}
+  .stat .v{font-size:23px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums;letter-spacing:.3px}
+  .stat .v small{font-size:11.5px;color:var(--mut);font-weight:400;letter-spacing:0}
+
+  /* ---------- 图表 ---------- */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  @media(max-width:960px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px 14px}
+  .phead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .ptitle{font-size:13px;font-weight:600}
+  .phint{font-size:11.5px;color:var(--mut);font-weight:400}
+  .mini{margin-left:auto;font-size:11.5px;padding:2px 10px;border-radius:6px}
+  .mini.on{border-color:var(--acc);color:var(--acc)}
+  .chart-box{position:relative;width:100%;height:240px}
+  .chart-box.tall{height:300px}
+  .chart-box canvas{width:100%!important;height:100%!important}
+
+  /* ---------- 表格 ---------- */
+  .tbl-wrap{max-height:360px;overflow:auto;border-radius:8px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{position:sticky;top:0;z-index:1;background:var(--panel);color:var(--mut);font-weight:500;text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:6px 10px;border-bottom:1px solid #1c2530;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr:hover td{background:rgba(88,166,255,.045)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+  .mut{color:var(--mut)}
+  .err{color:var(--danger)}
+  .empty{color:var(--mut);padding:14px;text-align:center}
+
+  footer{margin-top:26px;color:var(--mut);font-size:11.5px;line-height:1.8}
+  footer code{background:var(--panel2);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>TokenTracker <span class="sub">Claude · Kimi · Codex · DSH · Pi · opencode · Hermes</span></h1>
+    <div class="sp"></div>
+    <div class="tabs" id="rangeTabs">
+      <button data-r="day">今天</button>
+      <button data-r="week">本周</button>
+      <button data-r="month">本月</button>
+      <button data-r="all" class="on">全部</button>
+    </div>
+    <select id="toolSel"><option value="">全部工具</option></select>
+    <button id="scanBtn">重新扫描</button>
+    <button id="autoBtn" class="on">自动刷新</button>
+    <span id="status"></span>
+  </header>
+
+  <div class="sect">订阅配额 · 固定窗口（官方数据优先）</div>
+  <section class="quota" id="quota"></section>
+
+  <div class="sect">总览</div>
+  <section class="cards" id="cards"></section>
+
+  <div class="sect">趋势与对比</div>
+  <section class="grid">
+    <div class="panel">
+      <div class="phead"><span class="ptitle">每日 Token 趋势</span><span class="phint">输入 + 输出</span><button id="yToggle" class="mini">Y 轴</button></div>
+      <div class="chart-box"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="phead"><span class="ptitle">各工具总量对比</span><span class="phint">输入 + 输出 + 缓存</span></div>
+      <div class="chart-box tall"><canvas id="toolChart"></canvas></div>
+    </div>
+  </section>
+
+  <div class="sect">明细</div>
+  <section class="grid">
+    <div class="panel">
+      <div class="phead"><span class="ptitle">模型分布</span></div>
+      <div class="tbl-wrap"><table id="modelTable">
+        <thead><tr><th>工具</th><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>成本 $</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+    <div class="panel">
+      <div class="phead"><span class="ptitle">最近会话</span></div>
+      <div class="tbl-wrap"><table id="sessionTable">
+        <thead><tr><th>工具</th><th>项目</th><th>模型</th><th>最后活动</th><th>输入</th><th>输出</th><th>成本 $</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <footer>
+    TokenTracker · 数据 100% 本地，官方配额仅做只读查询（凭据不落盘）· 价格表 <code>prices.json</code> · 配额窗口 <code>quotas.json</code> · 未匹配价格的模型只计 token 不计费
+  </footer>
+</div>
+
+<script>
+const TOOL_COLOR = {
+  claude:"#d97757", codex:"#10a37f", opencode:"#d29922", dsh:"#7c5cff",
+  kimi:"#23b7fb", pi:"#e25555", hermes:"#9be9b0", other:"#8b98a9"
+};
+const TOOL_ZH = { claude:"Claude", codex:"Codex", opencode:"opencode", dsh:"DSH", kimi:"Kimi", pi:"Pi", hermes:"Hermes" };
+const EMPTY_STATS = {rows:[], total:{sessions:0,events:0,input:0,output:0,cache_read:0,cache_write:0,cost:0,unpriced:0}};
+
+let range = "all", tool = "", autoOn = true, lastDaily = [], logY = null;
+let dailyChart = null, toolChart = null;
+
+const $ = id => document.getElementById(id);
+const fmt = n => {
+  n = Number(n)||0;
+  if (n >= 1e9) return (n/1e9).toFixed(2)+"B";
+  if (n >= 1e6) return (n/1e6).toFixed(2)+"M";
+  if (n >= 1e3) return (n/1e3).toFixed(1)+"k";
+  return String(Math.round(n));
+};
+const fmtCost = n => n==null ? '<span class="mut">—</span>' : "$"+Number(n).toFixed(2);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function api(path){
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path+" -> "+r.status);
+  return r.json();
+}
+async function safe(path, fallback){
+  try { return await api(path); } catch(e){ console.error(path, e); return fallback; }
+}
+
+/* ---------------------------------------------------------------- 加载 ----
+   每个区块独立容错：任何一个接口/渲染失败都不影响其他部分。          */
+async function loadAll(){
+  const [det, stats, daily, models, sessions, quotas] = await Promise.all([
+    safe("/api/detect", {}),
+    safe(`/api/stats?range=${range}&tool=${tool}`, EMPTY_STATS),
+    safe(`/api/daily?range=${range}`, {rows:[]}),
+    safe(`/api/models?range=${range}&tool=${tool}`, {rows:[]}),
+    safe(`/api/sessions?range=${range}&tool=${tool}&limit=200`, {rows:[]}),
+    safe("/api/quotas", {entries:[]}),
+  ]);
+  renderDetect(det);
+  // 显式调用，按各自签名传参（不再用参数位置循环，防止错位）
+  try { renderCards(stats); } catch(e){ console.error("cards:", e); }
+  try { renderModels(models); } catch(e){ console.error("models:", e); }
+  try { renderSessions(sessions); } catch(e){ console.error("sessions:", e); }
+  try { renderQuota(quotas); } catch(e){ console.error("quota:", e); }
+  try { renderTools(stats); } catch(e){ console.error("tools:", e); }
+  try { renderDaily(daily); } catch(e){ console.error("daily:", e); }
+  $("status").textContent = "更新于 " + new Date().toLocaleTimeString();
+}
+
+function renderDetect(det){
+  const sel = $("toolSel"), cur = sel.value;
+  let opts = '<option value="">全部工具</option>';
+  for (const [name, info] of Object.entries(det))
+    opts += `<option value="${name}">${TOOL_ZH[name]||name} ${info.installed ? "✓" : "—"}</option>`;
+  sel.innerHTML = opts;
+  if (cur) sel.value = cur;
+}
+
+function renderCards(stats){
+  const t = stats.total;
+  $("cards").innerHTML = [
+    [ "总 Token（输入+输出）", fmt(t.input + t.output), `${fmt(t.cache_read)} 缓存读 / ${fmt(t.cache_write)} 缓存写` ],
+    [ "估算成本", fmtCost(t.cost), `${t.unpriced} 条未计价` ],
+    [ "会话数", fmt(t.sessions), `${fmt(t.events)} 条用量事件` ],
+  ].map(c => `<div class="card stat"><div class="k">${c[0]}</div><div class="v">${c[1]}<small>　${c[2]}</small></div></div>`).join("");
+}
+
+/* ---------------------------------------------------------------- 配额 ----
+   固定窗口，不随时间范围变化。来源徽章：官方 / 本地估算。            */
+function renderQuota(quotas){
+  if (!quotas.entries || !quotas.entries.length){ $("quota").innerHTML = '<div class="empty">暂无配额配置（编辑 quotas.json）</div>'; return; }
+  $("quota").innerHTML = quotas.entries.map(e => {
+    const srcB = e.source==="official"
+      ? '<span class="qbadge official">官方</span>'
+      : '<span class="qbadge local">本地估算</span>';
+    const wins = (e.windows||[]).map(w => {
+      const width = w.pct==null ? 0 : Math.min(w.pct, 100);
+      const cls = w.pct==null ? "none" : (w.pct>=100 ? "danger" : w.pct<60 ? "ok" : w.pct<85 ? "warn" : "danger");
+      let val;
+      if (w.unit==="pct") val = w.pct.toFixed(0)+"%";
+      else if (w.unit==="requests") val = `${w.used} / ${w.limit} 次`;
+      else if (w.unit==="usd") val = "$"+Number(w.used).toFixed(2)+" / $"+fmt(Math.round(w.limit));
+      else val = fmt(w.used)+" / "+fmt(w.limit);
+      val += " · " + (w.pct==null ? "未设上限" : w.pct.toFixed(0)+"%");
+      if (w.source==="official") val += ' <span class="qbadge official">官方</span>';
+      const cnt = w.resets_at ? `<span class="cnt" data-r="${w.resets_at}"></span>` : "";
+      return `<div class="qwin">
+        <div class="qw-top"><span class="qw-label">${esc(w.label)}</span><span class="qw-val">${val} ${cnt}</span></div>
+        <div class="qtrack"><div class="qfill ${cls}" style="width:${width}%"></div></div>
+      </div>`;
+    }).join("");
+    return `<div class="card"><div class="qhead"><span class="qname">${esc(e.name)}</span>${srcB}<span class="qplan">${esc(e.plan)}</span></div>${wins}${e.note?`<div class="qnote">⚠ ${esc(e.note)}</div>`:""}</div>`;
+  }).join("");
+  updateCountdowns();
+}
+function updateCountdowns(){
+  document.querySelectorAll(".cnt").forEach(el => {
+    const at = Number(el.dataset.r);
+    const left = at ? Math.max(0, Math.ceil((at - Date.now())/60000)) : 0;
+    el.textContent = left > 0 ? `重置 ${left} 分钟` : (at ? "即将重置" : "");
+  });
+}
+setInterval(updateCountdowns, 30000);
+
+/* ---------------------------------------------------------------- 图表 ---- */
+function effectiveY(){
+  if (logY !== null) return logY;
+  const days = [...new Set(lastDaily.map(r=>r.d))].sort();
+  const tools = [...new Set(lastDaily.map(r=>r.tool))];
+  const tot = days.map((_,i)=>tools.reduce((a,t)=>a+(lastDaily.find(x=>x.tool===t&&x.d===days[i])?.input||0),0)
+                           + tools.reduce((a,t)=>a+(lastDaily.find(x=>x.tool===t&&x.d===days[i])?.output||0),0))
+      .filter(v=>v>0).sort((a,b)=>b-a);
+  return tot.length>1 && tot[0]/tot[1] > 25;
+}
+
+function renderDaily(daily){
+  lastDaily = daily.rows || [];
+  const rows = lastDaily;
+  const days = [...new Set(rows.map(r=>r.d))].sort();
+  const tools = [...new Set(rows.map(r=>r.tool))];
+  if (!days.length){
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = null;
+    return;
+  }
+  const data = tools.map(t => days.map(d => {
+    const r = rows.find(x=>x.tool===t && x.d===d);
+    return r ? r.input + r.output : 0;
+  }));
+  const effLog = effectiveY();
+  const datasets = tools.map((t,i) => ({
+    label: TOOL_ZH[t]||t,
+    data: data[i].map(v => (effLog && v===0) ? null : v),
+    borderColor: TOOL_COLOR[t]||TOOL_COLOR.other,
+    backgroundColor: (TOOL_COLOR[t]||TOOL_COLOR.other)+"22",
+    fill: true, tension: .3, borderWidth: 1.6, pointRadius: effLog ? 1 : 2, pointHoverRadius: 4, spanGaps: true
+  }));
+  if (dailyChart) dailyChart.destroy();
+  dailyChart = new Chart($("dailyChart"), {
+    type: "line",
+    data: { labels: days.map(d => d.slice(5)), datasets },
+    options: {
+      maintainAspectRatio: false, interaction: {mode:"index", intersect:false},
+      scales: {
+        x: { ticks: {color:"#8b98a9", maxTicksLimit: 14, font:{size:11}}, grid:{color:"#1c2530"} },
+        y: { type: effLog ? "logarithmic" : "linear", min: effLog ? 1 : undefined,
+             ticks: {color:"#8b98a9", callback: v=>fmt(v), font:{size:11}}, grid:{color:"#1c2530"} }
+      },
+      plugins: {
+        legend: { labels: {color:"#e6edf3", font:{size:11}, boxWidth:10, boxHeight:10}, position:"top" },
+        tooltip: { callbacks: { label: c => c.dataset.label + ": " + (c.parsed.y==null ? "—" : fmt(c.parsed.y)) } }
+      }
+    }
+  });
+  $("yToggle").textContent = "Y 轴: " + (effLog ? "对数" : "线性");
+  $("yToggle").classList.toggle("on", effLog);
+}
+
+function renderTools(stats){
+  const list = (stats.rows||[]).filter(r => r.tool !== "__total__");
+  if (!list.length){ if (toolChart) toolChart.destroy(); toolChart = null; return; }
+  if (toolChart) toolChart.destroy();
+  toolChart = new Chart($("toolChart"), {
+    type: "bar",
+    data: {
+      labels: list.map(r => TOOL_ZH[r.tool]||r.tool),
+      datasets: [
+        {label:"输入", data:list.map(r=>r.input), backgroundColor:"#58a6ff", borderRadius:2},
+        {label:"输出", data:list.map(r=>r.output), backgroundColor:"#d29922", borderRadius:2},
+        {label:"缓存读", data:list.map(r=>r.cache_read), backgroundColor:"#3fb950", borderRadius:2}
+      ]
+    },
+    options: {
+      indexAxis: "y", maintainAspectRatio: false,
+      scales: {
+        x: { stacked:true, ticks:{color:"#8b98a9", callback:v=>fmt(v), font:{size:11}}, grid:{color:"#1c2530"} },
+        y: { stacked:true, ticks:{color:"#8b98a9", font:{size:11.5}}, grid:{display:false} }
+      },
+      plugins: {
+        legend: { labels:{color:"#e6edf3", font:{size:11}, boxWidth:10, boxHeight:10}, position:"top" },
+        tooltip: { callbacks:{ label: c => c.dataset.label + ": " + fmt(c.parsed.x) } }
+      }
+    }
+  });
+}
+
+/* ---------------------------------------------------------------- 表格 ---- */
+function renderModels(models){
+  const rows = models.rows || [];
+  $("modelTable").querySelector("tbody").innerHTML = rows.length ? rows.map(r =>
+    `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${TOOL_ZH[r.tool]||r.tool}</td>
+      <td>${esc(r.model)||'<span class="mut">未知</span>'}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td>
+      <td>${fmt(r.cache_read)}</td><td>${fmtCost(r.cost)}</td></tr>`).join("")
+    : '<tr><td colspan="6" class="empty">当前范围暂无数据</td></tr>';
+}
+
+function renderSessions(sessions){
+  const rows = sessions.rows || [];
+  $("sessionTable").querySelector("tbody").innerHTML = rows.length ? rows.map(r => {
+    const proj = String(r.project||"").split("/").slice(-2).join("/") || "—";
+    return `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${TOOL_ZH[r.tool]||r.tool}</td>
+      <td title="${esc(r.project)}">${esc(proj)}</td><td>${esc(r.model)||'<span class="mut">—</span>'}</td>
+      <td class="mut">${esc(r.last_seen||"")}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td><td>${fmtCost(r.cost)}</td></tr>`;
+  }).join("") : '<tr><td colspan="7" class="empty">当前范围暂无数据</td></tr>';
+}
+
+/* ---------------------------------------------------------------- 交互 ---- */
+$("yToggle").addEventListener("click", () => {
+  logY = !effectiveY();
+  renderDaily({rows: lastDaily});
+});
+$("rangeTabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#rangeTabs button").forEach(x => x.classList.toggle("on", x===b));
+  range = b.dataset.r;
+  loadAll();
+});
+$("toolSel").addEventListener("change", e => { tool = e.target.value; loadAll(); });
+
+$("scanBtn").addEventListener("click", async () => {
+  $("scanBtn").disabled = true;
+  $("status").textContent = "扫描中…"; $("status").classList.add("running");
+  try {
+    await fetch("/api/scan", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    for (let i = 0; i < 60; i++){
+      await new Promise(r => setTimeout(r, 1000));
+      const st = await safe("/api/scan/status", {});
+      if (st && st.last && st.last.done){ break; }
+    }
+    await loadAll();
+  } catch(err){ $("status").textContent = "扫描失败: " + err; }
+  $("scanBtn").disabled = false;
+  $("status").classList.remove("running");
+});
+
+$("autoBtn").addEventListener("click", () => {
+  autoOn = !autoOn;
+  $("autoBtn").classList.toggle("on", autoOn);
+  if (autoOn) setTimeout(tick, 15000);
+});
+function tick(){
+  if (!document.hidden) loadAll().catch(()=>{});
+  if (autoOn) setTimeout(tick, 15000);
+}
+
+loadAll().catch(e => { $("status").textContent = "加载失败: " + e; });
+</script>
+</body>
+</html>
