@@ -169,10 +169,12 @@ def kimi_usage() -> dict:
     windows = {}
     usage = data.get("usage") or {}
     limits = data.get("limits") or []
-    # 周期配额（周/计划周期，按 resetTime 命名）
+    # 周期配额（周/计划周期，按 resetTime 命名）；used 缺省时用 limit-remaining 反推
     if isinstance(usage, dict):
         lim = usage.get("limit")
         used = usage.get("used")
+        if used is None and usage.get("remaining") is not None:
+            used = float(lim) - float(usage["remaining"])
         if lim is not None and used is not None:
             try:
                 pct = float(used) / float(lim) * 100
@@ -180,13 +182,18 @@ def kimi_usage() -> dict:
                 pct = None
             windows["7d"] = {"pct": pct, "resets_at": _iso_ms(usage.get("resetTime")),
                              "used": used, "limit": lim, "unit": "requests"}
-    # 5 小时窗口（limits[0].duration=300 分钟）
+    # 5 小时窗口（limits[0].duration=300 分钟）；同上反推
     for lt in limits:
         detail = lt.get("detail") or {}
         win = lt.get("window") or {}
         if detail.get("limit") is None:
             continue
-        lim = detail["limit"]; used = detail.get("used")
+        lim = detail["limit"]
+        used = detail.get("used")
+        if used is None and detail.get("remaining") is not None:
+            used = float(lim) - float(detail["remaining"])
+        if used is None:
+            continue
         try:
             pct = float(used) / float(lim) * 100
         except (ValueError, ZeroDivisionError):
