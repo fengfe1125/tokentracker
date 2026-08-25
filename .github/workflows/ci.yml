@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 冒烟测试（核心库：计价/入库/聚合/配额/扫描器/HTTP 路由）
+        run: python -m unittest discover -s tests -v
+
+  build-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 打包 macOS App（PyInstaller）
+        run: ./scripts/build_app.sh
+      - name: 校验产物
+        run: |
+          test -x dist/TokenTracker.app/Contents/MacOS/TokenTracker
+          /usr/libexec/PlistBuddy -c "Print :LSUIElement" dist/TokenTracker.app/Contents/Info.plist | grep -q true
+          echo "dist/TokenTracker.app OK"

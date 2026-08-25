@@ -145,7 +145,10 @@ def compute(conn) -> dict:
                 "resets_at": None, "source": "local",
             })
         status = ""
-        if official and official.get("error"):
+        if official and official.get("_stale_min"):
+            status = (f"官方接口暂时不可用（{official.get('_err') or '限流'}），"
+                      f"显示 {official['_stale_min']} 分钟前的官方数据")
+        elif official and official.get("error"):
             status = official.get("detail") or official.get("error")
         plan = e.get("plan", "")
         if official and official.get("plan"):

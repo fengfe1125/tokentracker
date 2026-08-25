@@ -76,11 +76,10 @@ def scan(conn, prices, full: bool = False) -> dict:
                 key = (msg or {}).get("id") or f"{session_id}|{lineno}"
                 ts = _ms_from_ts(obj.get("timestamp"), int(st.st_mtime * 1000))
                 cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
-                db.put_event(conn, NAME, f"{session_id}|{key}",
-                             session_id=session_id, project=slug, ts=ts,
-                             model=model, input=inp, output=outp,
-                             cache_read=cr, cache_write=cw, cost=cost)
-                added += 1
+                added += db.put_event(conn, NAME, f"{session_id}|{key}",
+                                      session_id=session_id, project=slug, ts=ts,
+                                      model=model, input=inp, output=outp,
+                                      cache_read=cr, cache_write=cw, cost=cost)
             cursor[path] = stat_key(path)
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}

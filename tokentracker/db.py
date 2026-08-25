@@ -71,7 +71,8 @@ def put_event(conn, tool: str, src_key: str, *,
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         row,
     )
-    return cur.rowcount if verb == "INSERT OR REPLACE" else conn.total_changes
+    # INSERT OR IGNORE：重复事件返回 0，真实新增返回 1；REPLACE 恒为 1
+    return cur.rowcount
 
 
 def set_scan_cursor(conn, tool: str, cursor: dict):
@@ -229,6 +230,37 @@ def reprice(conn, prices) -> int:
             n += 1
     conn.commit()
     return n
+
+
+def session_detail(conn, tool: str, session_id: str) -> dict:
+    """单会话钻取：按模型聚合 + 总计 + 项目路径。"""
+    models = [dict(r) for r in conn.execute(
+        """
+        SELECT model,
+               COUNT(*) AS events,
+               COALESCE(SUM(input),0) AS input,
+               COALESCE(SUM(output),0) AS output,
+               COALESCE(SUM(cache_read),0) AS cache_read,
+               COALESCE(SUM(cache_write),0) AS cache_write,
+               COALESCE(SUM(cost),0) AS cost,
+               MIN(ts) AS first_ts, MAX(ts) AS last_ts
+        FROM usage_events WHERE tool=? AND session_id=?
+        GROUP BY model ORDER BY input+output DESC
+        """,
+        (tool, session_id),
+    )]
+    meta = conn.execute(
+        """
+        SELECT COALESCE(MAX(NULLIF(project,'')),'') AS project,
+               COUNT(*) AS events,
+               COALESCE(SUM(input),0)+COALESCE(SUM(output),0) AS tokens,
+               COALESCE(SUM(cost),0) AS cost,
+               MIN(ts) AS first_ts, MAX(ts) AS last_ts
+        FROM usage_events WHERE tool=? AND session_id=?
+        """,
+        (tool, session_id),
+    ).fetchone()
+    return {"models": models, **dict(meta)}
 
 
 def sessions(conn, range_key: str = "all", tool: str | None = None, limit: int = 300) -> list[dict]:

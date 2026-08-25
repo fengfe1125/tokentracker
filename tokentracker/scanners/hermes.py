@@ -7,12 +7,25 @@ from __future__ import annotations
 
 import glob
 import os
+from datetime import datetime
 
 from .. import db, pricing
 from ._util import expand, sqlite_ro
 
 NAME = "hermes"
 DETAIL = "~/.hermes/state.db (session_model_usage)"
+
+
+def _ms(v) -> int:
+    """last_seen/first_seen 兼容 epoch 秒与 ISO 字符串。"""
+    if isinstance(v, (int, float)):
+        return int(v * 1000) if v < 1e12 else int(v)
+    if isinstance(v, str) and v:
+        try:
+            return int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            return 0
+    return 0
 
 
 def home() -> str:
@@ -64,7 +77,7 @@ def _scan_one(conn, path: str, prices) -> tuple[int, int]:
         if cost is None:
             # 无官方成本时按价格表估算
             cost, _ = pricing.cost_for(prices, r["model"] or "", inp, outp, cr, cw)
-        ts = int((r["last_seen"] or r["first_seen"] or 0) * 1000)
+        ts = _ms(r["last_seen"]) or _ms(r["first_seen"])
         key = f"{r['session_id']}|{r['model']}|{r['billing_provider']}|{r['billing_base_url']}|{r['billing_mode']}|{r['task']}"
         db.put_event(conn, NAME, key,
                      session_id=r["session_id"] or "",

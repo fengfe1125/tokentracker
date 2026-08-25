@@ -3,6 +3,32 @@
 统计本机 **Claude Code · Kimi Code · Codex · DSH · Pi · opencode · Hermes Agent**
 七个 AI 编程工具的 Token 用量与成本。数据 100% 本地读取各工具自己的日志，不上传任何东西。
 
+## 桌面 App（macOS 状态栏常驻 · 白色简洁 UI）
+
+> **屏幕顶部系统状态栏常驻**（⚡ 实时今日用量，点开菜单看成本/配额、立即扫描、唤出主面板）
+> + 无边框白色简洁主面板，关闭只隐藏不退出，状态栏随时唤回。
+
+```bash
+./scripts/build_app.sh              # 一键打包 → dist/TokenTracker.app（自包含，双击即用）
+open dist/TokenTracker.app
+```
+
+开发模式（无需打包）：
+
+```bash
+.venv/bin/pip install pywebview    # 首次
+.venv/bin/python app/desktop.py    # 状态栏图标 + 主面板
+```
+
+- 状态栏：标题实时显示今日 tokens（扫描中显示 ⟳）；菜单含今日统计、各订阅配额
+  最紧窗口、「打开主面板」「立即扫描」「退出」。无 Dock 图标（主面板打开时临时出现）。
+- 主面板：概览（4 统计卡 / 每日趋势图 / 订阅配额 / 模型榜）+ 会话记录两个视图；
+  侧栏展示 7 个工具的数据源状态与今日量，点击工具直达其会话列表；
+  会话表可点表头排序、点行展开详情抽屉（按模型分解，可一键在 Finder 打开项目目录）；
+  快捷键 ⌘1/⌘2 切视图、⌘R 扫描、⌘W 关闭面板；「扫描日志」按钮可随时增量扫描。
+  红点关闭仅隐藏面板，真正退出走状态栏菜单。
+- 自动扫描：App 启动时自动增量扫描一次，之后主面板每 60s 自动刷新（新日志自动入库）。
+
 ## 数据来源（自动探测）
 
 | 工具 | 数据位置 | 说明 |
@@ -84,11 +110,18 @@ tokentracker/
 ├── tt                        # 启动器
 ├── prices.json               # 可编辑价格表
 ├── web/index.html            # 单页仪表盘（Chart.js 已内置离线）
+├── app/                      # 桌面 App（pywebview 玻璃风主面板 + 状态栏常驻）
+│   ├── desktop.py            # 入口：主面板 + NSStatusItem 状态栏
+│   ├── menubar.py            # 状态栏：今日用量标题 + 下拉菜单
+│   └── web/                  # 主界面 index.html / app.css / app.js
+├── scripts/
+│   ├── build_app.sh          # 一键打包 → dist/TokenTracker.app
+│   └── make_icon.py          # 图标生成（纯 Python）
 └── tokentracker/
     ├── __main__.py           # CLI: scan / stats / detect / serve
     ├── db.py                 # SQLite 汇总库 + 查询
     ├── pricing.py            # 成本估算
-    ├── server.py             # 本地 HTTP 服务
+    ├── server.py             # 本地 HTTP 服务（含 /app/* GUI 静态路由）
     └── scanners/             # 7 个工具的适配器
 ```
 

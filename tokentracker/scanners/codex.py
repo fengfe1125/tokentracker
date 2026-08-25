@@ -82,11 +82,10 @@ def _scan_sqlite(conn, prices, cursor, full) -> tuple[int, int, int]:
         else:
             ts = int(ts_raw * 1000 + ts_nanos // 1_000_000)  # 秒 + 纳秒
         cost, _ = pricing.cost_for(prices, model, inp, outp, cached, cw)
-        db.put_event(conn, NAME, f"logs2|{r['id']}",
-                     session_id=sid, project="", ts=ts,
-                     model=model, input=inp, output=outp,
-                     cache_read=cached, cache_write=cw, cost=cost)
-        added += 1
+        added += db.put_event(conn, NAME, f"logs2|{r['id']}",
+                              session_id=sid, project="", ts=ts,
+                              model=model, input=inp, output=outp,
+                              cache_read=cached, cache_write=cw, cost=cost)
         last_id = r["id"]
     src.close()
     cursor["logs2_last_id"] = last_id
@@ -128,11 +127,10 @@ def _scan_legacy(conn, prices, cursor, full) -> tuple[int, int, int]:
                     ts_ms = int(ts * 1000 if ts < 1e12 else ts)
                 sid = obj.get("thread_id") or obj.get("session_id") or name[:-6]
                 cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
-                db.put_event(conn, NAME, f"legacy|{path}|{lineno}",
-                             session_id=str(sid), project=dirpath, ts=ts_ms,
-                             model=model, input=inp, output=outp,
-                             cache_read=cr, cache_write=cw, cost=cost)
-                added += 1
+                added += db.put_event(conn, NAME, f"legacy|{path}|{lineno}",
+                                      session_id=str(sid), project=dirpath, ts=ts_ms,
+                                      model=model, input=inp, output=outp,
+                                      cache_read=cr, cache_write=cw, cost=cost)
             cursor[path] = stat_key(path)
     return added, updated, files
 
