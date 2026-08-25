@@ -39,6 +39,9 @@ def scan(conn, prices, full: bool = False) -> dict:
             if not full and not changed(cursor, path):
                 continue
             files += 1
+            # 没有 session 事件的文件：用文件名兜底，避免空 session_id 的
+            # (turn, step) 键在不同会话文件间互相碰撞丢数据
+            fallback_id = name[: -len(".jsonl.zstd")]
             session_id = ""
             project = parts[0] if len(parts) >= 1 else ""
             model = ""
@@ -66,13 +69,13 @@ def scan(conn, prices, full: bool = False) -> dict:
                         if inp + outp + cr + cw == 0:
                             continue
                         ts = obj.get("time") or 0
-                        key = f"{session_id}|{data.get('turn')}|{data.get('step')}"
+                        sid = session_id or fallback_id
+                        key = f"{sid}|{data.get('turn')}|{data.get('step')}"
                         cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
-                        db.put_event(conn, NAME, key, session_id=session_id,
-                                     project=project, ts=int(ts), model=model,
-                                     input=inp, output=outp, cache_read=cr,
-                                     cache_write=cw, cost=cost)
-                        added += 1
+                        added += db.put_event(conn, NAME, key, session_id=sid,
+                                              project=project, ts=int(ts), model=model,
+                                              input=inp, output=outp, cache_read=cr,
+                                              cache_write=cw, cost=cost)
                 elif t == "usage":
                     # 顶层 usage 事件（兜底）
                     data = obj.get("data") or {}
@@ -81,13 +84,12 @@ def scan(conn, prices, full: bool = False) -> dict:
                     outp = u.get("outputTokens") or u.get("output") or 0
                     if inp + outp == 0:
                         continue
-                    key = f"{session_id}|top|{obj.get('seq')}"
+                    sid = session_id or fallback_id
+                    key = f"{sid}|top|{obj.get('seq')}"
                     cost, _ = pricing.cost_for(prices, model, inp, outp, 0, 0)
-                    db.put_event(conn, NAME, key, session_id=session_id,
-                                 project=project, ts=int(obj.get("time") or 0),
-                                 model=model, input=inp, output=outp, cost=cost)
-                    added += 1
-            if session_id:
-                cursor[path] = stat_key(path)
+                    added += db.put_event(conn, NAME, key, session_id=sid,
+                                          project=project, ts=int(obj.get("time") or 0),
+                                          model=model, input=inp, output=outp, cost=cost)
+            cursor[path] = stat_key(path)
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}

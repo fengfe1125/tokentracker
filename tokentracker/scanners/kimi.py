@@ -91,11 +91,10 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                 ts = _parse_ts(env.get("timestamp") or obj.get("time"))
                 key = f"{session_id}|step|{obj.get('seq')}"
                 cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
-                db.put_event(conn, NAME, key, session_id=session_id,
-                             project=project, ts=ts, model=str(model),
-                             input=inp, output=outp, cache_read=cr,
-                             cache_write=cw, cost=cost)
-                added += 1
+                added += db.put_event(conn, NAME, key, session_id=session_id,
+                                      project=project, ts=ts, model=str(model),
+                                      input=inp, output=outp, cache_read=cr,
+                                      cache_write=cw, cost=cost)
             cursor[path] = stat_key(path)
     return added, updated, files
 
@@ -125,11 +124,10 @@ def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
                     continue
                 model = obj.get("model") or ""
                 cost, _ = pricing.cost_for(prices, model, inp, outp, 0, 0)
-                db.put_event(conn, NAME, f"cli|{path}|{lineno}",
-                             session_id=name[:-6], project=dirpath,
-                             ts=_parse_ts(obj.get("timestamp") or 0), model=str(model),
-                             input=inp, output=outp, cost=cost)
-                added += 1
+                added += db.put_event(conn, NAME, f"cli|{path}|{lineno}",
+                                      session_id=name[:-6], project=dirpath,
+                                      ts=_parse_ts(obj.get("timestamp") or 0), model=str(model),
+                                      input=inp, output=outp, cost=cost)
             cursor[path] = stat_key(path)
     return added, updated, files
 

@@ -55,10 +55,13 @@ def cost_for(prices: dict, model: str, input_t: int, output_t: int,
     if m in models:
         rate = models[m]
     else:
+        # 子串匹配取最长命中键，避免 "gpt-5" 抢先命中 "gpt-5.6-luna"
+        best = -1
         for key, val in models.items():
-            if key.lower() in m:
+            k = key.lower()
+            if k in m and len(k) > best:
+                best = len(k)
                 rate = val
-                break
     if rate is None:
         rate = prices.get("default")
     if not rate:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -12,7 +13,10 @@ from . import db, pricing
 from .quotas import compute as compute_quotas
 from .scanners import detect_all, run_all
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+# 资源根目录：PyInstaller 打包后位于 _MEIPASS，开发时位于仓库根
+_BASE = sys._MEIPASS if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WEB_DIR = os.path.join(_BASE, "web")
+APP_WEB_DIR = os.path.join(_BASE, "app", "web")
 
 _scan_lock = threading.Lock()
 _scan_status = {"running": False, "last": None}
@@ -34,8 +38,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _static(self, path: str):
-        base = os.path.abspath(WEB_DIR)
+    def _static(self, path: str, base: str | None = None):
+        base = os.path.abspath(base or WEB_DIR)
         safe = os.path.abspath(os.path.join(base, path.lstrip("/")))
         if not (safe == base or safe.startswith(base + os.sep)):
             self.send_error(403)
@@ -88,6 +92,14 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 conn.close()
             self._send(200, {"rows": rows})
+        elif p == "/api/session_detail":
+            conn = db.connect()
+            try:
+                data = db.session_detail(conn, q.get("tool", [""])[0],
+                                         q.get("session_id", [""])[0])
+            finally:
+                conn.close()
+            self._send(200, data)
         elif p == "/api/quotas":
             conn = db.connect()
             try:
@@ -98,6 +110,8 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/scan/status":
             with _scan_lock:
                 self._send(200, dict(_scan_status))
+        elif p.startswith("/app/"):
+            self._static(p[len("/app/"):], APP_WEB_DIR)
         elif p.startswith("/api/"):
             self._send(404, {"error": "unknown api"})
         else:

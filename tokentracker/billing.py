@@ -36,11 +36,49 @@ _GO_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 _CODEX_WIN_BY_MIN = {300: "5h", 10_080: "7d", 43_200: "month", 44_640: "month"}
 _TTL_OK = 120     # 成功结果缓存
-_TTL_ERR = 30     # 失败结果缓存短一点，重新登录后能快速恢复
+_TTL_ERR = 120    # 失败退避（限流接口不宜高频重试）
+_STALE_MAX = 24 * 3600   # 磁盘兜底缓存最长可用 24h
 _cache: dict = {}
 
 
+def _disk_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".tokentracker", "official_cache.json")
+
+
+def _disk_load(key: str):
+    """读磁盘缓存的成功结果 → (ts, data) | (None, None)。"""
+    try:
+        with open(_disk_path(), encoding="utf-8") as f:
+            store = json.load(f)
+        ts, data = store[key]
+        if time.time() - ts > _STALE_MAX:
+            return None, None
+        return ts, data
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+
+
+def _disk_store(key: str, ts: float, data: dict):
+    """成功结果落盘（跨进程共享，限流时互为兜底）；只存配额数字，不含凭据。"""
+    try:
+        store = {}
+        try:
+            with open(_disk_path(), encoding="utf-8") as f:
+                store = json.load(f)
+        except (OSError, ValueError):
+            pass
+        store[key] = [ts, data]
+        os.makedirs(os.path.dirname(_disk_path()), exist_ok=True)
+        tmp = _disk_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(store, f)
+        os.replace(tmp, _disk_path())
+    except OSError:
+        pass
+
+
 def _cached(key: str, fn):
+    """stale-if-error：成功写内存+磁盘；失败回退最近一次成功结果并标记 _stale_min。"""
     now = time.time()
     hit = _cache.get(key)
     if hit:
@@ -52,6 +90,17 @@ def _cached(key: str, fn):
         data = dict(data, _ok=not data.get("error"))
     except Exception as e:  # noqa: BLE001
         data = {"error": "network", "detail": str(e), "_ok": False}
+    if data.get("_ok"):
+        _cache[key] = (now, data)
+        _disk_store(key, now, data)
+        return data
+    stale_ts, stale = (hit if hit and hit[1].get("_ok") else (None, None))
+    if stale is None:
+        stale_ts, stale = _disk_load(key)
+    if stale is not None:
+        out = dict(stale, _stale_min=max(1, int((now - stale_ts) / 60)),
+                   _err=data.get("detail") or data.get("error") or "")
+        return out
     _cache[key] = (now, data)
     return data
 
