@@ -33,10 +33,36 @@ function toast(msg, ms = 2600) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), ms);
 }
 
+/* 数字滚动动画（easeOutCubic，自动打断同元素上一个动画） */
+function animateNum(el, to, fmtFn, dur = 700) {
+  if (!el) return;
+  if (el._raf) cancelAnimationFrame(el._raf);
+  const from = el._num || 0;
+  el._num = to;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || from === to) {
+    el.textContent = fmtFn(to); return;
+  }
+  const t0 = performance.now();
+  const step = t => {
+    const k = Math.min((t - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmtFn(from + (to - from) * e);
+    if (k < 1) el._raf = requestAnimationFrame(step);
+  };
+  el._raf = requestAnimationFrame(step);
+}
+
 /* ─────────── 状态 ─────────── */
 const state = { range: "week", tool: null, chart: null, logScale: false,
                 scanning: false, detected: null, sessRows: [],
-                sort: { key: "ts", dir: -1 } };
+                sort: { key: "ts", dir: -1 },
+                quotaPrev: {}, statPrev: {}, inFlight: 0 };
+
+/* ─────────── 顶部加载条 ─────────── */
+function setLoading(on) {
+  state.inFlight = Math.max(0, state.inFlight + (on ? 1 : -1));
+  $("#loadbar").classList.toggle("run", state.inFlight > 0);
+}
 
 /* ─────────── 数据加载 ─────────── */
 async function jget(url) {
@@ -52,7 +78,7 @@ async function loadStats() {
 }
 async function loadToday() {
   const d = await jget("/api/stats?range=day");
-  $("#todayCost").textContent = fmtCost((d.total || {}).cost);
+  animateNum($("#todayCost"), (d.total || {}).cost || 0, fmtCost, 500);
 }
 async function loadDaily() {
   const d = await jget("/api/daily?range=" + state.range);
@@ -80,13 +106,17 @@ function stampUpdated() {
   const t = new Date();
   const p = n => String(n).padStart(2, "0");
   $("#updatedAt").textContent = "更新于 " + p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds());
+  const r = $(".tl-right");
+  r.classList.remove("flash"); void r.offsetWidth; r.classList.add("flash");
 }
 async function refreshAll() {
+  setLoading(true);
   try {
     await Promise.all([loadStats(), loadToday(), loadDaily(), loadQuotas(), loadModels()]);
     if (!$("#view-sessions").classList.contains("hidden")) await loadSessions();
     stampUpdated();
   } catch (e) { console.warn(e); }
+  finally { setLoading(false); }
 }
 
 /* ─────────── 概览：统计卡 ─────────── */
@@ -99,24 +129,33 @@ const ICONS = {
 
 function renderStatCards(rows, total) {
   const t = total || {};
+  const tokAll = (t.input || 0) + (t.output || 0);
   const cards = [
-    { ic: "tok",  k: "Token 总量", v: fmtT((t.input || 0) + (t.output || 0)),
+    { id: "tok",  ic: "tok",  k: "Token 总量", num: tokAll, fmt: fmtT,
       sub: "输入 " + fmtT(t.input || 0) + " · 输出 " + fmtT(t.output || 0) },
-    { ic: "cost", k: "成本估算", v: fmtCost(t.cost),
-      sub: (t.unpriced ? "⚠ " + t.unpriced + " 条未计价" : "按 prices.json 计价") , warn: !!t.unpriced},
-    { ic: "sess", k: "会话数", v: fmtT(t.sessions), sub: rows.length + " 个工具当前有数据",
-      go: "sessions" },
-    { ic: "cache", k: "缓存读取", v: fmtT(t.cache_read), sub: "写入 " + fmtT(t.cache_write || 0) },
+    { id: "cost", ic: "cost", k: "成本估算", num: t.cost || 0, fmt: fmtCost,
+      sub: (t.unpriced ? "⚠ " + t.unpriced + " 条未计价" : "按 prices.json 计价"), warn: !!t.unpriced },
+    { id: "sess", ic: "sess", k: "会话数", num: t.sessions || 0, fmt: v => String(Math.round(v)),
+      sub: rows.length + " 个工具当前有数据", go: "sessions" },
+    { id: "cache", ic: "cache", k: "缓存读取", num: t.cache_read || 0, fmt: fmtT,
+      sub: "写入 " + fmtT(t.cache_write || 0) },
   ];
-  $("#statCards").innerHTML = cards.map(c => `
-    <div class="stat-card ${c.go ? "clickable" : ""}" ${c.go ? `data-go="${c.go}" title="点击查看会话记录"` : ""}>
+  $("#statCards").innerHTML = cards.map((c, i) => `
+    <div class="stat-card ${c.go ? "clickable" : ""}" style="--i:${i}"
+      ${c.go ? `data-go="${c.go}" title="点击查看会话记录"` : ""}>
       <div class="ic ${c.ic}">${ICONS[c.ic]}</div>
-      <div class="v">${c.v}</div>
+      <div class="v" data-num="${c.id}">${c.fmt(state.statPrev[c.id] || 0)}</div>
       <div class="k">${c.k}</div>
       <div class="sub ${c.warn ? "warn" : ""}">${c.sub}</div>
     </div>`).join("");
   [...$("#statCards").children].forEach(el => {
     if (el.dataset.go) el.onclick = () => switchView(el.dataset.go);
+  });
+  // 数字滚动：从上次值滚到新值
+  cards.forEach(c => {
+    const el = $(`#statCards .v[data-num="${c.id}"]`);
+    if (el) { el._num = state.statPrev[c.id] || 0; animateNum(el, c.num, c.fmt); }
+    state.statPrev[c.id] = c.num;
   });
 }
 
@@ -127,11 +166,12 @@ function renderSideTools(rows) {
     const r = byTool[t] || null;
     return { tool: t, tok: r ? (r.input + r.output) : 0 };
   }).sort((a, b) => b.tok - a.tok);
-  $("#sideTools").innerHTML = sorted.map(s => {
+  $("#sideTools").innerHTML = sorted.map((s, i) => {
     const meta = TOOL[s.tool] || { name: s.tool, color: "#aaa" };
     const inst = state.detected && state.detected[s.tool] ? state.detected[s.tool].installed : true;
     const label = s.tok > 0 ? fmtT(s.tok) : (inst ? "—" : "未检测到");
-    return `<div class="side-tool ${!inst ? "miss" : ""}" data-tool="${s.tool}"
+    return `<div class="side-tool ${!inst ? "miss" : ""} ${s.tok > 0 ? "live" : ""}"
+      style="--i:${i}" data-tool="${s.tool}"
       title="${inst ? "查看 " + meta.name + " 的会话记录" : meta.name + " 未检测到数据源"}">
       <span class="dot" style="background:${meta.color}"></span>
       <span class="name">${meta.name}</span>
@@ -147,7 +187,7 @@ function renderSideTools(rows) {
   });
 }
 
-/* ─────────── 趋势图 ─────────── */
+/* ─────────── 趋势图（原地更新，不再销毁重建，切换无闪烁） ─────────── */
 function drawTrend(rows) {
   const byTool = {}; const dates = new Set();
   (rows || []).forEach(r => {
@@ -156,36 +196,51 @@ function drawTrend(rows) {
   });
   const xs = [...dates].sort();
 
-  const cfg = {
-    type: "line",
-    data: { labels: xs, datasets: TOOL_ORDER.filter(t => byTool[t]).map(t => ({
-      label: TOOL[t].name, data: xs.map(d => byTool[t][d] || null),
-      borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
-      borderWidth: 1.8, tension: .3, pointRadius: 0, pointHitRadius: 14, spanGaps: true,
-    })) },
-    options: {
-      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false }, tooltip: {
-        backgroundColor: "rgba(30,27,23,.92)", padding: 10, cornerRadius: 8,
-        displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true,
-        callbacks: { label: c => " " + c.dataset.label + "： " + fmtT(c.parsed.y) } } },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: "#a8a49c", maxTicksLimit: 8, font: { size: 10 } } },
-        y: { type: state.logScale ? "logarithmic" : "linear", grid: { color: "#f0efec" },
-             border: { display: false },
-             ticks: { color: "#a8a49c", font: { size: 10 },
-                       callback: v => (+v >= 1000 ? fmtT(v) : v) } },
+  // 保留用户手动隐藏的系列
+  const prevHidden = {};
+  if (state.chart) state.chart.data.datasets.forEach(d => prevHidden[d.label] = !!d.hidden);
+
+  const datasets = TOOL_ORDER.filter(t => byTool[t]).map(t => ({
+    label: TOOL[t].name, data: xs.map(d => byTool[t][d] ?? null),
+    borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
+    borderWidth: 1.8, tension: .35, pointRadius: 0, pointHitRadius: 14,
+    pointHoverRadius: 4, pointHoverBackgroundColor: TOOL[t].color,
+    spanGaps: true, hidden: !!prevHidden[TOOL[t].name],
+  }));
+
+  if (!state.chart) {
+    state.chart = new Chart($("#trendChart"), {
+      type: "line",
+      data: { labels: xs, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 700, easing: "easeOutQuart" },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false }, tooltip: {
+          backgroundColor: "rgba(30,27,23,.92)", padding: 10, cornerRadius: 8,
+          displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true,
+          callbacks: { label: c => " " + c.dataset.label + "： " + fmtT(c.parsed.y) } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: "#a8a49c", maxTicksLimit: 8, font: { size: 10 } } },
+          y: { type: state.logScale ? "logarithmic" : "linear", grid: { color: "#f0efec" },
+               border: { display: false },
+               ticks: { color: "#a8a49c", font: { size: 10 },
+                         callback: v => (+v >= 1000 ? fmtT(v) : v) } },
+        },
       },
-    },
-  };
-  if (state.chart) { state.chart.destroy(); }
-  state.chart = new Chart($("#trendChart"), cfg);
+    });
+  } else {
+    state.chart.data.labels = xs;
+    state.chart.data.datasets = datasets;
+    state.chart.options.scales.y.type = state.logScale ? "logarithmic" : "linear";
+    state.chart.update();
+  }
   buildLegend();
 }
 function buildLegend() {
   const ds = state.chart ? state.chart.data.datasets : [];
-  $("#chartLegend").innerHTML = ds.map(d => `
-    <button data-i="${d.index}" class="${d.hidden ? "hidden" : ""}">
+  $("#chartLegend").innerHTML = ds.map((d, i) => `
+    <button data-i="${i}" class="${d.hidden ? "hidden" : ""}">
       <span class="sw" style="background:${d.borderColor}"></span>${d.label}</button>`).join("");
   [...$("#chartLegend").children].forEach(b => b.onclick = () => {
     const d = state.chart.data.datasets[+b.dataset.i];
@@ -193,21 +248,36 @@ function buildLegend() {
   });
 }
 
-/* ─────────── 配额 ─────────── */
+/* ─────────── 配额（进度条从旧值平滑滚动到新值） ─────────── */
 function renderQuotas(entries) {
   if (!entries.length) { $("#quotaList").innerHTML = '<div class="quota-empty">未配置配额</div>'; return; }
-  $("#quotaList").innerHTML = entries.map(e => `
-    <div class="quota-item">
+  $("#quotaList").innerHTML = entries.map((e, i) => `
+    <div class="quota-item" style="--i:${i}">
       <div class="q-head">
         <span class="q-name">${e.name}</span>
-        <span class="q-plan">${e.plan || ""}</span>
+        <span class="q-plan" title="${e.plan || ""}">${e.plan || ""}</span>
         <span class="badge ${e.source === "official" ? "official" : ""}">${e.source === "official" ? "官方" : "本地估算"}</span>
       </div>
-      <div class="q-wins">${(e.windows || []).map(w => winRow(w)).join("")}</div>
-      ${e.note ? `<div style="font-size:10px;color:var(--red);margin-top:6px">⚠ ${e.note}</div>` : ""}
+      <div class="q-wins">${(e.windows || []).map(w => winRow(e.id, w)).join("")}</div>
+      ${e.note ? `<div class="q-note">⚠ ${e.note}</div>` : ""}
     </div>`).join("");
+  // 进度条动画：先放到旧值，下一帧滚到新值
+  requestAnimationFrame(() => {
+    document.querySelectorAll("#quotaList .q-bar i").forEach(el => {
+      const k = el.dataset.qk, pct = +el.dataset.pct || 0;
+      const prev = state.quotaPrev[k];
+      if (prev != null && prev !== pct) {
+        el.style.transition = "none";
+        el.style.width = prev + "%";
+        void el.offsetWidth;                      // 强制回流，让 transition 重新生效
+        el.style.transition = "";
+      }
+      el.style.width = pct + "%";
+      state.quotaPrev[k] = pct;
+    });
+  });
 }
-function winRow(w) {
+function winRow(eid, w) {
   const pct = w.pct == null ? null : Math.min(w.pct, 100);
   const cls = pct == null ? "" : (pct < 60 ? "good" : (pct < 85 ? "mid" : "bad"));
   const barCls = pct == null ? "" : (pct < 60 ? "" : (pct < 85 ? "mid" : "bad"));
@@ -221,14 +291,16 @@ function winRow(w) {
   return `<div class="q-win" ${detail ? `title="${detail}"` : ""}>
     <div class="w-top"><span>${w.label}</span>
       <span>${topRight}<b class="pct ${cls}">${pctTxt}</b></span></div>
-    <div class="q-bar"><i class="${barCls}" style="width:${pct ?? 0}%"></i></div>
+    <div class="q-bar"><i class="${barCls}" data-qk="${eid}:${w.key}" data-pct="${pct ?? 0}" style="width:${pct ?? 0}%"></i></div>
     ${reset ? `<div class="reset">${reset} 重置</div>` : ""}
   </div>`;
 }
-function countdown(iso) {
-  const diff = new Date(iso).getTime() - Date.now();
+function countdown(ts) {
+  const ms = typeof ts === "number" ? ts : new Date(ts).getTime();
+  const diff = ms - Date.now();
   if (!(diff > 0)) return "";
   const h = Math.floor(diff / 3600e3), m = Math.floor((diff % 3600e3) / 60e3);
+  if (h >= 24) { const d = Math.floor(h / 24); return d + " 天 " + (h % 24) + " 小时后"; }
   return h > 0 ? h + " 小时 " + m + " 分后" : Math.max(m, 1) + " 分后";
 }
 
@@ -240,15 +312,20 @@ function renderModels(rows) {
   $("#modelList").innerHTML = top.map((r, i) => {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };
     const tok = (r.input || 0) + (r.output || 0);
-    return `<div class="model-row">
+    return `<div class="model-row" style="--i:${i}">
       <span class="rank">#${i + 1}</span>
       <span class="m-name" title="${r.model || "(未知模型)"}">${r.model || "(未知模型)"}</span>
       <span class="m-tool"><span class="dot" style="background:${meta.color}"></span>${meta.name}</span>
       <span class="m-tok">${fmtT(r.input)} / ${fmtT(r.output)}</span>
       <span class="m-cost">${r.cost == null ? "—" : fmtCost(r.cost)}</span>
-      <div class="m-bar-track"><i style="width:${(tok / max * 100).toFixed(1)}%"></i></div>
+      <div class="m-bar-track"><i data-w="${(tok / max * 100).toFixed(1)}" style="width:0%"></i></div>
     </div>`;
   }).join("");
+  requestAnimationFrame(() => {
+    document.querySelectorAll("#modelList .m-bar-track i").forEach(el => {
+      el.style.width = el.dataset.w + "%";
+    });
+  });
 }
 
 /* ─────────── 会话（可排序、可点开详情） ─────────── */
@@ -270,7 +347,7 @@ function renderSessions() {
   $("#sessEmpty").style.display = rows.length ? "none" : "";
   $("#sessBody").innerHTML = rows.map((r, i) => {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };
-    return `<tr data-i="${i}" title="点击查看会话详情">
+    return `<tr data-i="${i}" style="--i:${Math.min(i, 14)}" title="点击查看会话详情">
       <td><span class="tool-cell"><span class="dot" style="background:${meta.color}"></span>${meta.name}</span></td>
       <td class="proj" title="${r.project || r.session_id || ""}">${r.project || (r.session_id || "—").slice(0, 26)}</td>
       <td class="model-cell" title="${r.model || ""}">${r.model || "—"}</td>
@@ -332,23 +409,24 @@ async function openDrawer(r) {
   }
   const proj = (d.project || "").trim();
   const tokens = (d.tokens != null) ? d.tokens : null;
+  const modelRows = (d.models || []).map((m, i) => `
+      <div class="d-model" style="--i:${i + 3}">
+        <span class="m-name" title="${m.model || "(未知模型)"}">${m.model || "(未知模型)"}</span>
+        <span class="m-cost">${fmtCost(m.cost)}</span>
+        <span class="m-io">入 ${fmtT(m.input)} · 出 ${fmtT(m.output)} · 缓存读 ${fmtT(m.cache_read)} · 缓存写 ${fmtT(m.cache_write)} · ${m.events} 事件</span>
+      </div>`).join("") || '<div class="drawer-loading">无明细数据</div>';
   $("#drawerBody").innerHTML = `
-    <div class="d-cards">
+    <div class="d-cards" style="--i:0">
       <div class="d-stat"><div class="v">${tokens == null ? "—" : fmtT(tokens)}</div><div class="k">Token（输入+输出）</div></div>
       <div class="d-stat"><div class="v">${fmtCost(d.cost)}</div><div class="k">成本估算</div></div>
       <div class="d-stat"><div class="v">${d.events ?? "—"}</div><div class="k">事件数</div></div>
       <div class="d-stat"><div class="v">${(d.models || []).length}</div><div class="k">模型数</div></div>
     </div>
-    ${proj ? `<button class="d-open-btn" id="dOpenFinder">
+    ${proj ? `<button class="d-open-btn" id="dOpenFinder" style="--i:1">
       <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       在 Finder 中打开项目</button>` : ""}
-    <div class="d-sec">按模型分解</div>
-    ${(d.models || []).map(m => `
-      <div class="d-model">
-        <span class="m-name" title="${m.model || "(未知模型)"}">${m.model || "(未知模型)"}</span>
-        <span class="m-cost">${fmtCost(m.cost)}</span>
-        <span class="m-io">入 ${fmtT(m.input)} · 出 ${fmtT(m.output)} · 缓存读 ${fmtT(m.cache_read)} · 缓存写 ${fmtT(m.cache_write)} · ${m.events} 事件</span>
-      </div>`).join("") || '<div class="drawer-loading">无明细数据</div>'}
+    <div class="d-sec" style="--i:2">按模型分解</div>
+    ${modelRows}
   `;
   const btn = $("#dOpenFinder");
   if (btn) btn.onclick = async () => {
@@ -411,11 +489,24 @@ function switchView(name) {
   if (name === "sessions") loadSessions();
 }
 document.querySelectorAll(".nav-item").forEach(b => b.onclick = () => switchView(b.dataset.view));
-[...$("#rangeChips").children].forEach(b => b.onclick = () => {
-  [...$("#rangeChips").children].forEach(x => x.classList.remove("on"));
+
+/* 时间范围 chips：滑动选中块 */
+function moveRangeInk() {
+  const ink = $("#rangeInk");
+  const on = $("#rangeChips button.on");
+  if (!ink || !on) return;
+  ink.style.width = on.offsetWidth + "px";
+  ink.style.transform = "translateX(" + on.offsetLeft + "px)";
+  ink.classList.add("on");
+}
+document.querySelectorAll("#rangeChips button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#rangeChips button").forEach(x => x.classList.remove("on"));
   b.classList.add("on"); state.range = b.dataset.range;
+  moveRangeInk();
   refreshAll(); if (!$("#view-sessions").classList.contains("hidden")) loadSessions();
 });
+window.addEventListener("resize", moveRangeInk);
+
 $("#yToggle").onclick = () => {
   state.logScale = !state.logScale;
   $("#yToggle").textContent = "Y 轴 · " + (state.logScale ? "对数" : "线性");
@@ -445,6 +536,11 @@ document.addEventListener("keydown", e => {
   else if (mod && e.key.toLowerCase() === "r") { e.preventDefault(); startScan(); }
 });
 
+/* 窗口重新聚焦时立刻刷新一次（从别的工具切回来就能看到最新数据） */
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshAll();
+});
+
 /* ─────────── 窗口控制（关闭 = 隐藏，进程留在状态栏；红绿灯为原生） ─────────── */
 function closeApp() { const a = api(); a ? a.hide_main() : window.close(); }
 
@@ -467,7 +563,8 @@ if (api()) initDrag(() => api().get_main_pos(), (x, y) => api().move_main(x, y))
 
 /* ─────────── 骨架屏 ─────────── */
 function showSkeletons() {
-  $("#statCards").innerHTML = '<div class="sk sk-card"></div>'.repeat(4);
+  $("#statCards").innerHTML = [0, 1, 2, 3].map(i =>
+    `<div class="sk sk-card" style="--i:${i}"></div>`).join("");
   $("#quotaList").innerHTML = '<div class="sk sk-row"></div>'.repeat(4);
   $("#modelList").innerHTML = '<div class="sk sk-row"></div>'.repeat(5);
 }
@@ -478,6 +575,7 @@ function showSkeletons() {
   await loadDetect();
   buildFilterChips();
   await refreshAll();
+  moveRangeInk();
   if (location.hash === "#sessions") switchView("sessions");   // 深链直达
   setInterval(pollScan, 4000);      // 扫描状态
   setInterval(refreshAll, 60000);   // 定时刷新（新日志入库后自动跟上）

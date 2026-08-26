@@ -3,7 +3,26 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+
+
+def _find_tool(name: str) -> str:
+    """解析外部命令：PATH → 常见安装目录。.app 图形化启动时 PATH 极简，
+    直接写 "zstd" 会 FileNotFoundError，这里兜底绝对路径。"""
+    p = shutil.which(name)
+    if p:
+        return p
+    home = os.path.expanduser("~")
+    for d in ("/opt/homebrew/bin", "/usr/local/bin",
+              f"{home}/.local/bin", f"{home}/.npm-global/bin"):
+        c = os.path.join(d, name)
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return name
+
+
+_ZSTD = _find_tool("zstd")
 
 
 def expand(path: str) -> str:
@@ -38,7 +57,7 @@ def iter_jsonl(path: str):
 def iter_zstd_jsonl(path: str):
     """zstd 压缩 JSONL（DSH），通过系统 zstd 二进制解压。"""
     proc = subprocess.Popen(
-        ["zstd", "-d", "-c", path],
+        [_ZSTD, "-d", "-c", path],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, errors="replace",
     )

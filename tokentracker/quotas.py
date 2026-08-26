@@ -152,7 +152,9 @@ def compute(conn) -> dict:
             status = official.get("detail") or official.get("error")
         plan = e.get("plan", "")
         if official and official.get("plan"):
-            plan = f"{official['plan']} · {e.get('plan', '')}".strip(" ·")
+            op = str(official["plan"])
+            # 官方 plan 与配置重复时只保留信息量更大的一边（如 "Pro" vs "Pro / Max"）
+            plan = plan if not plan or op.lower() in plan.lower() else f"{op} · {plan}".strip(" ·")
         entries.append({
             "id": e["id"], "name": e["name"], "plan": plan,
             "source": "official" if any_official else "local",
