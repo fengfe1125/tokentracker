@@ -289,7 +289,7 @@ function renderDaily(daily){
   if (dailyChart) dailyChart.destroy();
   dailyChart = new Chart($("dailyChart"), {
     type: "line",
-    data: { labels: days.map(d => d.slice(5)), datasets },
+    data: { labels: days.map(d => d.length > 5 ? d.slice(5) : d), datasets },
     options: {
       maintainAspectRatio: false, interaction: {mode:"index", intersect:false},
       scales: {

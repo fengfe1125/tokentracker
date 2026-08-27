@@ -63,6 +63,21 @@ class DbTest(unittest.TestCase):
         # 每日聚合
         self.assertEqual(len(db.daily(self.conn, "all")), 1)
 
+    def test_daily_day_range_is_hourly(self):
+        import time
+        from datetime import datetime
+        now = time.time()
+        t1, t2 = int((now - 120) * 1000), int((now - 30) * 1000)
+        db.put_event(self.conn, "claude", "h1", ts=t1, input=10, output=5)
+        db.put_event(self.conn, "claude", "h2", ts=t2, input=20, output=5)
+        rows = db.daily(self.conn, "day")
+        # 今天范围按小时聚合：标签形如 "HH:00"，行数 = 实际覆盖的小时数
+        for r in rows:
+            self.assertRegex(r["d"], r"^\d{2}:00$")
+        expect = len({datetime.fromtimestamp(t / 1000).strftime("%H:00") for t in (t1, t2)})
+        self.assertEqual(len(rows), expect)
+        self.assertEqual(sum(r["input"] for r in rows), 30)
+
 
 class QuotasTest(unittest.TestCase):
     def setUp(self):
