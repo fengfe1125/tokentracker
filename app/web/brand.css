@@ -1,0 +1,10 @@
+/* One Figma-exported silhouette, colored for the surrounding surface. */
+.tt-brand {
+  display: inline-block;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  background-color: var(--brand-ink, #C15F3F);
+  -webkit-mask: url("brand.svg") center / contain no-repeat;
+  mask: url("brand.svg") center / contain no-repeat;
+}

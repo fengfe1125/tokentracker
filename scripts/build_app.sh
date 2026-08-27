@@ -16,16 +16,8 @@ if [ ! -x "$PY" ]; then
 fi
 "$PY" -c "import webview, PyInstaller" 2>/dev/null || "$ROOT/.venv/bin/pip" -q install pywebview pyinstaller
 
-echo "==> 生成应用图标（assets/icon.icns）"
-"$PY" scripts/make_icon.py
-ICONSET="$ROOT/assets/TokenTracker.iconset"
-rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-for s in 16 32 128 256 512; do
-  d=$((s * 2))
-  sips -z "$s" "$s" assets/icon_1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-  sips -z "$d" "$d" assets/icon_1024.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o assets/icon.icns
+echo "==> 校验仓库中已确认的图标（不重绘、不联网导出）"
+"$PY" scripts/check_icon.py
 
 echo "==> PyInstaller 打包（首次较慢）"
 rm -rf build dist
