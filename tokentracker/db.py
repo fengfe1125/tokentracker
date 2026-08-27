@@ -144,11 +144,15 @@ def stats(conn, range_key: str = "all", tool: str | None = None) -> list[dict]:
 
 
 def daily(conn, range_key: str = "all") -> list[dict]:
-    """按天×工具聚合，供折线图。"""
+    """按天×工具聚合，供折线图；range=day（今天）时按 24 小时粒度（d 为 "HH:00"）。"""
     lo, hi = _range_bounds(range_key)
+    if range_key == "day":
+        bucket = "strftime('%H:00', ts/1000, 'unixepoch', 'localtime')"
+    else:
+        bucket = "date(ts/1000, 'unixepoch', 'localtime')"
     rows = conn.execute(
-        """
-        SELECT tool, date(ts/1000,'unixepoch','localtime') AS d,
+        f"""
+        SELECT tool, {bucket} AS d,
                COALESCE(SUM(input),0) AS input,
                COALESCE(SUM(output),0) AS output,
                COALESCE(SUM(cache_read),0) AS cache_read,

@@ -194,34 +194,44 @@ function drawTrend(rows) {
     (byTool[r.tool] = byTool[r.tool] || {})[r.d] = (r.input || 0) + (r.output || 0);
     dates.add(r.d);
   });
-  // 补齐首尾之间没有数据的日期，不然折线会跨过空缺日造成时间轴失真
-  let xs = [...dates].sort();
-  if (xs.length > 1) {
-    const full = [];
-    const cur = new Date(xs[0] + "T00:00:00");
-    const end = new Date(xs[xs.length - 1] + "T00:00:00");
-    while (cur <= end) {
-      full.push(cur.getFullYear() + "-" + String(cur.getMonth() + 1).padStart(2, "0") + "-" + String(cur.getDate()).padStart(2, "0"));
-      cur.setDate(cur.getDate() + 1);
+  // 今天：x 轴为 0 点到当前小时；其他范围：补齐首尾之间的空缺日期
+  let xs;
+  if (state.range === "day") {
+    const nowH = new Date().getHours();
+    xs = Array.from({ length: nowH + 1 }, (_, h) => String(h).padStart(2, "0") + ":00");
+  } else {
+    xs = [...dates].sort();
+    if (xs.length > 1) {
+      const full = [];
+      const cur = new Date(xs[0] + "T00:00:00");
+      const end = new Date(xs[xs.length - 1] + "T00:00:00");
+      while (cur <= end) {
+        full.push(cur.getFullYear() + "-" + String(cur.getMonth() + 1).padStart(2, "0") + "-" + String(cur.getDate()).padStart(2, "0"));
+        cur.setDate(cur.getDate() + 1);
+      }
+      xs = full;
     }
-    xs = full;
   }
 
   // 保留用户手动隐藏的系列
   const prevHidden = {};
   if (state.chart) state.chart.data.datasets.forEach(d => prevHidden[d.label] = !!d.hidden);
 
-  // 只有一两个数据点时显示圆点，否则单点折线完全不可见
-  const showPoints = xs.length <= 2;
-
-  const datasets = TOOL_ORDER.filter(t => byTool[t]).map(t => ({
-    label: TOOL[t].name, data: xs.map(d => byTool[t][d] ?? null),
-    borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
-    borderWidth: 1.8, tension: .35,
-    pointRadius: showPoints ? 3.5 : 0, pointHitRadius: 14,
-    pointHoverRadius: 4, pointHoverBackgroundColor: TOOL[t].color,
-    spanGaps: true, hidden: !!prevHidden[TOOL[t].name],
-  }));
+  // 圆点策略（按系列）：非空点 ≤2 个时必须显示圆点（否则孤点完全不可见）；
+  // 今天（24 小时粒度）显示小圆点；其它范围隐藏
+  const datasets = TOOL_ORDER.filter(t => byTool[t]).map(t => {
+    const data = xs.map(d => byTool[t][d] ?? null);
+    const nonNull = data.filter(v => v != null).length;
+    const pts = nonNull <= 2 ? 3.5 : (state.range === "day" ? 1.5 : 0);
+    return {
+      label: TOOL[t].name, data,
+      borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
+      borderWidth: 1.8, tension: .35,
+      pointRadius: pts, pointHitRadius: 14,
+      pointHoverRadius: 4, pointHoverBackgroundColor: TOOL[t].color,
+      spanGaps: true, hidden: !!prevHidden[TOOL[t].name],
+    };
+  });
 
   // Y 轴：手动切换过就记住（localStorage）；否则极值比悬殊自动用对数，
   // 免得某天尖峰（如 168M）把其它线全部压平到轴上
