@@ -24,6 +24,18 @@ def detect() -> bool:
     return os.path.isdir(root())
 
 
+def _replace_old_fallback(conn, old_key, key, sid, project, ts, model, counts):
+    """Remove an old filename-only key only when its payload is accounted for."""
+    old = conn.execute("SELECT * FROM usage_events WHERE tool=? AND src_key=?",
+                       (NAME, old_key)).fetchone()
+    if old and (old["project"], old["ts"], old["model"],
+                old["input"], old["output"], old["cache_read"], old["cache_write"]) == (
+                    project, ts, model, *counts):
+        conn.execute("DELETE FROM usage_events WHERE tool=? AND src_key=?", (NAME, old_key))
+        return 1
+    return 0
+
+
 def scan(conn, prices, full: bool = False) -> dict:
     base = root()
     cursor = db.get_scan_cursor(conn, NAME)
@@ -38,10 +50,14 @@ def scan(conn, prices, full: bool = False) -> dict:
             path = os.path.join(dirpath, name)
             if not full and not changed(cursor, path):
                 continue
+            try:
+                snapshot = stat_key(path)
+            except OSError:
+                continue
             files += 1
-            # 没有 session 事件的文件：用文件名兜底，避免空 session_id 的
-            # (turn, step) 键在不同会话文件间互相碰撞丢数据
-            fallback_id = name[: -len(".jsonl.zstd")]
+            # 同名 session.jsonl.zstd 分布在不同目录，必须保留完整相对路径。
+            fallback_id = os.path.relpath(path, base)
+            old_fallback = name[: -len(".jsonl.zstd")]
             session_id = ""
             project = parts[0] if len(parts) >= 1 else ""
             model = ""
@@ -76,6 +92,10 @@ def scan(conn, prices, full: bool = False) -> dict:
                                               project=project, ts=int(ts), model=model,
                                               input=inp, output=outp, cache_read=cr,
                                               cache_write=cw, cost=cost)
+                        if not session_id:
+                            old_key = f"{old_fallback}|{data.get('turn')}|{data.get('step')}"
+                            updated += _replace_old_fallback(
+                                conn, old_key, key, sid, project, int(ts), model, (inp, outp, cr, cw))
                 elif t == "usage":
                     # 顶层 usage 事件（兜底）
                     data = obj.get("data") or {}
@@ -90,6 +110,11 @@ def scan(conn, prices, full: bool = False) -> dict:
                     added += db.put_event(conn, NAME, key, session_id=sid,
                                           project=project, ts=int(obj.get("time") or 0),
                                           model=model, input=inp, output=outp, cost=cost)
-            cursor[path] = stat_key(path)
+                    if not session_id:
+                        old_key = f"{old_fallback}|top|{obj.get('seq')}"
+                        updated += _replace_old_fallback(
+                            conn, old_key, key, sid, project, int(obj.get("time") or 0),
+                            model, (inp, outp, 0, 0))
+            cursor[path] = snapshot
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}
