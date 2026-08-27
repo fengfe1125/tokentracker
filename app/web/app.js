@@ -194,19 +194,45 @@ function drawTrend(rows) {
     (byTool[r.tool] = byTool[r.tool] || {})[r.d] = (r.input || 0) + (r.output || 0);
     dates.add(r.d);
   });
-  const xs = [...dates].sort();
+  // 补齐首尾之间没有数据的日期，不然折线会跨过空缺日造成时间轴失真
+  let xs = [...dates].sort();
+  if (xs.length > 1) {
+    const full = [];
+    const cur = new Date(xs[0] + "T00:00:00");
+    const end = new Date(xs[xs.length - 1] + "T00:00:00");
+    while (cur <= end) {
+      full.push(cur.getFullYear() + "-" + String(cur.getMonth() + 1).padStart(2, "0") + "-" + String(cur.getDate()).padStart(2, "0"));
+      cur.setDate(cur.getDate() + 1);
+    }
+    xs = full;
+  }
 
   // 保留用户手动隐藏的系列
   const prevHidden = {};
   if (state.chart) state.chart.data.datasets.forEach(d => prevHidden[d.label] = !!d.hidden);
 
+  // 只有一两个数据点时显示圆点，否则单点折线完全不可见
+  const showPoints = xs.length <= 2;
+
   const datasets = TOOL_ORDER.filter(t => byTool[t]).map(t => ({
     label: TOOL[t].name, data: xs.map(d => byTool[t][d] ?? null),
     borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
-    borderWidth: 1.8, tension: .35, pointRadius: 0, pointHitRadius: 14,
+    borderWidth: 1.8, tension: .35,
+    pointRadius: showPoints ? 3.5 : 0, pointHitRadius: 14,
     pointHoverRadius: 4, pointHoverBackgroundColor: TOOL[t].color,
     spanGaps: true, hidden: !!prevHidden[TOOL[t].name],
   }));
+
+  // Y 轴：手动切换过就记住（localStorage）；否则极值比悬殊自动用对数，
+  // 免得某天尖峰（如 168M）把其它线全部压平到轴上
+  const manual = localStorage.getItem("tt.yscale");
+  if (manual) {
+    state.logScale = manual === "log";
+  } else {
+    const vals = datasets.flatMap(d => d.data).filter(v => v > 0).sort((a, b) => b - a);
+    state.logScale = vals.length > 1 && vals[0] / vals[vals.length - 1] > 30;
+  }
+  $("#yToggle").textContent = "Y 轴 · " + (state.logScale ? "对数" : "线性");
 
   if (!state.chart) {
     state.chart = new Chart($("#trendChart"), {
@@ -222,7 +248,7 @@ function drawTrend(rows) {
           callbacks: { label: c => " " + c.dataset.label + "： " + fmtT(c.parsed.y) } } },
         scales: {
           x: { grid: { display: false }, ticks: { color: "#a8a49c", maxTicksLimit: 8, font: { size: 10 } } },
-          y: { type: state.logScale ? "logarithmic" : "linear", grid: { color: "#f0efec" },
+          y: { type: state.logScale ? "logarithmic" : "linear", min: state.logScale ? 1 : undefined, grid: { color: "#f0efec" },
                border: { display: false },
                ticks: { color: "#a8a49c", font: { size: 10 },
                          callback: v => (+v >= 1000 ? fmtT(v) : v) } },
@@ -233,6 +259,7 @@ function drawTrend(rows) {
     state.chart.data.labels = xs;
     state.chart.data.datasets = datasets;
     state.chart.options.scales.y.type = state.logScale ? "logarithmic" : "linear";
+    state.chart.options.scales.y.min = state.logScale ? 1 : undefined;
     state.chart.update();
   }
   buildLegend();
@@ -509,6 +536,7 @@ window.addEventListener("resize", moveRangeInk);
 
 $("#yToggle").onclick = () => {
   state.logScale = !state.logScale;
+  localStorage.setItem("tt.yscale", state.logScale ? "log" : "linear");
   $("#yToggle").textContent = "Y 轴 · " + (state.logScale ? "对数" : "线性");
   loadDaily();
 };
