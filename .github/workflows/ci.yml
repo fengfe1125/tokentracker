@@ -15,6 +15,13 @@ jobs:
           python-version: "3.13"
       - name: 冒烟测试（核心库：计价/入库/聚合/配额/扫描器/HTTP 路由）
         run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 前端语法与渲染回归（无外部依赖）
+        run: |
+          node --check app/web/app.js
+          node tests/test_frontend.js
 
   build-app:
     runs-on: macos-latest
