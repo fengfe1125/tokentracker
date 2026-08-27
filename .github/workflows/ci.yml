@@ -35,5 +35,8 @@ jobs:
       - name: 校验产物
         run: |
           test -x dist/TokenTracker.app/Contents/MacOS/TokenTracker
+          codesign --verify --deep --strict dist/TokenTracker.app
+          cmp assets/icon.icns dist/TokenTracker.app/Contents/Resources/icon.icns
+          git diff --exit-code -- assets app/web/brand.svg
           /usr/libexec/PlistBuddy -c "Print :LSUIElement" dist/TokenTracker.app/Contents/Info.plist | grep -q true
           echo "dist/TokenTracker.app OK"
