@@ -10,6 +10,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from email.utils import formatdate
+from pathlib import Path
 from urllib.error import HTTPError
 from unittest.mock import Mock, patch
 
@@ -79,6 +80,125 @@ class HttpBackoffTest(unittest.TestCase):
                     self.assertEqual(data.get("_retry_after"), 300)
 
 
+class KimiReadOnlyTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="tt_kimi_")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name) / ".kimi-code"
+        self.path = self.root / "credentials" / "kimi-code.json"
+        self.path.parent.mkdir(parents=True)
+        self.now = 1_000_000.0
+        self.response = {"usage": {"limit": 100, "remaining": 55}}
+        for p in [patch.dict(os.environ, {"HOME": temp.name, "KIMI_CODE_HOME": str(self.root)}),
+                  patch.object(billing, "_cache", {}),
+                  patch.object(billing.time, "time", return_value=self.now),
+                  patch.object(billing, "_disk_path", return_value=str(Path(temp.name) / "quota.json"))]:
+            p.start()
+            self.addCleanup(p.stop)
+        http = patch.object(billing, "_http_json", return_value=(200, self.response))
+        self.http = http.start()
+        self.addCleanup(http.stop)
+
+    def write_credentials(self, **overrides):
+        data = {"access_token": "fake-access", "expires_at": self.now + 900, **overrides}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+        return self.path.read_bytes(), self.path.stat().st_mtime_ns
+
+    def test_valid_access_without_refresh_token_is_used_without_writes(self):
+        before = self.write_credentials()
+        result = billing.kimi_usage()
+        self.assertEqual(result.get("windows", {}).get("7d", {}).get("pct"), 45)
+        self.http.assert_called_once_with("https://api.kimi.com/coding/v1/usages",
+                                          {"Authorization": "Bearer fake-access", "Accept": "application/json"})
+        self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
+
+    def test_invalid_or_expired_credentials_never_request_or_write(self):
+        cases = [(None, "no_credentials"), (b"", "parse"), (b"{broken", "parse"),
+                 (b"\xff", "parse"), (b"[]", "parse"), (b"null", "parse"),
+                 (b'{"access_token":123}', "parse"),
+                 (b'{"access_token":" "}', "no_token"),
+                 (b'{"access_token":"","refresh_token":"fake-refresh"}', "no_token"),
+                 (b'{"access_token":"fake","expires_at":999999,"refresh_token":"fake-refresh"}', "expired"),
+                 (b'{"access_token":"fake","expires_at":"bad"}', "parse"),
+                 (b'{"access_token":"fake","expires_at":1e999}', "parse")]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.path.unlink(missing_ok=True)
+                self.http.reset_mock()
+                if raw is not None:
+                    self.path.write_bytes(raw)
+                result = billing.kimi_usage()
+                self.assertEqual(result.get("error"), expected)
+                self.http.assert_not_called()
+                self.assertEqual(self.path.read_bytes() if self.path.exists() else None, raw)
+
+    def test_custom_root_and_rotated_refresh_token_are_left_untouched(self):
+        self.root = self.root / "custom"
+        self.path = self.root / "credentials" / "kimi-code.json"
+        self.path.parent.mkdir(parents=True)
+        before = self.write_credentials(refresh_token="fake-refresh")
+        with patch.dict(os.environ, {"KIMI_CODE_HOME": str(self.root)}):
+            self.assertIn("windows", billing.kimi_usage())
+        self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
+        self.assertEqual(self.http.call_count, 1)
+        self.assertEqual(self.http.call_args.args[0], "https://api.kimi.com/coding/v1/usages")
+        self.assertNotIn("method", self.http.call_args.kwargs)
+
+    def test_rejected_access_does_not_refresh_or_force_relogin(self):
+        before = self.write_credentials(refresh_token="fake-refresh")
+        self.http.return_value = (401, {})
+        result = billing.kimi_usage()
+        self.assertEqual(result.get("error"), "expired")
+        self.assertIn("等待", result.get("detail", ""))
+        self.assertEqual(self.http.call_count, 1)
+        self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
+
+    def quota(self, force=False):
+        config = {"entries": [{"id": "kimi", "name": "Kimi", "tool": "kimi", "official": "kimi",
+                               "windows": {"7d": {"limit_tokens": 100}}}]}
+        with patch.object(quotas, "load_quotas", return_value=config), \
+                patch.object(quotas.db, "window_usage", return_value=20), \
+                patch.object(quotas.db, "window_unallocated", return_value=0):
+            return quotas.compute(None, force=force)["entries"][0]
+
+    def test_credentials_update_recovers_on_next_poll_without_force(self):
+        self.write_credentials(access_token="")
+        self.assertEqual(self.quota()["source"], "local")
+        self.write_credentials()
+        entry = self.quota()
+        self.assertEqual(entry["source"], "official")
+        self.assertFalse(entry["windows"][0]["stale"])
+        self.assertEqual(entry["note"], "")
+        self.http.assert_called_once()
+
+    def test_credentials_change_does_not_bypass_rate_limit(self):
+        self.write_credentials()
+        self.http.return_value = (429, {"_retry_after": 300})
+        self.quota()
+        self.write_credentials(access_token="fake-access-updated")
+        self.http.return_value = (200, self.response)
+        for force in (False, True):
+            with patch.object(billing.time, "time", return_value=self.now + 299):
+                self.assertEqual(self.quota(force=force)["source"], "local")
+        self.assertEqual(self.http.call_count, 1)
+        with patch.object(billing.time, "time", return_value=self.now + 300):
+            self.assertEqual(self.quota()["source"], "official")
+        self.assertEqual(self.http.call_count, 2)
+
+    def test_expired_access_uses_stale_then_local_after_24_hours(self):
+        self.write_credentials()
+        self.assertEqual(self.quota()["source"], "official")
+        with patch.object(billing.time, "time", return_value=self.now + 901):
+            entry = self.quota()
+            self.assertTrue(entry["windows"][0]["stale"])
+            self.assertIn("等待 Kimi Code", entry["note"])
+        with patch.object(billing.time, "time", return_value=self.now + 86401):
+            entry = self.quota()
+            self.assertEqual(entry["source"], "local")
+            self.assertEqual(entry["windows"][0]["pct"], 20)
+        self.http.assert_called_once()
+
+
 class ProviderRetryTest(unittest.TestCase):
     def test_desktop_fallback_preserves_oauth_rate_limit(self):
         with patch.object(billing, "_claude_desktop_usage", return_value={"windows": {"5h": {"pct": 45}}}), \
@@ -92,12 +212,12 @@ class ProviderRetryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="tt_retry_") as temp:
             credentials = os.path.join(temp, "credentials.json")
             with open(credentials, "w", encoding="utf-8") as f:
-                json.dump({"refresh_token": "fake"}, f)
+                json.dump({"access_token": "fake"}, f)
             for provider in ("claude", "kimi", "codex", "go"):
                 with self.subTest(provider=provider), ExitStack() as stack:
                     stack.enter_context(patch.object(billing, "_http_json", return_value=(429, limited)))
                     stack.enter_context(patch.object(billing.os.path, "expanduser", return_value=credentials))
-                    stack.enter_context(patch.object(billing, "_kimi_refresh", return_value="fake"))
+                    stack.enter_context(patch.object(billing, "_kimi_credentials_path", return_value=credentials))
                     stack.enter_context(patch.object(billing, "_go_key", return_value="fake"))
                     stack.enter_context(patch.object(billing, "_codex_credentials",
                                                     return_value=({"access_token": "fake"}, None)))

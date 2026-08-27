@@ -637,22 +637,61 @@ document.addEventListener("visibilitychange", () => {
 /* ─────────── 窗口控制（关闭 = 隐藏，进程留在状态栏；红绿灯为原生） ─────────── */
 function closeApp() { const a = api(); a ? a.hide_main() : window.close(); }
 
-/* 标题栏拖拽（JS 驱动 window.move，WebKit 无 -webkit-app-region） */
+/* 标题栏拖拽：桥接可晚于页面加载，指针捕获负责窗口外释放。 */
 function initDrag(getPos, moveWin) {
   let d = null;
-  document.addEventListener("mousedown", e => {
-    if (!e.target.closest(".drag")) return;
-    d = { sx: e.screenX, sy: e.screenY, ox: null, oy: null };
-    getPos().then(([x, y]) => { if (d) { d.ox = x; d.oy = y; } });
+  let moving = false;
+  function end(e) {
+    if (!d || (e?.pointerId != null && e.pointerId !== d.id)) return;
+    const old = d;
+    d = null;
+    if (old.region.hasPointerCapture(old.id)) old.region.releasePointerCapture(old.id);
+  }
+  function flushMove() {
+    if (moving || !d?.origin || !d.delta) return;
+    const current = d;
+    const [dx, dy] = current.delta;
+    current.delta = null;
+    moving = true;
+    // At most one bridge call in flight; coalesce later pointer positions.
+    Promise.resolve().then(() => {
+      if (d === current) return moveWin(current.origin[0] + dx, current.origin[1] + dy);
+    }).catch(() => { if (d === current) end(); })
+      .finally(() => { moving = false; flushMove(); });
+  }
+  document.addEventListener("pointerdown", e => {
+    if (d || e.button !== 0 || e.isPrimary === false) return;
+    const region = e.target.closest(".drag");
+    if (!region || e.target.closest('button, a, input, select, textarea, [role="button"], [contenteditable], .tl-left')) return;
+    const current = { id: e.pointerId, region, sx: e.screenX, sy: e.screenY, origin: null, delta: null };
+    d = current;
+    try { region.setPointerCapture(e.pointerId); } catch (_) { end(); return; }
+    Promise.resolve().then(getPos).then(pos => {
+      if (d !== current) return; // A prior gesture's delayed reply cannot initialise a new drag.
+      if (!Array.isArray(pos) || pos.length !== 2 || !pos.every(Number.isFinite)) { end(); return; }
+      current.origin = pos;
+      flushMove();
+    }).catch(() => { if (d === current) end(); });
     e.preventDefault();
   });
-  document.addEventListener("mousemove", e => {
-    if (!d || d.ox == null) return;
-    moveWin(d.ox + e.screenX - d.sx, d.oy + e.screenY - d.sy);
+  document.addEventListener("pointermove", e => {
+    if (!d || e.pointerId !== d.id) return;
+    d.delta = [e.screenX - d.sx, e.screenY - d.sy];
+    flushMove();
   });
-  document.addEventListener("mouseup", () => { d = null; });
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) document.addEventListener(event, end);
+  window.addEventListener("blur", () => end());
+  document.addEventListener("visibilitychange", () => { if (document.hidden) end(); });
 }
-if (api()) initDrag(() => api().get_main_pos(), (x, y) => api().move_main(x, y));
+let dragReady = false;
+function setupDrag() {
+  const bridge = api();
+  if (dragReady || typeof bridge?.get_main_pos !== "function" || typeof bridge?.move_main !== "function") return;
+  dragReady = true;
+  initDrag(() => bridge.get_main_pos(), (x, y) => bridge.move_main(x, y));
+}
+window.addEventListener("pywebviewready", setupDrag);
+setupDrag();
 
 /* ─────────── 骨架屏 ─────────── */
 function showSkeletons() {

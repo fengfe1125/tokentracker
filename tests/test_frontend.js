@@ -5,7 +5,16 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 
-function harness(file, legacy = false) {
+function eventTarget() {
+  const listeners = new Map();
+  return {
+    addEventListener(type, fn) {if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn);},
+    removeEventListener(type, fn) {listeners.get(type)?.delete(fn);},
+    dispatchEvent(e) {for (const fn of [...(listeners.get(e.type) || [])]) fn(e);},
+  };
+}
+
+function harness(file, legacy = false, windowProps = {}) {
   const elements = new Map();
   function element(key) {
     if (!elements.has(key)) elements.set(key, {
@@ -16,14 +25,14 @@ function harness(file, legacy = false) {
     });
     return elements.get(key);
   }
-  const document = {querySelector: element, getElementById: element, querySelectorAll: () => [], addEventListener() {}, hidden: false};
+  const document = {...eventTarget(), querySelector: element, getElementById: element, querySelectorAll: () => [], hidden: false};
   const sandbox = {document, console, Date, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0,
     requestAnimationFrame: () => 0, cancelAnimationFrame() {}, matchMedia: () => ({matches: true}),
     performance: {now: () => 0}, localStorage: {getItem: () => null, setItem() {}}, location: {hash: ''},
     fetch: async () => ({ok: true, json: async () => ({})}),
     Chart: class {constructor(_, config) {Object.assign(this, config);} update() {} destroy() {}},
   };
-  sandbox.window = {addEventListener() {}, close() {}};
+  sandbox.window = {...eventTarget(), close() {}, ...windowProps};
   const context = vm.createContext(sandbox);
   let source = fs.readFileSync(path.join(root, file), 'utf8');
   if (legacy) source = source.match(/<script>\s*([\s\S]*?)<\/script>/)[1].replace(/loadAll\(\)\.catch\(e => \{ \$\("status"\)[\s\S]*?\}\);/, '');
@@ -44,6 +53,7 @@ function assertEscaped(html) {
 }
 
 async function main() {
+  await testWindowDrag();
   const desktop = harness('app/web/app.js');
   desktop.context.row = row; desktop.context.quota = quota;
   desktop.run('renderModels([row]); state.sessRows = [row]; renderSessions(); renderQuotas([quota]);');
@@ -107,6 +117,121 @@ async function main() {
     for (const expected of ['过期官方', '本地估算', '~45%', '≈60%', '99 Token', '不包含在此窗口']) assert.ok(html.includes(expected), expected);
     assert.ok(!html.includes('~50%'), 'entry.note must not mark a fresh window stale');
   }
-  console.log('frontend rendering, token totals, quality labels, and scan refresh regressions passed');
+  console.log('frontend rendering, token totals, quality labels, scan refresh, and window drag regressions passed');
+}
+
+function dragRegion(interactive = false) {
+  const captured = new Set();
+  const region = {
+    closest(selector) {return selector === '.drag' ? region : interactive ? region : null;},
+    setPointerCapture(id) {captured.add(id);},
+    hasPointerCapture(id) {return captured.has(id);},
+    releasePointerCapture(id) {captured.delete(id);},
+  };
+  return region;
+}
+function pointer(page, type, target, extra = {}) {
+  page.context.document.dispatchEvent({type, target, pointerId: 1, button: 0, buttons: 1,
+    isPrimary: true, screenX: 100, screenY: 100, preventDefault() {}, ...extra});
+}
+async function settle() {for (let i = 0; i < 12; i++) await Promise.resolve();}
+
+async function testWindowDrag() {
+  for (const bridgeAtLoad of [true, false]) {
+    let reads = 0;
+    const moves = [];
+    const bridge = {get_main_pos: async () => {reads++; return [10, 20];},
+      move_main: async (x, y) => {moves.push([x, y]);}};
+    const page = harness('app/web/app.js', false, bridgeAtLoad ? {pywebview: {api: bridge}} : {});
+    page.context.window.pywebview = {api: bridge};
+    page.context.window.dispatchEvent({type: 'pywebviewready'});
+    page.context.window.dispatchEvent({type: 'pywebviewready'});
+    const region = dragRegion();
+    pointer(page, 'pointerdown', region);
+    await settle();
+    assert.equal(reads, 1, `drag binds once (bridgeAtLoad=${bridgeAtLoad})`);
+    assert.ok(region.hasPointerCapture(1), 'drag keeps receiving events outside the titlebar/window');
+    // WKWebView synthetic/native automation can omit the buttons bitmask;
+    // captured pointerup/cancel/blur, not that mask, ends a gesture.
+    pointer(page, 'pointermove', region, {screenX: 130, screenY: 140, buttons: 0});
+    await settle();
+    assert.deepEqual(moves.at(-1), [40, 60]);
+    pointer(page, 'pointerup', region, {buttons: 0});
+    assert.ok(!region.hasPointerCapture(1));
+    const count = moves.length;
+    pointer(page, 'pointermove', region, {screenX: 200});
+    await settle();
+    assert.equal(moves.length, count, 'released drag must not keep moving the window');
+  }
+
+  for (const ending of ['pointercancel', 'lostpointercapture', 'blur', 'hidden']) {
+    const moves = [];
+    const bridge = {get_main_pos: async () => [0, 0], move_main: async (...pos) => moves.push(pos)};
+    const page = harness('app/web/app.js', false, {pywebview: {api: bridge}});
+    const region = dragRegion();
+    pointer(page, 'pointerdown', region);
+    await settle();
+    if (ending === 'blur') page.context.window.dispatchEvent({type: 'blur'});
+    else if (ending === 'hidden') {
+      page.context.document.hidden = true;
+      page.context.document.dispatchEvent({type: 'visibilitychange'});
+    } else pointer(page, ending, region);
+    pointer(page, 'pointermove', region, {screenX: 200});
+    await settle();
+    assert.equal(moves.length, 0, ending);
+    assert.ok(!region.hasPointerCapture(1), ending);
+    // A following gesture works after every cancellation path.
+    pointer(page, 'pointerdown', region);
+    pointer(page, 'pointermove', region, {screenX: 120});
+    await settle();
+    assert.deepEqual(moves.at(-1), [20, 0], ending);
+  }
+
+  const origins = [], moves = [], releases = [];
+  const page = harness('app/web/app.js', false, {pywebview: {api: {
+    get_main_pos: () => new Promise(resolve => origins.push(resolve)),
+    move_main: (...pos) => {moves.push(pos); return new Promise(resolve => releases.push(resolve));},
+  }}});
+  const region = dragRegion();
+  pointer(page, 'pointerdown', dragRegion(true));
+  pointer(page, 'pointerdown', region, {button: 2});
+  await settle();
+  assert.equal(origins.length, 0, 'interactive controls and non-left buttons do not start dragging');
+  pointer(page, 'pointerdown', region);
+  await settle();
+  pointer(page, 'pointerup', region);
+  pointer(page, 'pointerdown', region);
+  await settle();
+  origins[0]([999, 999]);
+  pointer(page, 'pointermove', region, {screenX: 150});
+  await settle();
+  assert.equal(moves.length, 0, 'late origin from a completed gesture is ignored');
+  origins[1]([300, 400]);
+  await settle();
+  assert.deepEqual(moves, [[350, 400]]);
+  pointer(page, 'pointermove', region, {screenX: 160});
+  pointer(page, 'pointermove', region, {screenX: 180});
+  pointer(page, 'pointerup', region, {pointerId: 2});
+  assert.ok(region.hasPointerCapture(1), 'unrelated pointer cannot end the drag');
+  assert.equal(moves.length, 1, 'bridge moves are serialised');
+  releases[0]();
+  await settle();
+  assert.deepEqual(moves.at(-1), [380, 400], 'pending moves coalesce to the latest position');
+  pointer(page, 'pointerup', region);
+  releases[1]();
+  await settle();
+  assert.equal(moves.length, 2);
+
+  for (const failure of ['origin', 'move']) {
+    const broken = harness('app/web/app.js', false, {pywebview: {api: {
+      get_main_pos: async () => {if (failure === 'origin') throw Error('offline'); return [0, 0];},
+      move_main: async () => {throw Error('closed');},
+    }}});
+    const target = dragRegion();
+    pointer(broken, 'pointerdown', target);
+    pointer(broken, 'pointermove', target, {screenX: 140});
+    await settle();
+    assert.ok(!target.hasPointerCapture(1), `bridge ${failure} failure cancels safely`);
+  }
 }
 main().catch(e => {console.error(e); process.exitCode = 1;});

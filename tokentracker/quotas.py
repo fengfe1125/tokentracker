@@ -99,7 +99,8 @@ def compute(conn, force: bool = False) -> dict:
                   "kimi": _billing.kimi_usage,
                   "codex": _billing.codex_usage,
                   "go": _billing.go_usage}.get(name)
-            return _billing._cached(name, fn, force=force) if fn else None
+            version_fn = _billing._kimi_credentials_version if name == "kimi" else None
+            return _billing._cached(name, fn, force=force, version_fn=version_fn) if fn else None
         with ThreadPoolExecutor(max_workers=len(oauths)) as pool:
             for name, res in zip(oauths, pool.map(_fetch, oauths)):
                 official_cache[name] = res
