@@ -12,9 +12,8 @@
      刷新失败时委托官方 CLI（隔离 CLAUDE_CONFIG_DIR + CLAUDE_CODE_OAUTH_REFRESH_TOKEN
      跑 `claude auth login`，ccswitch 同款），抗端点/UA 协议变更。
   3. 全灭 → 提示 claude auth login 重新登录 / 打开桌面 App。
-- Kimi：先 POST https://auth.kimi.com/api/oauth/token 用 refresh_token 换新 access token
-  （kimi-code 源码 packages/oauth/src/oauth.ts：client_id=17e5f671-...，15 分钟实效），
-  再 GET https://api.kimi.com/coding/v1/usages ---官方 CLI 真正使用的接口
+- Kimi：只读 KIMI_CODE_HOME（默认 ~/.kimi-code）中的现有 access_token，
+  GET https://api.kimi.com/coding/v1/usages；过期由 Kimi 自身刷新，绝不轮换或回写凭据。
   （CodexBar docs/kimi.md + parseCodeAPIUsage），返回请求次数的 5 小时窗口与周期配额。
 - Codex：主路 GET https://chatgpt.com/backend-api/wham/usage（CodexBar docs/codex.md +
   headroom subscription/codex_rate_limits.py；Bearer 用 ~/.codex/auth.json 的 access_token
@@ -44,7 +43,6 @@ import urllib.request
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-_KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
 _CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CLAUDE_UA = "claude-cli/2.0.0 (external, cli)"
 _CLAUDE_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
@@ -76,6 +74,7 @@ class _ProviderCache:
         self.success = None
         self.retry_until = 0.0
         self.rate_limit_until = 0.0
+        self.source_version = None
 
 
 def _disk_path() -> str:
@@ -155,7 +154,7 @@ def _cached_result(key: str, state: _ProviderCache, now: float):
     return data
 
 
-def _cached(key: str, fn, force: bool = False):
+def _cached(key: str, fn, force: bool = False, version_fn=None):
     """Coalesce provider requests; retain success separately from failed attempts.
 
     Force skips ordinary TTLs, never server rate limits. Callers arriving during
@@ -167,9 +166,14 @@ def _cached(key: str, fn, force: bool = False):
     with state.lock:
         now = time.time()
         force = force and generation == state.generation
+        version = version_fn() if version_fn else None
+        source_changed = version != state.source_version
         if state.attempt and (now < state.rate_limit_until
-                              or (not force and now < state.retry_until)):
+                              or (not force and not source_changed and now < state.retry_until)):
             return _cached_result(key, state, now)
+        # Snapshot before reading credentials: a concurrent CLI write is noticed
+        # on the next poll. Only file metadata is retained, never token values.
+        state.source_version = version
         try:
             data = fn()
             data = dict(data, _ok=not data.get("error"))
@@ -555,38 +559,49 @@ def claude_oauth_usage() -> dict:
 
 
 # ------------------------------------------------------------------ Kimi ----
-def _kimi_refresh(refresh_token: str) -> str:
-    body = urllib.parse.urlencode({
-        "client_id": _KIMI_CLIENT_ID,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }).encode()
-    status, data = _http_json(
-        "https://auth.kimi.com/api/oauth/token",
-        {"Content-Type": "application/x-www-form-urlencoded"}, body=body, method="POST")
-    tok = data.get("access_token") if isinstance(data, dict) else None
-    if status != 200 or not tok:
-        raise RuntimeError(f"token 刷新失败(HTTP {status})")
-    return tok
+def _kimi_credentials_path() -> str:
+    root = os.environ.get("KIMI_CODE_HOME") or "~/.kimi-code"
+    return os.path.join(os.path.expanduser(root), "credentials", "kimi-code.json")
+
+
+def _kimi_credentials_version():
+    path = _kimi_credentials_path()
+    try:
+        st = os.stat(path)
+        return path, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size
+    except OSError:
+        return path, None
 
 
 def kimi_usage() -> dict:
-    """刷新 → GET api.kimi.com/coding/v1/usages → {windows:{5h,7d}, plan, unit}"""
+    """只读现有登录态；令牌刷新及凭据写入全部留给 Kimi。"""
     try:
-        with open(os.path.expanduser("~/.kimi-code/credentials/kimi-code.json"), encoding="utf-8") as f:
+        with open(_kimi_credentials_path(), encoding="utf-8") as f:
             cred = json.load(f)
     except OSError:
-        return {"error": "no_credentials", "detail": "未找到 ~/.kimi-code/credentials/kimi-code.json"}
-    rt = cred.get("refresh_token")
-    if not rt:
-        return {"error": "no_token", "detail": "kimi-code.json 无 refresh_token，请在 Kimi Code 重新登录"}
+        return {"error": "no_credentials", "detail": "无法读取 Kimi 凭据，请检查 KIMI_CODE_HOME 或打开 Kimi Code"}
+    except (ValueError, UnicodeError):
+        return {"error": "parse", "detail": "Kimi 凭据格式暂不可读，等待 Kimi Code 更新"}
+    if not isinstance(cred, dict):
+        return {"error": "parse", "detail": "Kimi 凭据格式异常，应为 JSON 对象"}
+    tok = cred.get("access_token")
+    if tok is not None and not isinstance(tok, str):
+        return {"error": "parse", "detail": "Kimi access_token 格式异常"}
+    if not tok or not tok.strip():
+        return {"error": "no_token", "detail": "Kimi 凭据暂为空，等待 Kimi Code 更新登录态"}
     try:
-        tok = _kimi_refresh(rt)
-    except Exception as e:  # noqa: BLE001
-        return {"error": "refresh_failed", "detail": f"Kimi token 刷新失败({e})，请在 Kimi Code 重新登录"}
+        expires = float(cred.get("expires_at") or 0)
+        if not math.isfinite(expires) or expires < 0:
+            raise ValueError("invalid expiry")
+    except (TypeError, ValueError, OverflowError):
+        return {"error": "parse", "detail": "Kimi 凭据有效期格式异常"}
+    if expires and expires <= time.time():
+        return {"error": "expired", "detail": "Kimi 访问令牌已过期，等待 Kimi Code 更新；TokenTracker 不刷新登录态"}
     status, data = _http_json(
         "https://api.kimi.com/coding/v1/usages",
         {"Authorization": f"Bearer {tok}", "Accept": "application/json"})
+    if status == 401:
+        return {"error": "expired", "detail": "Kimi 访问令牌暂不可用，等待 Kimi Code 更新登录态"}
     if status != 200 or not isinstance(data, dict):
         return {"error": f"http_{status}", "detail": f"Kimi usages 接口返回 {status}",
                 "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}

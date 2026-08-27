@@ -92,18 +92,20 @@ cd tokentracker
 
 1. **官方**（凭据有效时）：显示官方百分比与重置倒计时，徽标同时标注走的那条路（`官方 · 桌面采样 / API / wham / RPC`）；凭据失效自动降级并在卡片标注原因。
    - **Claude** 三级回退链：① 桌面 App 采样文件（`~/Library/Application Support/Claude/plan-usage-history.json`，桌面 App 每 ~5 分钟自采，无需凭据，<30min 有效；不受 Claude Code 2.1.x 清空钥匙串的官方 bug 影响）→ ② `api.anthropic.com/api/oauth/usage`（凭据遍历钥匙串 / `~/.claude/.credentials.json` / 本地快照 `~/.tokentracker/claude_cred_backup.json`，跳过被清空的空壳条目逐个尝试；手写刷新失败再委托官方 CLI `claude auth login` 环境变量刷新）→ ③ 提示重新登录。见到有效凭据自动快照，官方存储再被清空也能自行复活。
-   - **Kimi**：`auth.kimi.com` 自动刷新 15 分钟短效 token → `api.kimi.com/coding/v1/usages`。
+   - **Kimi**：只读 `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json` 中的现有 access token，查询 `api.kimi.com/coding/v1/usages`；不主动刷新、不回写凭据、不启动登录流程。令牌过期由 Kimi Code 自身更新，期间显示标记过期的官方缓存或本地估算。
    - **Codex**：主路 `chatgpt.com/backend-api/wham/usage`（复用 `~/.codex/auth.json`，401 自动刷新并原子写回），`codex app-server` RPC 兑底。
 2. **本地估算**：从汇总库统计能归入该窗口的用量（token 或估算成本），对比 `quotas.json` 的上限；未分配历史和跨窗口观察区间另行提示，不算入窗口百分比。
 
 成功缓存 120 秒，普通失败退避 120 秒，429 遵守 `Retry-After`（手动刷新也不绕过）。官方旧结果最多保留 24 小时，并明确标记过期。窗口 `source` 表示来源、`stale` 表示过期，说明文案不参与状态判断。升级不会修改用户的配额上限。
+
+Kimi 凭据文件更新后，下次配额轮询会重新读取，不必等完普通失败退避；仍不会绕过429限流。空凭据或401只表示当前读取的访问令牌不可用，不会直接要求重新登录。若 Kimi Code 未运行且令牌已过期，TokenTracker 不会自行维持登录态。
 
 内置条目（`quotas.json` 可改）：
 
 | 卡片 | 窗口 | 数据 |
 |---|---|---|
 | Claude Code | 5h / 7d | **官方**：桌面 App 采样文件 → `api.anthropic.com/api/oauth/usage` 回退链（见上） |
-| Kimi | 5h / 7d / 月度 | **官方**：`auth.kimi.com` 自动刷新 15 分钟短效 token → `api.kimi.com/coding/v1/usages`（请求次数配额）；月度窗口本地测算 |
+| Kimi | 5h / 7d / 月度 | **官方**：只读 Kimi Code 的现有 access token → `api.kimi.com/coding/v1/usages`（请求次数配额）；过期由 Kimi 刷新，月度窗口本地测算 |
 | **OpenCode Go** | 5h / 7d / 月度 | **官方** `opencode.ai/zen/go/v1/usage`（Key 自动发现：`~/.local/share/opencode/auth.json` 或 `OPENCODE_GO_API_KEY`；实现参考 DSH cost-meter 插件 queryGoQuota） |
 | Codex | 5h / 7d | **官方**：`chatgpt.com/backend-api/wham/usage`（CodexBar/headroom 同款），`codex app-server` RPC 兑底 |
 | opencode | 月度=$60 | GO 月度等值；用量=opencode 本地成本 |
