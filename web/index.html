@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TokenTracker — AI 工具 Token 用量</title>
+<link rel="icon" href="/app/brand.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app/brand.css">
 <script src="/vendor/chart.umd.min.js"></script>
 <style>
   :root{
@@ -17,7 +19,7 @@
 
   /* ---------- 顶栏 ---------- */
   header{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:4px}
-  h1{font-size:17px;font-weight:700;letter-spacing:.2px;display:flex;align-items:baseline;gap:10px}
+  h1{font-size:17px;font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:10px;--brand-ink:#D97757}
   h1 .sub{font-size:12px;color:var(--mut);font-weight:400}
   .sp{flex:1}
   .tabs{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden}
@@ -92,7 +94,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>TokenTracker <span class="sub">Claude · Kimi · Codex · DSH · Pi · opencode · Hermes</span></h1>
+    <h1><span class="tt-brand" aria-hidden="true"></span>TokenTracker <span class="sub">Claude · Kimi · Codex · DSH · Pi · opencode · Hermes</span></h1>
     <div class="sp"></div>
     <div class="tabs" id="rangeTabs">
       <button data-r="day">今天</button>

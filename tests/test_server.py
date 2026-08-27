@@ -104,6 +104,20 @@ class ScanServiceTest(unittest.TestCase):
 
 
 class HandlerTest(unittest.TestCase):
+    def test_shared_brand_assets_are_served_without_database_access(self):
+        for name, mime in (("brand.svg", "image/svg+xml"), ("brand.css", "text/css")):
+            handler = self.handler("/app/" + name)
+            handler.send_response = Mock()
+            handler.send_header = Mock()
+            handler.end_headers = Mock()
+            handler.wfile = io.BytesIO()
+            with patch.object(server.db, "connect") as connect:
+                handler.do_GET()
+                connect.assert_not_called()
+            handler.send_response.assert_called_once_with(200)
+            handler.send_header.assert_any_call("Content-Type", mime)
+            self.assertTrue(handler.wfile.getvalue())
+
     def handler(self, path, body=b"{}"):
         handler = object.__new__(server.Handler)
         handler.path = path

@@ -5,6 +5,12 @@
 
 ## 桌面 App（macOS 状态栏常驻 · 白色简洁 UI）
 
+<img src="assets/icon_1024.png" width="128" height="128" alt="TokenTracker：暖橙色开口圆环与折线">
+
+图标源稿：[Figma · TokenTracker App Icon](https://www.figma.com/design/HFAWys8F1N3MDP3HXZvGIB?node-id=2-2)。
+应用使用浅色圆角底板；页面使用同一透明线条符号。构建直接使用仓库资产，不访问 Figma、不重绘图标。
+更新流程和验收见[图标说明](docs/icon-design.md)。
+
 > **屏幕顶部系统状态栏常驻**（⚡ 实时今日用量，点开菜单看成本/配额、立即扫描、唤出主面板）
 > + 无边框白色简洁主面板，关闭只隐藏不退出，状态栏随时唤回。
 
@@ -133,7 +139,8 @@ tokentracker/
 │   └── web/                  # 主界面 index.html / app.css / app.js
 ├── scripts/
 │   ├── build_app.sh          # 一键打包 → dist/TokenTracker.app
-│   └── make_icon.py          # 图标生成（纯 Python）
+│   ├── build_icon.sh         # 显式将已确认 PNG 转为 ICNS（macOS）
+│   └── check_icon.py         # 离线校验 SVG / PNG / ICNS
 └── tokentracker/
     ├── __main__.py           # CLI: scan / stats / detect / serve
     ├── db.py                 # SQLite 汇总库 + 查询

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TokenTracker</title>
+<link rel="icon" href="/app/brand.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app/brand.css">
 <link rel="stylesheet" href="app.css">
 <script src="vendor/chart.umd.min.js"></script>
 </head>
@@ -11,7 +13,7 @@
 
 <header class="titlebar drag">
   <div class="tl-left"></div>
-  <div class="tl-title"><span class="tl-mark"></span>TokenTracker<span class="tl-sub">本地 · 私密</span></div>
+  <div class="tl-title"><span class="tl-mark tt-brand" aria-hidden="true"></span>TokenTracker<span class="tl-sub">本地 · 私密</span></div>
   <div class="tl-right"><span id="updatedAt">—</span><span class="live-dot" id="liveDot"></span></div>
   <div class="loadbar" id="loadbar"></div>
 </header>
@@ -20,7 +22,7 @@
 
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 17l4-6 3 3 4-7 3 5" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <span class="brand-mark tt-brand" aria-hidden="true"></span>
       <div>
         <div class="brand-name">TokenTracker</div>
         <div class="brand-sub">7 个 AI 工具用量统计</div>
