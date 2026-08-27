@@ -38,8 +38,17 @@ def run_all(conn, prices, tools=None, full: bool = False) -> dict:
             if not mod.detect():
                 results[name] = {"skipped": "未检测到数据源", "added": 0, "updated": 0, "files": 0}
                 continue
+            # Serialize snapshot reads and source replacement with other CLI/App
+            # connections, not only the in-process scheduler.
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             results[name] = mod.scan(conn, prices, full=full)
+            if results[name].get("error"):
+                conn.rollback()
+            else:
+                conn.commit()
         except Exception as e:  # noqa: BLE001
+            conn.rollback()
             results[name] = {"error": str(e), "added": 0, "updated": 0, "files": 0}
     conn.commit()
     return results

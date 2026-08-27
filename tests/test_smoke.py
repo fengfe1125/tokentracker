@@ -100,6 +100,56 @@ class QuotasTest(unittest.TestCase):
         self.assertEqual(win["pct"], 50.0)
 
 
+class MenuBarTitleTest(unittest.TestCase):
+    """状态栏标题合成与偏好持久化（app/menubar_fmt，纯 Python 无 AppKit）。"""
+
+    ENTRIES = [
+        {"id": "claude", "name": "Claude Code", "note": "",
+         "windows": [{"key": "5h", "pct": 45.0, "source": "official", "stale": False},
+                     {"key": "7d", "pct": 12.0, "source": "official", "stale": False}]},
+        {"id": "codex", "name": "Codex", "note": "",
+         "windows": [{"key": "5h", "pct": 8.0, "source": "official", "stale": False}]},
+    ]
+
+    def test_fmt_title(self):
+        from app.menubar_fmt import fmt_title
+        today = {"tokens": 12_300_000}
+        # 默认：今日 tokens + 选中平台最紧窗口（45 > 12，取 5h）
+        self.assertEqual(fmt_title(today, self.ENTRIES, "claude"), "⚡ 12.30M · C 45%")
+        self.assertEqual(fmt_title(today, self.ENTRIES, "codex"), "⚡ 12.30M · X 8%")
+        # off / 未知平台 / 无数据 → 降级为仅今日用量
+        self.assertEqual(fmt_title(today, self.ENTRIES, "off"), "⚡ 12.30M")
+        self.assertEqual(fmt_title(today, self.ENTRIES, "kimi"), "⚡ 12.30M")
+        self.assertEqual(fmt_title(today, [], "claude"), "⚡ 12.30M")
+        # 无今日数据时 base 是 ⚡ —
+        self.assertEqual(fmt_title(None, self.ENTRIES, "claude"), "⚡ — · C 45%")
+        # 官方窗口显式 stale → 百分比加 ~ 前缀
+        stale = [dict(self.ENTRIES[0], windows=[dict(w, stale=True)
+                                              for w in self.ENTRIES[0]["windows"]])]
+        self.assertEqual(fmt_title(today, stale, "claude"), "⚡ 12.30M · C ~45%")
+        # 窗口 pct 全为 None → 降级
+        none_win = [{"id": "claude", "name": "C", "windows": [{"key": "5h", "pct": None}]}]
+        self.assertEqual(fmt_title(today, none_win, "claude"), "⚡ 12.30M")
+
+    def test_prefs_roundtrip(self):
+        from app import menubar_fmt
+        orig = menubar_fmt.prefs_path
+        menubar_fmt.prefs_path = lambda: os.path.join(_TMP, "settings.json")
+        try:
+            p = menubar_fmt.prefs_path()
+            if os.path.exists(p):
+                os.remove(p)
+            self.assertEqual(menubar_fmt.load_prefs(), {})
+            menubar_fmt.save_prefs({"menubar_provider": "codex"})
+            self.assertEqual(menubar_fmt.load_prefs()["menubar_provider"], "codex")
+            # 坏文件 → 空 dict
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("not json")
+            self.assertEqual(menubar_fmt.load_prefs(), {})
+        finally:
+            menubar_fmt.prefs_path = orig
+
+
 class ClaudeScannerTest(unittest.TestCase):
     def setUp(self):
         if os.path.exists(os.environ["TOKENTRACKER_DB"]):

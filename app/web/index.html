@@ -72,6 +72,7 @@
       </div>
 
       <div class="cards" id="statCards"></div>
+      <p class="time-quality" id="timeQuality" aria-live="polite"></p>
 
       <div class="grid2">
         <div class="card chart-card">
@@ -83,6 +84,7 @@
           </div>
           <div class="chart-wrap"><canvas id="trendChart" height="228"></canvas></div>
           <div class="legend" id="chartLegend"></div>
+          <p class="time-quality" id="trendQuality"></p>
         </div>
 
         <div class="card quota-card">
@@ -95,7 +97,7 @@
       </div>
 
       <div class="card model-card">
-        <div class="card-head"><h2>模型用量 Top</h2><span class="hint">输入 + 输出 token</span></div>
+        <div class="card-head"><h2>模型用量 Top</h2><span class="hint">总 Token（含缓存读写）；* 为时间估算/未分配</span></div>
         <div id="modelList"></div>
       </div>
     </section>
@@ -106,6 +108,7 @@
         <div class="page-title">
           <h1>会话记录</h1>
           <p id="sessSub">—</p>
+          <p class="time-quality">* 表示按观测时间估算或未分配；悬停查看，详情保留会话全部历史。</p>
         </div>
         <div class="filter-chips" id="toolFilter"></div>
       </div>
@@ -116,9 +119,11 @@
             <th class="sortable" data-sort="project">会话 / 项目</th>
             <th class="sortable" data-sort="model">模型</th>
             <th class="sortable" data-sort="ts">最后活跃</th>
+            <th class="num sortable" data-sort="tokens">总 Token</th>
             <th class="num sortable" data-sort="input">输入</th>
             <th class="num sortable" data-sort="output">输出</th>
             <th class="num sortable" data-sort="cache_read">缓存读</th>
+            <th class="num sortable" data-sort="cache_write">缓存写</th>
             <th class="num sortable" data-sort="cost">成本</th>
             <th class="num sortable" data-sort="events">事件</th>
           </tr></thead>

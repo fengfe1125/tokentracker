@@ -83,6 +83,8 @@
   .err{color:var(--danger)}
   .empty{color:var(--mut);padding:14px;text-align:center}
 
+  .time-quality{color:var(--mut);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
+  .time-quality:empty{display:none}
   footer{margin-top:26px;color:var(--mut);font-size:11.5px;line-height:1.8}
   footer code{background:var(--panel2);padding:1px 5px;border-radius:4px}
 </style>
@@ -109,12 +111,14 @@
 
   <div class="sect">总览</div>
   <section class="cards" id="cards"></section>
+  <p class="time-quality" id="timeQuality" aria-live="polite"></p>
 
   <div class="sect">趋势与对比</div>
   <section class="grid">
     <div class="panel">
-      <div class="phead"><span class="ptitle">每日 Token 趋势</span><span class="phint">输入 + 输出</span><button id="yToggle" class="mini">Y 轴</button></div>
+      <div class="phead"><span class="ptitle">每日 Token 趋势</span><span class="phint">总 Token（含缓存读写）</span><button id="yToggle" class="mini">Y 轴</button></div>
       <div class="chart-box"><canvas id="dailyChart"></canvas></div>
+      <p class="time-quality" id="trendQuality"></p>
     </div>
     <div class="panel">
       <div class="phead"><span class="ptitle">各工具总量对比</span><span class="phint">输入 + 输出 + 缓存</span></div>
@@ -122,26 +126,26 @@
     </div>
   </section>
 
-  <div class="sect">明细</div>
+  <div class="sect">明细 · * 表示按观测时间估算或未分配（悬停查看）</div>
   <section class="grid">
     <div class="panel">
       <div class="phead"><span class="ptitle">模型分布</span></div>
       <div class="tbl-wrap"><table id="modelTable">
-        <thead><tr><th>工具</th><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>成本 $</th></tr></thead>
+        <thead><tr><th>工具</th><th>模型</th><th>总 Token</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>成本 $</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </div>
     <div class="panel">
       <div class="phead"><span class="ptitle">最近会话</span></div>
       <div class="tbl-wrap"><table id="sessionTable">
-        <thead><tr><th>工具</th><th>项目</th><th>模型</th><th>最后活动</th><th>输入</th><th>输出</th><th>成本 $</th></tr></thead>
+        <thead><tr><th>工具</th><th>项目</th><th>模型</th><th>最后活动</th><th>总 Token</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>成本 $</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </div>
   </section>
 
   <footer>
-    TokenTracker · 数据 100% 本地，官方配额仅做只读查询（凭据不落盘）· 价格表 <code>prices.json</code> · 配额窗口 <code>quotas.json</code> · 未匹配价格的模型只计 token 不计费
+    TokenTracker · 用量本地保存；官方配额查询会访问对应服务 · 价格表 <code>prices.json</code> · 配额窗口 <code>quotas.json</code> · 未匹配价格的模型只计 token 不计费
   </footer>
 </div>
 
@@ -165,7 +169,23 @@ const fmt = n => {
   return String(Math.round(n));
 };
 const fmtCost = n => n==null ? '<span class="mut">—</span>' : "$"+Number(n).toFixed(2);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]));
+
+const tokensOf = row => Number((row || {}).tokens) || 0;
+function qualityLabel(row) {
+  const parts = [];
+  if (row.unallocated_tokens) parts.push(fmt(row.unallocated_tokens) + " Token 未分配到时间");
+  if (row.estimated_tokens) parts.push(fmt(row.estimated_tokens) + " Token 按观测时间估算");
+  return parts.join(" · ");
+}
+function qualitySummary(summary, chart = false) {
+  const s = summary || {}, u = s.unallocated || {}, parts = [];
+  if (u.tokens || u.events) parts.push("未分配到时间：" + fmt(u.tokens) + " Token / $" + Number(u.cost || 0).toFixed(2) +
+    " / " + (Number(u.events) || 0) + " 事件（" +
+    (chart ? "不绘入趋势，保留在全部历史" : range === "all" ? "已计入全部历史，不计入今天/本周/本月" : "不计入当前范围，保留在全部历史") + "）");
+  if (s.estimated_tokens) parts.push("按观测时间估算：" + fmt(s.estimated_tokens) + " Token（已计入" + (chart ? "趋势" : "当前总量") + "）");
+  return parts.join("；");
+}
 
 async function api(path){
   const r = await fetch(path);
@@ -181,10 +201,10 @@ async function safe(path, fallback){
 async function loadAll(){
   const [det, stats, daily, models, sessions, quotas] = await Promise.all([
     safe("/api/detect", {}),
-    safe(`/api/stats?range=${range}&tool=${tool}`, EMPTY_STATS),
+    safe(`/api/stats?range=${range}&tool=${encodeURIComponent(tool)}`, EMPTY_STATS),
     safe(`/api/daily?range=${range}`, {rows:[]}),
-    safe(`/api/models?range=${range}&tool=${tool}`, {rows:[]}),
-    safe(`/api/sessions?range=${range}&tool=${tool}&limit=200`, {rows:[]}),
+    safe(`/api/models?range=${range}&tool=${encodeURIComponent(tool)}`, {rows:[]}),
+    safe(`/api/sessions?range=${range}&tool=${encodeURIComponent(tool)}&limit=200`, {rows:[]}),
     safe("/api/quotas", {entries:[]}),
   ]);
   renderDetect(det);
@@ -202,16 +222,17 @@ function renderDetect(det){
   const sel = $("toolSel"), cur = sel.value;
   let opts = '<option value="">全部工具</option>';
   for (const [name, info] of Object.entries(det))
-    opts += `<option value="${name}">${TOOL_ZH[name]||name} ${info.installed ? "✓" : "—"}</option>`;
+    opts += `<option value="${esc(name)}">${esc(TOOL_ZH[name]||name)} ${info.installed ? "✓" : "—"}</option>`;
   sel.innerHTML = opts;
   if (cur) sel.value = cur;
 }
 
 function renderCards(stats){
   const t = stats.total;
+  $("timeQuality").textContent = qualitySummary(t);
   $("cards").innerHTML = [
-    [ "总 Token（输入+输出）", fmt(t.input + t.output), `${fmt(t.cache_read)} 缓存读 / ${fmt(t.cache_write)} 缓存写` ],
-    [ "估算成本", fmtCost(t.cost), `${t.unpriced} 条未计价` ],
+    [ "总 Token（含缓存读写）", fmt(tokensOf(t)), `${fmt(t.cache_read)} 缓存读 / ${fmt(t.cache_write)} 缓存写` ],
+    [ "估算成本", fmtCost(t.cost), `${fmt(t.unpriced)} 条未计价` ],
     [ "会话数", fmt(t.sessions), `${fmt(t.events)} 条用量事件` ],
   ].map(c => `<div class="card stat"><div class="k">${c[0]}</div><div class="v">${c[1]}<small>　${c[2]}</small></div></div>`).join("");
 }
@@ -225,19 +246,25 @@ function renderQuota(quotas){
       ? '<span class="qbadge official">官方' + (e.via ? ' · ' + esc({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : '') + '</span>'
       : '<span class="qbadge local">本地估算</span>';
     const wins = (e.windows||[]).map(w => {
-      const width = w.pct==null ? 0 : Math.min(w.pct, 100);
+      const width = w.pct==null ? 0 : Math.max(0, Math.min(Number(w.pct) || 0, 100));
+      const official = w.source === "official";
+      const source = official ? (w.stale ? "过期官方" : "官方") : "本地估算";
+      const prefix = official ? (w.stale ? "~" : "") : "≈";
+      const pctText = w.pct == null ? "未设上限" : prefix + Number(w.pct).toFixed(0) + "%";
+      const unallocated = w.unit === "usd" ? fmtCost(Number(w.unallocated) || 0) : fmt(w.unallocated) + (w.unit === "requests" ? " 次" : " Token");
       const cls = w.pct==null ? "none" : (w.pct>=100 ? "danger" : w.pct<60 ? "ok" : w.pct<85 ? "warn" : "danger");
       let val;
-      if (w.unit==="pct") val = w.pct.toFixed(0)+"%";
-      else if (w.unit==="requests") val = `${w.used} / ${w.limit} 次`;
+      if (w.unit==="pct") val = pctText;
+      else if (w.unit==="requests") val = `${esc(w.used)} / ${esc(w.limit)} 次`;
       else if (w.unit==="usd") val = "$"+Number(w.used).toFixed(2)+" / $"+fmt(Math.round(w.limit));
       else val = fmt(w.used)+" / "+fmt(w.limit);
-      val += " · " + (w.pct==null ? "未设上限" : w.pct.toFixed(0)+"%");
-      if (w.source==="official") val += ' <span class="qbadge official">官方</span>';
-      const cnt = w.resets_at ? `<span class="cnt" data-r="${w.resets_at}"></span>` : "";
+      if (w.unit !== "pct") val += " · " + pctText;
+      val += `<span class="qbadge ${official && !w.stale ? "official" : "local"}">${source}</span>`;
+      const cnt = w.resets_at ? `<span class="cnt" data-r="${esc(w.resets_at)}"></span>` : "";
       return `<div class="qwin">
         <div class="qw-top"><span class="qw-label">${esc(w.label)}</span><span class="qw-val">${val} ${cnt}</span></div>
         <div class="qtrack"><div class="qfill ${cls}" style="width:${width}%"></div></div>
+        ${!official && ((Number(w.unallocated) || 0) !== 0) ? `<div class="qnote">未分配用量：${unallocated}（不包含在此窗口）</div>` : ""}
       </div>`;
     }).join("");
     return `<div class="card"><div class="qhead"><span class="qname">${esc(e.name)}</span>${srcB}<span class="qplan">${esc(e.plan)}</span></div>${wins}${e.note?`<div class="qnote">⚠ ${esc(e.note)}</div>`:""}</div>`;
@@ -258,14 +285,14 @@ function effectiveY(){
   if (logY !== null) return logY;
   const days = [...new Set(lastDaily.map(r=>r.d))].sort();
   const tools = [...new Set(lastDaily.map(r=>r.tool))];
-  const tot = days.map((_,i)=>tools.reduce((a,t)=>a+(lastDaily.find(x=>x.tool===t&&x.d===days[i])?.input||0),0)
-                           + tools.reduce((a,t)=>a+(lastDaily.find(x=>x.tool===t&&x.d===days[i])?.output||0),0))
+  const tot = days.map(d=>tools.reduce((a,t)=>a+tokensOf(lastDaily.find(x=>x.tool===t&&x.d===d)),0))
       .filter(v=>v>0).sort((a,b)=>b-a);
   return tot.length>1 && tot[0]/tot[1] > 25;
 }
 
 function renderDaily(daily){
   lastDaily = daily.rows || [];
+  if (daily.summary) $("trendQuality").textContent = qualitySummary(daily.summary, true);
   const rows = lastDaily;
   const days = [...new Set(rows.map(r=>r.d))].sort();
   const tools = [...new Set(rows.map(r=>r.tool))];
@@ -276,12 +303,13 @@ function renderDaily(daily){
   }
   const data = tools.map(t => days.map(d => {
     const r = rows.find(x=>x.tool===t && x.d===d);
-    return r ? r.input + r.output : 0;
+    return tokensOf(r);
   }));
   const effLog = effectiveY();
   const datasets = tools.map((t,i) => ({
     label: TOOL_ZH[t]||t,
     data: data[i].map(v => (effLog && v===0) ? null : v),
+    estimated: days.map(d => Number(rows.find(r => r.tool === t && r.d === d)?.estimated_tokens) || 0),
     borderColor: TOOL_COLOR[t]||TOOL_COLOR.other,
     backgroundColor: (TOOL_COLOR[t]||TOOL_COLOR.other)+"22",
     fill: true, tension: .3, borderWidth: 1.6, pointRadius: effLog ? 1 : 2, pointHoverRadius: 4, spanGaps: true
@@ -299,7 +327,8 @@ function renderDaily(daily){
       },
       plugins: {
         legend: { labels: {color:"#e6edf3", font:{size:11}, boxWidth:10, boxHeight:10}, position:"top" },
-        tooltip: { callbacks: { label: c => c.dataset.label + ": " + (c.parsed.y==null ? "—" : fmt(c.parsed.y)) } }
+        tooltip: { callbacks: { label: c => c.dataset.label + ": " + (c.parsed.y==null ? "—" : fmt(c.parsed.y)) +
+          (c.dataset.estimated[c.dataIndex] ? "（含 " + fmt(c.dataset.estimated[c.dataIndex]) + " 按观测时间估算）" : "") } }
       }
     }
   });
@@ -318,7 +347,8 @@ function renderTools(stats){
       datasets: [
         {label:"输入", data:list.map(r=>r.input), backgroundColor:"#58a6ff", borderRadius:2},
         {label:"输出", data:list.map(r=>r.output), backgroundColor:"#d29922", borderRadius:2},
-        {label:"缓存读", data:list.map(r=>r.cache_read), backgroundColor:"#3fb950", borderRadius:2}
+        {label:"缓存读", data:list.map(r=>r.cache_read), backgroundColor:"#3fb950", borderRadius:2},
+        {label:"缓存写", data:list.map(r=>r.cache_write), backgroundColor:"#bc8cff", borderRadius:2}
       ]
     },
     options: {
@@ -339,20 +369,20 @@ function renderTools(stats){
 function renderModels(models){
   const rows = models.rows || [];
   $("modelTable").querySelector("tbody").innerHTML = rows.length ? rows.map(r =>
-    `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${TOOL_ZH[r.tool]||r.tool}</td>
-      <td>${esc(r.model)||'<span class="mut">未知</span>'}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td>
-      <td>${fmt(r.cache_read)}</td><td>${fmtCost(r.cost)}</td></tr>`).join("")
-    : '<tr><td colspan="6" class="empty">当前范围暂无数据</td></tr>';
+    `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${esc(TOOL_ZH[r.tool]||r.tool)}</td>
+      <td title="${esc(qualityLabel(r))}">${esc(r.model)||'<span class="mut">未知</span>'}${qualityLabel(r) ? " *" : ""}</td><td>${fmt(tokensOf(r))}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td>
+      <td>${fmt(r.cache_read)}</td><td>${fmt(r.cache_write)}</td><td>${fmtCost(r.cost)}</td></tr>`).join("")
+    : '<tr><td colspan="8" class="empty">当前范围暂无数据</td></tr>';
 }
 
 function renderSessions(sessions){
   const rows = sessions.rows || [];
   $("sessionTable").querySelector("tbody").innerHTML = rows.length ? rows.map(r => {
     const proj = String(r.project||"").split("/").slice(-2).join("/") || "—";
-    return `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${TOOL_ZH[r.tool]||r.tool}</td>
+    return `<tr><td><span class="dot" style="background:${TOOL_COLOR[r.tool]||TOOL_COLOR.other}"></span>${esc(TOOL_ZH[r.tool]||r.tool)}</td>
       <td title="${esc(r.project)}">${esc(proj)}</td><td>${esc(r.model)||'<span class="mut">—</span>'}</td>
-      <td class="mut">${esc(r.last_seen||"")}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td><td>${fmtCost(r.cost)}</td></tr>`;
-  }).join("") : '<tr><td colspan="7" class="empty">当前范围暂无数据</td></tr>';
+      <td class="mut" title="${esc(qualityLabel(r))}">${esc(r.last_seen||"未分配到时间")}${qualityLabel(r) ? " *" : ""}</td><td>${fmt(tokensOf(r))}</td><td>${fmt(r.input)}</td><td>${fmt(r.output)}</td><td>${fmt(r.cache_read)}</td><td>${fmt(r.cache_write)}</td><td>${fmtCost(r.cost)}</td></tr>`;
+  }).join("") : '<tr><td colspan="10" class="empty">当前范围暂无数据</td></tr>';
 }
 
 /* ---------------------------------------------------------------- 交互 ---- */
@@ -371,14 +401,23 @@ $("toolSel").addEventListener("change", e => { tool = e.target.value; loadAll();
 $("scanBtn").addEventListener("click", async () => {
   $("scanBtn").disabled = true;
   $("status").textContent = "扫描中…"; $("status").classList.add("running");
+  let warnings = [];
   try {
-    await fetch("/api/scan", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    const response = await fetch("/api/scan", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if (!response.ok && response.status !== 409) throw new Error("扫描请求失败：" + response.status);
     for (let i = 0; i < 60; i++){
       await new Promise(r => setTimeout(r, 1000));
       const st = await safe("/api/scan/status", {});
-      if (st && st.last && st.last.done){ break; }
+      if (st && !st.running && st.last && st.last.done){
+        if (st.last.error) throw new Error(st.last.error);
+        warnings = Object.values(st.last.results || {}).flatMap(r => [
+          r.counter_resets ? r.counter_resets + " 个累计计数器重置，已更新基线" : "", r.warning || ""
+        ]).filter(Boolean);
+        break;
+      }
     }
     await loadAll();
+    if (warnings.length) $("status").textContent = warnings.join("；");
   } catch(err){ $("status").textContent = "扫描失败: " + err; }
   $("scanBtn").disabled = false;
   $("status").classList.remove("running");

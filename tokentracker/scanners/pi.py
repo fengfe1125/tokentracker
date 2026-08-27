@@ -54,6 +54,10 @@ def scan(conn, prices, full: bool = False) -> dict:
                 path = os.path.join(dirpath, name)
                 if not full and not changed(cursor, path):
                     continue
+                try:
+                    snapshot = stat_key(path)
+                except OSError:
+                    continue
                 files += 1
                 session_id = ""
                 project = os.path.basename(dirpath)
@@ -90,6 +94,6 @@ def scan(conn, prices, full: bool = False) -> dict:
                                           project=project, ts=ts, model=str(model),
                                           input=inp, output=outp, cache_read=cr,
                                           cache_write=cw, cost=cost)
-                cursor[path] = stat_key(path)
+                cursor[path] = snapshot
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}

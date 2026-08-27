@@ -1,7 +1,7 @@
 # TokenTracker
 
 统计本机 **Claude Code · Kimi Code · Codex · DSH · Pi · opencode · Hermes Agent**
-七个 AI 编程工具的 Token 用量与成本。数据 100% 本地读取各工具自己的日志，不上传任何东西。
+七个 AI 编程工具的 Token 用量与成本。用量日志在本机读取和保存；官方配额查询、登录刷新会访问对应服务，不上传用量日志。
 
 ## 桌面 App（macOS 状态栏常驻 · 白色简洁 UI）
 
@@ -20,21 +20,24 @@ open dist/TokenTracker.app
 .venv/bin/python app/desktop.py    # 状态栏图标 + 主面板
 ```
 
-- 状态栏：标题实时显示今日 tokens（扫描中显示 ⟳）；菜单含今日统计、各订阅配额
-  最紧窗口、「打开主面板」「立即扫描」「退出」。无 Dock 图标（主面板打开时临时出现）。
+- 状态栏：标题实时显示今日 tokens + 选中平台最紧的配额窗口（如 `⚡ 12.30M · C 45%`，
+  官方数据过期时显示 `~45%`，本地估算显示 `≈45%`；扫描中显示 ⟳）。菜单含今日统计、各订阅配额最紧窗口、
+  「状态栏显示」二级菜单（radio 切换标题展示 Claude Code / Codex / Kimi / Go 或仅今日用量，
+  选择记住在 `~/.tokentracker/settings.json`）、「打开主面板」「立即扫描」「退出」。
+  无 Dock 图标（主面板打开时临时出现）。
 - 主面板：概览（4 统计卡 / 每日趋势图 / 订阅配额 / 模型榜）+ 会话记录两个视图；
   侧栏展示 7 个工具的数据源状态与今日量，点击工具直达其会话列表；
   会话表可点表头排序、点行展开详情抽屉（按模型分解，可一键在 Finder 打开项目目录）；
   快捷键 ⌘1/⌘2 切视图、⌘R 扫描、⌘W 关闭面板；「扫描日志」按钮可随时增量扫描。
   红点关闭仅隐藏面板，真正退出走状态栏菜单。
-- 自动扫描：App 启动时自动增量扫描一次，之后主面板每 60s 自动刷新（新日志自动入库）。
+- 自动扫描：App 启动时扫描一次，此后由 Python 服务每 60 秒调度增量扫描；隐藏主面板仍继续。定时与手动扫描共用锁，运行时跳过重复请求；退出 App 停止调度。
 
 ## 数据来源（自动探测）
 
 | 工具 | 数据位置 | 说明 |
 |---|---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | 会话 JSONL 的 `usage` 字段 |
-| Codex | `~/.codex/logs_2.sqlite` / `~/.codex/sessions/` | 新版 SQLite 日志（`codex.turn.token_usage.*`）/ 旧版会话 JSONL |
+| Codex | `~/.codex/logs_2.sqlite` / `~/.codex/sessions/` | 标准 rollout JSONL 优先；SQLite 按会话/turn 补缺，不将两套来源直接相加 |
 | opencode | `~/.local/share/opencode/opencode.db` | `session` 表自带 token/cost 聚合 |
 | DSH | `~/.dsh/sessions/**/session.jsonl.zstd` | zstd 压缩事件流（需要系统 `zstd` 命令） |
 | Hermes Agent | `~/.hermes/state.db`（`session_model_usage` 表） | 含官方估算/实际成本 |
@@ -50,6 +53,8 @@ cd tokentracker
 ./tt stats             # 终端表格统计
 ./tt stats --range week
 ./tt serve --open      # 启动本地仪表盘（默认 http://127.0.0.1:8765，被占用时自动顺延）
+./tt serve --scan      # 仅启动时扫描一次
+./tt serve --auto-scan # 启动时扫描，此后每 60 秒扫描；默认不启用
 ./tt scan && ./tt serve --open
 ```
 
@@ -57,16 +62,21 @@ cd tokentracker
 
 ## 成本估算
 
+- 总 Token = **非缓存输入 + 输出 + 缓存读取 + 缓存写入**；已包含在输出中的推理 Token 不重复计入。
 - 价格表：`prices.json`（本项目根目录），单位 **美元 / 百万 token**，可自行增删改。
 - 匹配规则：模型名先精确、再子串（不区分大小写），最后回退 `default`。
 - 未匹配到价格的模型：只统计 token、不计费（仪表盘显示 `—`）。
 - opencode / Hermes 自带官方成本时优先采用自带值。
 - 另可用 `TOKENTRACKER_PRICES=/path/prices.json` 指定价格表。
 
+历史总量保留，但无法确定时间的部分会标注“未分配到时间”，不强行算进今天。累计快照的后续差量标注“按观测时间估算”；观察区间跨越日期/小时边界时，不强行放入单一分桶。见[指标口径](docs/metrics.md)和[迁移说明](docs/migrations.md)。
+
 ## 增量扫描
 
-- JSONL 类（claude / dsh / kimi / pi）：按文件 mtime+size 跳过未变更文件，按内容幂等键（消息 id / turn+step / 事件 seq）去重，日志被工具压缩重写也不会重复计数。
-- SQLite 类（codex / opencode）：按行 id / 更新时间游标增量读取；hermes 为全量覆盖更新（表本身幂等）。
+- JSONL：保存读取前的 inode、纳秒 mtime 和 size；读取期间发生变化则下轮重扫，按消息/事件身份去重。
+- Codex：识别 `session_meta`、`turn_context`、`event_msg/token_count`、ISO 时间与累计差量；重复通知不重复入库。同 turn 优先 JSONL，SQLite 只补其缺少的差额；没有可靠 turn 身份则按整个会话选择 JSONL。
+- opencode / Hermes：持久化每个来源的累计快照。首次存量为未分配历史，后续仅记录差量和观察区间；计数器下降则报告重置、更新基线，不生成负 Token。
+- `stats`、普通 `serve` 不会启动后台扫描。`scan --full` 重读源文件但保留历史与快照；`scan --reset` 是显式清空操作，会丢失已积累的时间信息，**不要用它迁移或日常刷新**。
 
 ## 环境变量
 
@@ -74,7 +84,7 @@ cd tokentracker
 |---|---|
 | `TOKENTRACKER_DB` | 汇总库位置（默认 `~/.tokentracker/usage.db`） |
 | `TOKENTRACKER_PRICES` | 价格表位置 |
-| `CLAUDE_PROJECTS_DIR` / `CODEX_LOGS_DB` / `OPENCODE_DB` / `DSH_SESSIONS_DIR` / `HERMES_HOME` / `KIMI_CODE_HOME` / `PI_HOME` | 各工具数据源覆盖 |
+| `CLAUDE_PROJECTS_DIR` / `CODEX_LOGS_DB` / `CODEX_SESSIONS_DIR` / `OPENCODE_DB` / `DSH_SESSIONS_DIR` / `HERMES_HOME` / `KIMI_CODE_HOME` / `PI_HOME` | 各工具数据源覆盖 |
 
 ## 订阅配额进度条（固定窗口）
 
@@ -84,7 +94,9 @@ cd tokentracker
    - **Claude** 三级回退链：① 桌面 App 采样文件（`~/Library/Application Support/Claude/plan-usage-history.json`，桌面 App 每 ~5 分钟自采，无需凭据，<30min 有效；不受 Claude Code 2.1.x 清空钥匙串的官方 bug 影响）→ ② `api.anthropic.com/api/oauth/usage`（凭据遍历钥匙串 / `~/.claude/.credentials.json` / 本地快照 `~/.tokentracker/claude_cred_backup.json`，跳过被清空的空壳条目逐个尝试；手写刷新失败再委托官方 CLI `claude auth login` 环境变量刷新）→ ③ 提示重新登录。见到有效凭据自动快照，官方存储再被清空也能自行复活。
    - **Kimi**：`auth.kimi.com` 自动刷新 15 分钟短效 token → `api.kimi.com/coding/v1/usages`。
    - **Codex**：主路 `chatgpt.com/backend-api/wham/usage`（复用 `~/.codex/auth.json`，401 自动刷新并原子写回），`codex app-server` RPC 兑底。
-2. **本地估算**（always 可用）：从汇总库统计各窗口真实用量（token 或估算成本），对比 `quotas.json` 里配置的上限。
+2. **本地估算**：从汇总库统计能归入该窗口的用量（token 或估算成本），对比 `quotas.json` 的上限；未分配历史和跨窗口观察区间另行提示，不算入窗口百分比。
+
+成功缓存 120 秒，普通失败退避 120 秒，429 遵守 `Retry-After`（手动刷新也不绕过）。官方旧结果最多保留 24 小时，并明确标记过期。窗口 `source` 表示来源、`stale` 表示过期，说明文案不参与状态判断。升级不会修改用户的配额上限。
 
 内置条目（`quotas.json` 可改）：
 
@@ -127,6 +139,17 @@ tokentracker/
     ├── server.py             # 本地 HTTP 服务（含 /app/* GUI 静态路由）
     └── scanners/             # 7 个工具的适配器
 ```
+
+## 测试与升级验收
+
+```bash
+python3 -m unittest discover -s tests -v
+node --check app/web/app.js
+node tests/test_frontend.js
+python3 tests/browser_fixture.py  # 可选：仅虚构用量/配额的浏览器验收页面，Ctrl-C结束
+```
+
+见[逐项验收记录](docs/audit-acceptance.md)、[指标口径](docs/metrics.md)、[迁移说明](docs/migrations.md)。
 
 ## 参考项目
 

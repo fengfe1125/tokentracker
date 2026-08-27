@@ -55,6 +55,10 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
             path = os.path.join(dirpath, name)
             if not full and not changed(cursor, path):
                 continue
+            try:
+                snapshot = stat_key(path)
+            except OSError:
+                continue
             files += 1
             session_id = name[len("session_"):-len(".jsonl")]
             project = ""
@@ -95,7 +99,7 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                                       project=project, ts=ts, model=str(model),
                                       input=inp, output=outp, cache_read=cr,
                                       cache_write=cw, cost=cost)
-            cursor[path] = stat_key(path)
+            cursor[path] = snapshot
     return added, updated, files
 
 
@@ -110,6 +114,10 @@ def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
                 continue
             path = os.path.join(dirpath, name)
             if not full and not changed(cursor, path):
+                continue
+            try:
+                snapshot = stat_key(path)
+            except OSError:
                 continue
             files += 1
             for lineno, obj in iter_jsonl(path):
@@ -128,7 +136,7 @@ def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
                                       session_id=name[:-6], project=dirpath,
                                       ts=_parse_ts(obj.get("timestamp") or 0), model=str(model),
                                       input=inp, output=outp, cost=cost)
-            cursor[path] = stat_key(path)
+            cursor[path] = snapshot
     return added, updated, files
 
 

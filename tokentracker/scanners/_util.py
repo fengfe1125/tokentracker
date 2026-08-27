@@ -31,7 +31,8 @@ def expand(path: str) -> str:
 
 def stat_key(path: str) -> dict:
     st = os.stat(path)
-    return {"m": round(st.st_mtime, 3), "s": st.st_size}
+    # Preserve sub-millisecond writes and detect a replaced file of the same size.
+    return {"m": st.st_mtime_ns, "s": st.st_size, "i": st.st_ino, "d": st.st_dev}
 
 
 def changed(cursor: dict, path: str) -> bool:

@@ -56,12 +56,16 @@ def scan(conn, prices, full: bool = False) -> dict:
             files += 1
             try:
                 st = os.stat(path)
+                snapshot = stat_key(path)
             except OSError:
                 continue
             session_id = name[:-6]
             for lineno, obj in iter_jsonl(path):
-                msg = obj.get("message") if isinstance(obj, dict) else None
-                usage = (msg or {}).get("usage") if msg else None
+                if not isinstance(obj, dict):
+                    continue
+                msg = obj.get("message")
+                msg = msg if isinstance(msg, dict) else {}
+                usage = msg.get("usage")
                 if not isinstance(usage, dict):
                     usage = obj.get("usage") if isinstance(obj, dict) else None
                 if not isinstance(usage, dict):
@@ -80,6 +84,6 @@ def scan(conn, prices, full: bool = False) -> dict:
                                       session_id=session_id, project=slug, ts=ts,
                                       model=model, input=inp, output=outp,
                                       cache_read=cr, cache_write=cw, cost=cost)
-            cursor[path] = stat_key(path)
+            cursor[path] = snapshot
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}

@@ -1,7 +1,10 @@
-"""macOS 顶部状态栏（NSStatusItem）：常驻显示今日用量，点击展开菜单。
+"""macOS 顶部状态栏（NSStatusItem）：常驻显示今日用量 + 订阅配额，点击展开菜单。
 
-- 标题：`⚡ <今日 tokens>`；扫描中显示 `⟳ 扫描中…`
-- 菜单：今日统计行 / 各订阅配额最紧的窗口 / 打开主面板 / 立即扫描 / 退出
+- 标题：`⚡ <今日 tokens> · <平台 glyph><最紧窗口%>`（CodexBar Merge Icons 思路）；
+  扫描中显示 `⟳ 扫描中…`
+- 菜单：今日统计行 / 各订阅配额最紧的窗口 / 「状态栏显示」二级菜单（radio 切换
+  显示哪个平台的配额，选择持久化到 ~/.tokentracker/settings.json）/
+  打开主面板 / 立即扫描 / 退出
 - 后台线程每 5s 轮询扫描状态、每 60s 拉取统计与配额；
   所有 AppKit 调用经 AppHelper.callAfter 切回主线程（pywebview 的 NSApp 事件循环）。
 
@@ -24,22 +27,13 @@ from AppKit import (  # noqa: F401  (pyobjc 由 pywebview 依赖带入)
 )
 from PyObjCTools import AppHelper
 
+from app.menubar_fmt import (  # noqa: E402
+    DEFAULT_PROVIDER, best_window, fmt_quota, fmt_title, fmt_tokens, load_prefs, save_prefs,
+)
+
 REFRESH_DATA = 60.0   # 统计/配额刷新间隔
 POLL = 5.0            # 扫描状态轮询间隔
 MAX_QUOTA_LINES = 4   # 菜单里最多展示的配额行数
-
-
-def _fmt_tokens(n) -> str:
-    n = float(n or 0)
-    if n >= 1e9:
-        return f"{n / 1e9:.2f}B"
-    if n >= 1e6:
-        return f"{n / 1e6:.2f}M"
-    if n >= 1e4:
-        return f"{n / 1e3:.1f}K"
-    if n >= 1e3:
-        return f"{n / 1e3:.2f}K"
-    return str(int(n))
 
 
 def _get(url: str, timeout: float = 8):
@@ -54,8 +48,10 @@ class MenuBar(NSObject):
         self.tt_api = api
         self.tt_url = url
         self.tt_status = None
-        self.tt_info = {}          # {"today": {...}, "quotas": [str, ...]}
+        self.tt_info = {}          # {"today": {...}, "quotas": [str, ...], "entries": [...]}
         self.tt_scanning = False
+        # 状态栏标题里显示哪个平台的配额（"off" = 仅今日用量），持久化到 settings.json
+        self.tt_provider = load_prefs().get("menubar_provider", DEFAULT_PROVIDER)
 
     # --------------------------------------------------------- UI（主线程）----
     def tt_install_ui(self):
@@ -82,6 +78,13 @@ class MenuBar(NSObject):
             self.tt_mi_quota.append(it)
 
         menu.addItem_(NSMenuItem.separatorItem())
+        # 「状态栏显示」二级菜单：radio 切换标题里展示的平台配额（menuNeedsUpdate 时重建）
+        self.tt_mi_display = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "状态栏显示", None, "")
+        self.tt_mi_display.setSubmenu_(NSMenu.alloc().init())
+        menu.addItem_(self.tt_mi_display)
+
+        menu.addItem_(NSMenuItem.separatorItem())
         self.tt_add_action(menu, "打开主面板", "ttOpenMain:")
         self.tt_add_action(menu, "立即扫描", "ttRescan:")
         menu.addItem_(NSMenuItem.separatorItem())
@@ -100,9 +103,9 @@ class MenuBar(NSObject):
         if self.tt_scanning:
             self.tt_status.button().setTitle_("⟳ 扫描中…")
             return
-        today = self.tt_info.get("today")
-        title = f"⚡ {_fmt_tokens(today['tokens'])}" if today else "⚡ —"
-        self.tt_status.button().setTitle_(title)
+        self.tt_status.button().setTitle_(
+            fmt_title(self.tt_info.get("today"),
+                      self.tt_info.get("entries"), self.tt_provider))
 
     # ------------------------------------------------------- 菜单动作（ObjC）----
     def ttOpenMain_(self, sender):
@@ -111,6 +114,16 @@ class MenuBar(NSObject):
     def ttRescan_(self, sender):
         threading.Thread(target=self.tt_trigger_scan, daemon=True).start()
 
+    def ttPickProvider_(self, sender):
+        pid = str(sender.representedObject() or "")
+        if not pid or pid == self.tt_provider:
+            return
+        self.tt_provider = pid
+        prefs = load_prefs()
+        prefs["menubar_provider"] = pid
+        save_prefs(prefs)
+        self.tt_apply_title()
+
     def ttQuitApp_(self, sender):
         self.tt_api.quit()
 
@@ -118,7 +131,7 @@ class MenuBar(NSObject):
         today = self.tt_info.get("today")
         if today:
             self.tt_mi_today.setTitle_(
-                f"今日 {_fmt_tokens(today['tokens'])} tokens · ${today['cost']:.2f}")
+                f"今日 {fmt_tokens(today['tokens'])} tokens · ${today['cost']:.2f}")
         else:
             self.tt_mi_today.setTitle_("今日暂无数据（点「立即扫描」）")
         lines = self.tt_info.get("quotas") or []
@@ -128,6 +141,27 @@ class MenuBar(NSObject):
                 it.setHidden_(False)
             else:
                 it.setHidden_(True)
+        self.tt_rebuild_display_menu()
+
+    def tt_rebuild_display_menu(self):
+        """按 /api/quotas 的 entries 重建「状态栏显示」子菜单（radio 勾选当前项）。"""
+        entries = self.tt_info.get("entries") or []
+        sub = NSMenu.alloc().init()
+        for e in entries:
+            pid = e.get("id")
+            if pid:
+                self.tt_add_provider_item(sub, pid, f"今日用量 + {e.get('name', '?')}")
+        if entries:
+            sub.addItem_(NSMenuItem.separatorItem())
+        self.tt_add_provider_item(sub, "off", "仅今日用量")
+        self.tt_mi_display.setSubmenu_(sub)
+
+    def tt_add_provider_item(self, sub, pid, title):
+        it = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, "ttPickProvider:", "")
+        it.setTarget_(self)
+        it.setRepresentedObject_(pid)
+        it.setState_(1 if pid == self.tt_provider else 0)
+        sub.addItem_(it)
 
     # --------------------------------------------------------- 窗口显隐 ----
     def tt_show_main(self):
@@ -171,27 +205,25 @@ class MenuBar(NSObject):
             stats = _get(self.tt_url + "/api/stats?range=day")
             t = stats.get("total") or {}
             self.tt_info["today"] = {
-                "tokens": (t.get("input") or 0) + (t.get("output") or 0),
+                "tokens": t.get("tokens") or 0,
                 "cost": t.get("cost") or 0,
             }
         except Exception:
             self.tt_info.pop("today", None)
         try:
             q = _get(self.tt_url + "/api/quotas", timeout=30)
+            entries = q.get("entries") or []
+            self.tt_info["entries"] = entries
             lines = []
-            for e in q.get("entries") or []:
-                best = None
-                for w in e.get("windows") or []:
-                    if w.get("pct") is None:
-                        continue
-                    if not best or w["pct"] > best["pct"]:
-                        best = w
+            for e in entries:
+                best = best_window(e)
                 if best:
                     lines.append(f"{e.get('name', '?')} · {best.get('label', '')} "
-                                 f"{best['pct']:.0f}%")
+                                 f"{fmt_quota(best)}")
             self.tt_info["quotas"] = lines[:MAX_QUOTA_LINES]
         except Exception:
-            pass
+            self.tt_info.pop("entries", None)
+            self.tt_info.pop("quotas", None)
 
     def tt_loop(self):
         last_data = 0.0
@@ -217,7 +249,7 @@ class MenuBar(NSObject):
         except Exception:
             title = None
         return {"installed": self.tt_status is not None, "title": title,
-                "info": dict(self.tt_info)}
+                "provider": self.tt_provider, "info": dict(self.tt_info)}
 
 
 def install_menubar(api, url: str) -> MenuBar:

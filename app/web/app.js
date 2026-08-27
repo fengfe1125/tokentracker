@@ -25,6 +25,26 @@ const fmtT = n => { n = +n || 0;
   return String(Math.round(n)); };
 const fmtCost = n => { n = +n || 0; return "$" + (n >= 1000 ? (n / 1000).toFixed(2) + "K" : n.toFixed(2)); };
 
+// All API/log strings are untrusted, including strings inside quoted attributes.
+const esc = value => String(value ?? "").replace(/[&<>"']/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const tokensOf = row => Number((row || {}).tokens) || 0;
+function qualityLabel(row) {
+  const parts = [];
+  if (row.unallocated_tokens) parts.push(fmtT(row.unallocated_tokens) + " Token 未分配到时间");
+  if (row.estimated_tokens) parts.push(fmtT(row.estimated_tokens) + " Token 按观测时间估算");
+  return parts.join(" · ");
+}
+function qualitySummary(summary, chart = false) {
+  const s = summary || {}, u = s.unallocated || {};
+  const parts = [];
+  if (u.tokens || u.events) parts.push("未分配到时间：" + fmtT(u.tokens) + " Token / " +
+    fmtCost(u.cost) + " / " + (Number(u.events) || 0) + " 事件（" +
+    (chart ? "不绘入趋势，保留在全部历史" : state.range === "all" ? "已计入全部历史，不计入今天/本周/本月" : "不计入当前范围，保留在全部历史") + "）");
+  if (s.estimated_tokens) parts.push("按观测时间估算：" + fmtT(s.estimated_tokens) + " Token（已计入" + (chart ? "趋势" : "当前总量") + "）");
+  return parts.join("；");
+}
+
 const api = () => (window.pywebview && window.pywebview.api) || null;
 
 function toast(msg, ms = 2600) {
@@ -56,7 +76,7 @@ function animateNum(el, to, fmtFn, dur = 700) {
 const state = { range: "week", tool: null, chart: null, logScale: false,
                 scanning: false, detected: null, sessRows: [],
                 sort: { key: "ts", dir: -1 },
-                quotaPrev: {}, statPrev: {}, inFlight: 0 };
+                quotaPrev: {}, statPrev: {}, inFlight: 0, forceQuotaAfterScan: false };
 
 /* ─────────── 顶部加载条 ─────────── */
 function setLoading(on) {
@@ -83,6 +103,7 @@ async function loadToday() {
 async function loadDaily() {
   const d = await jget("/api/daily?range=" + state.range);
   drawTrend(d.rows);
+  $("#trendQuality").textContent = qualitySummary(d.summary, true);
 }
 async function loadQuotas(force) {
   const d = await jget("/api/quotas" + (force ? "?force=1" : ""));
@@ -93,7 +114,7 @@ async function loadModels() {
   renderModels(d.rows || []);
 }
 async function loadSessions() {
-  const tool = state.tool ? "&tool=" + state.tool : "";
+  const tool = state.tool ? "&tool=" + encodeURIComponent(state.tool) : "";
   const d = await jget("/api/sessions?range=" + state.range + "&limit=300" + tool);
   state.sessRows = d.rows || [];
   renderSessions();
@@ -109,10 +130,10 @@ function stampUpdated() {
   const r = $(".tl-right");
   r.classList.remove("flash"); void r.offsetWidth; r.classList.add("flash");
 }
-async function refreshAll() {
+async function refreshAll(forceQuota = false) {
   setLoading(true);
   try {
-    await Promise.all([loadStats(), loadToday(), loadDaily(), loadQuotas(), loadModels()]);
+    await Promise.all([loadStats(), loadToday(), loadDaily(), loadQuotas(forceQuota), loadModels()]);
     if (!$("#view-sessions").classList.contains("hidden")) await loadSessions();
     stampUpdated();
   } catch (e) { console.warn(e); }
@@ -129,10 +150,11 @@ const ICONS = {
 
 function renderStatCards(rows, total) {
   const t = total || {};
-  const tokAll = (t.input || 0) + (t.output || 0);
+  const tokAll = tokensOf(t);
+  $("#timeQuality").textContent = qualitySummary(t);
   const cards = [
     { id: "tok",  ic: "tok",  k: "Token 总量", num: tokAll, fmt: fmtT,
-      sub: "输入 " + fmtT(t.input || 0) + " · 输出 " + fmtT(t.output || 0) },
+      sub: "输入 " + fmtT(t.input) + " · 输出 " + fmtT(t.output) + " · 缓存读写均计入" },
     { id: "cost", ic: "cost", k: "成本估算", num: t.cost || 0, fmt: fmtCost,
       sub: (t.unpriced ? "⚠ " + t.unpriced + " 条未计价" : "按 prices.json 计价"), warn: !!t.unpriced },
     { id: "sess", ic: "sess", k: "会话数", num: t.sessions || 0, fmt: v => String(Math.round(v)),
@@ -146,7 +168,7 @@ function renderStatCards(rows, total) {
       <div class="ic ${c.ic}">${ICONS[c.ic]}</div>
       <div class="v" data-num="${c.id}">${c.fmt(state.statPrev[c.id] || 0)}</div>
       <div class="k">${c.k}</div>
-      <div class="sub ${c.warn ? "warn" : ""}">${c.sub}</div>
+      <div class="sub ${c.warn ? "warn" : ""}">${esc(c.sub)}</div>
     </div>`).join("");
   [...$("#statCards").children].forEach(el => {
     if (el.dataset.go) el.onclick = () => switchView(el.dataset.go);
@@ -161,10 +183,10 @@ function renderStatCards(rows, total) {
 
 /* ─────────── 侧栏：工具数据源（点击 → 会话记录按该工具过滤） ─────────── */
 function renderSideTools(rows) {
-  const byTool = {}; (rows || []).forEach(r => byTool[r.tool] = r);
+  const byTool = Object.create(null); (rows || []).forEach(r => byTool[r.tool] = r);
   const sorted = TOOL_ORDER.map(t => {
     const r = byTool[t] || null;
-    return { tool: t, tok: r ? (r.input + r.output) : 0 };
+    return { tool: t, tok: tokensOf(r) };
   }).sort((a, b) => b.tok - a.tok);
   $("#sideTools").innerHTML = sorted.map((s, i) => {
     const meta = TOOL[s.tool] || { name: s.tool, color: "#aaa" };
@@ -174,7 +196,7 @@ function renderSideTools(rows) {
       style="--i:${i}" data-tool="${s.tool}"
       title="${inst ? "查看 " + meta.name + " 的会话记录" : meta.name + " 未检测到数据源"}">
       <span class="dot" style="background:${meta.color}"></span>
-      <span class="name">${meta.name}</span>
+      <span class="name">${esc(meta.name)}</span>
       <span class="n">${label}</span></div>`;
   }).join("");
   [...$("#sideTools").children].forEach(el => {
@@ -189,9 +211,10 @@ function renderSideTools(rows) {
 
 /* ─────────── 趋势图（原地更新，不再销毁重建，切换无闪烁） ─────────── */
 function drawTrend(rows) {
-  const byTool = {}; const dates = new Set();
+  const byTool = Object.create(null), estimated = Object.create(null); const dates = new Set();
   (rows || []).forEach(r => {
-    (byTool[r.tool] = byTool[r.tool] || {})[r.d] = (r.input || 0) + (r.output || 0);
+    (byTool[r.tool] = byTool[r.tool] || {})[r.d] = tokensOf(r);
+    (estimated[r.tool] = estimated[r.tool] || {})[r.d] = Number(r.estimated_tokens) || 0;
     dates.add(r.d);
   });
   // 今天：x 轴为 0 点到当前小时；其他范围：补齐首尾之间的空缺日期
@@ -224,7 +247,7 @@ function drawTrend(rows) {
     const nonNull = data.filter(v => v != null).length;
     const pts = nonNull <= 2 ? 3.5 : (state.range === "day" ? 1.5 : 0);
     return {
-      label: TOOL[t].name, data,
+      label: TOOL[t].name, data, estimated: xs.map(d => estimated[t][d] || 0),
       borderColor: TOOL[t].color, backgroundColor: TOOL[t].color,
       borderWidth: 1.8, tension: .35,
       pointRadius: pts, pointHitRadius: 14,
@@ -255,7 +278,8 @@ function drawTrend(rows) {
         plugins: { legend: { display: false }, tooltip: {
           backgroundColor: "rgba(30,27,23,.92)", padding: 10, cornerRadius: 8,
           displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true,
-          callbacks: { label: c => " " + c.dataset.label + "： " + fmtT(c.parsed.y) } } },
+          callbacks: { label: c => " " + c.dataset.label + "： " + fmtT(c.parsed.y) +
+            (c.dataset.estimated[c.dataIndex] ? "（含 " + fmtT(c.dataset.estimated[c.dataIndex]) + " 按观测时间估算）" : "") } } },
         scales: {
           x: { grid: { display: false }, ticks: { color: "#a8a49c", maxTicksLimit: 8, font: { size: 10 } } },
           y: { type: state.logScale ? "logarithmic" : "linear", min: state.logScale ? 1 : undefined, grid: { color: "#f0efec" },
@@ -291,12 +315,12 @@ function renderQuotas(entries) {
   $("#quotaList").innerHTML = entries.map((e, i) => `
     <div class="quota-item" style="--i:${i}">
       <div class="q-head">
-        <span class="q-name">${e.name}</span>
-        <span class="q-plan" title="${e.plan || ""}">${e.plan || ""}</span>
-        <span class="badge ${e.source === "official" ? "official" : ""}">${e.source === "official" ? "官方" + (e.via ? " · " + ({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : "") : "本地估算"}</span>
+        <span class="q-name">${esc(e.name)}</span>
+        <span class="q-plan" title="${esc(e.plan || "")}">${esc(e.plan || "")}</span>
+        <span class="badge ${e.source === "official" ? "official" : ""}">${esc(e.source === "official" ? "官方" + (e.via ? " · " + ({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : "") : "本地估算")}</span>
       </div>
       <div class="q-wins">${(e.windows || []).map(w => winRow(e.id, w)).join("")}</div>
-      ${e.note ? `<div class="q-note">⚠ ${e.note}</div>` : ""}
+      ${e.note ? `<div class="q-note">⚠ ${esc(e.note)}</div>` : ""}
     </div>`).join("");
   // 进度条动画：先放到旧值，下一帧滚到新值
   requestAnimationFrame(() => {
@@ -315,21 +339,26 @@ function renderQuotas(entries) {
   });
 }
 function winRow(eid, w) {
-  const pct = w.pct == null ? null : Math.min(w.pct, 100);
+  const pct = w.pct == null ? null : Math.max(0, Math.min(Number(w.pct) || 0, 100));
+  const official = w.source === "official";
+  const source = official ? (w.stale ? "过期官方" : "官方") : "本地估算";
+  const prefix = official ? (w.stale ? "~" : "") : "≈";
   const cls = pct == null ? "" : (pct < 60 ? "good" : (pct < 85 ? "mid" : "bad"));
   const barCls = pct == null ? "" : (pct < 60 ? "" : (pct < 85 ? "mid" : "bad"));
   const used = w.unit === "usd" ? fmtCost(w.used) : fmtT(w.used);
   const lim = w.unit === "usd" ? fmtCost(w.limit) : fmtT(w.limit);
-  const pctTxt = pct == null ? "未设上限" : pct.toFixed(0) + "%";
+  const pctTxt = pct == null ? "未设上限" : prefix + pct.toFixed(0) + "%";
+  const unallocated = w.unit === "usd" ? fmtCost(w.unallocated) : fmtT(w.unallocated) + (w.unit === "requests" ? " 次" : " Token");
   const reset = w.resets_at ? countdown(w.resets_at) : "";
   const detail = w.unit === "requests" ? `${w.used} / ${w.limit} 次`
     : (w.used != null && w.limit != null ? `${used} / ${lim}` : "");
   const topRight = w.unit === "usd" ? "" : (w.used != null && w.limit != null ? used + " / " + lim + " " : "");
-  return `<div class="q-win" ${detail ? `title="${detail}"` : ""}>
-    <div class="w-top"><span>${w.label}</span>
+  return `<div class="q-win" ${detail ? `title="${esc(detail)}"` : ""}>
+    <div class="w-top"><span>${esc(w.label)} <span class="badge ${official && !w.stale ? "official" : ""}">${source}</span></span>
       <span>${topRight}<b class="pct ${cls}">${pctTxt}</b></span></div>
-    <div class="q-bar"><i class="${barCls}" data-qk="${eid}:${w.key}" data-pct="${pct ?? 0}" style="width:${pct ?? 0}%"></i></div>
+    <div class="q-bar"><i class="${barCls}" data-qk="${esc(eid)}:${esc(w.key)}" data-pct="${pct ?? 0}" style="width:${pct ?? 0}%"></i></div>
     ${reset ? `<div class="reset">${reset} 重置</div>` : ""}
+    ${!official && ((Number(w.unallocated) || 0) !== 0) ? `<div class="q-note">未分配用量：${unallocated}（不包含在此窗口）</div>` : ""}
   </div>`;
 }
 function countdown(ts) {
@@ -345,15 +374,15 @@ function countdown(ts) {
 function renderModels(rows) {
   if (!rows.length) { $("#modelList").innerHTML = '<div class="model-empty">暂无数据</div>'; return; }
   const top = rows.slice(0, 10);
-  const max = Math.max(...top.map(r => r.input + r.output), 1);
+  const max = Math.max(...top.map(tokensOf), 1);
   $("#modelList").innerHTML = top.map((r, i) => {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };
-    const tok = (r.input || 0) + (r.output || 0);
+    const tok = tokensOf(r);
     return `<div class="model-row" style="--i:${i}">
       <span class="rank">#${i + 1}</span>
-      <span class="m-name" title="${r.model || "(未知模型)"}">${r.model || "(未知模型)"}</span>
-      <span class="m-tool"><span class="dot" style="background:${meta.color}"></span>${meta.name}</span>
-      <span class="m-tok">${fmtT(r.input)} / ${fmtT(r.output)}</span>
+      <span class="m-name" title="${esc(r.model || "(未知模型)")}">${esc(r.model || "(未知模型)")}</span>
+      <span class="m-tool"><span class="dot" style="background:${meta.color}"></span>${esc(meta.name)}</span>
+      <span class="m-tok" title="${esc(qualityLabel(r))}">${fmtT(tok)} Token${qualityLabel(r) ? " *" : ""}</span>
       <span class="m-cost">${r.cost == null ? "—" : fmtCost(r.cost)}</span>
       <div class="m-bar-track"><i data-w="${(tok / max * 100).toFixed(1)}" style="width:0%"></i></div>
     </div>`;
@@ -372,6 +401,9 @@ function sortedRows() {
     : key === "tool" ? (TOOL[r.tool] ? TOOL[r.tool].name : r.tool)
     : (r[key] ?? "");
   return [...state.sessRows].sort((a, b) => {
+    if (key === "ts" && (a.ts == null || b.ts == null)) {
+      return a.ts == null ? (b.ts == null ? 0 : 1) : -1;
+    }
     const x = val(a), y = val(b);
     if (typeof x === "number" && typeof y === "number") return (x - y) * dir;
     return String(x).localeCompare(String(y)) * dir;
@@ -385,15 +417,17 @@ function renderSessions() {
   $("#sessBody").innerHTML = rows.map((r, i) => {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };
     return `<tr data-i="${i}" style="--i:${Math.min(i, 14)}" title="点击查看会话详情">
-      <td><span class="tool-cell"><span class="dot" style="background:${meta.color}"></span>${meta.name}</span></td>
-      <td class="proj" title="${r.project || r.session_id || ""}">${r.project || (r.session_id || "—").slice(0, 26)}</td>
-      <td class="model-cell" title="${r.model || ""}">${r.model || "—"}</td>
-      <td class="when">${relTime(r.last_seen)}</td>
+      <td><span class="tool-cell"><span class="dot" style="background:${meta.color}"></span>${esc(meta.name)}</span></td>
+      <td class="proj" title="${esc(r.project || r.session_id || "")}">${esc(r.project || (r.session_id || "—").slice(0, 26))}</td>
+      <td class="model-cell" title="${esc(r.model || "")}">${esc(r.model || "—")}</td>
+      <td class="when" title="${esc(qualityLabel(r))}">${relTime(r.last_seen)}${qualityLabel(r) ? " *" : ""}</td>
+      <td class="num">${fmtT(tokensOf(r))}</td>
       <td class="num">${fmtT(r.input)}</td>
       <td class="num">${fmtT(r.output)}</td>
       <td class="num">${fmtT(r.cache_read)}</td>
+      <td class="num">${fmtT(r.cache_write)}</td>
       <td class="num cost-cell">${r.cost == null ? "—" : fmtCost(r.cost)}</td>
-      <td class="num">${r.events}</td>
+      <td class="num">${esc(r.events)}</td>
     </tr>`;
   }).join("");
   [...$("#sessBody").children].forEach(el => {
@@ -410,9 +444,10 @@ function renderSessions() {
   });
 }
 function relTime(s) {
-  if (!s) return "—";
-  const p = s.split(/[- :]/).map(Number);
+  if (!s) return "未分配到时间";
+  const p = String(s).split(/[- :]/).map(Number);
   const t = new Date(p[0], p[1] - 1, p[2], p[3] || 0, p[4] || 0, p[5] || 0);
+  if (!Number.isFinite(t.getTime())) return "未知时间";
   const diff = Date.now() - t.getTime();
   const m = Math.floor(diff / 60e3);
   if (m < 1) return "刚刚";
@@ -422,6 +457,11 @@ function relTime(s) {
   const d = Math.floor(h / 24);
   if (d < 7) return d + " 天前";
   return (p[1]) + "/" + p[2];
+}
+function dateTime(ts) {
+  if (ts == null) return "未分配到时间";
+  const d = new Date(Number(ts));
+  return Number.isFinite(d.getTime()) ? d.toLocaleString("zh-CN") : "未知时间";
 }
 
 /* ─────────── 会话详情抽屉 ─────────── */
@@ -446,22 +486,26 @@ async function openDrawer(r) {
   }
   const proj = (d.project || "").trim();
   const tokens = (d.tokens != null) ? d.tokens : null;
+  const intervals = d.observation_intervals || [];
+  const intervalRows = intervals.slice(-20).map(v => `<li>${esc(dateTime(v.interval_start))} → ${esc(dateTime(v.ts))}：${fmtT(tokensOf(v))} Token</li>`).join("");
   const modelRows = (d.models || []).map((m, i) => `
       <div class="d-model" style="--i:${i + 3}">
-        <span class="m-name" title="${m.model || "(未知模型)"}">${m.model || "(未知模型)"}</span>
+        <span class="m-name" title="${esc(m.model || "(未知模型)")}">${esc(m.model || "(未知模型)")}</span>
         <span class="m-cost">${fmtCost(m.cost)}</span>
-        <span class="m-io">入 ${fmtT(m.input)} · 出 ${fmtT(m.output)} · 缓存读 ${fmtT(m.cache_read)} · 缓存写 ${fmtT(m.cache_write)} · ${m.events} 事件</span>
+        <span class="m-io">总计 ${fmtT(tokensOf(m))} · 入 ${fmtT(m.input)} · 出 ${fmtT(m.output)} · 缓存读 ${fmtT(m.cache_read)} · 缓存写 ${fmtT(m.cache_write)} · ${esc(m.events)} 事件</span>
       </div>`).join("") || '<div class="drawer-loading">无明细数据</div>';
   $("#drawerBody").innerHTML = `
     <div class="d-cards" style="--i:0">
-      <div class="d-stat"><div class="v">${tokens == null ? "—" : fmtT(tokens)}</div><div class="k">Token（输入+输出）</div></div>
+      <div class="d-stat"><div class="v">${tokens == null ? "—" : fmtT(tokens)}</div><div class="k">Token（含缓存读写）</div></div>
       <div class="d-stat"><div class="v">${fmtCost(d.cost)}</div><div class="k">成本估算</div></div>
-      <div class="d-stat"><div class="v">${d.events ?? "—"}</div><div class="k">事件数</div></div>
+      <div class="d-stat"><div class="v">${esc(d.events ?? "—")}</div><div class="k">事件数</div></div>
       <div class="d-stat"><div class="v">${(d.models || []).length}</div><div class="k">模型数</div></div>
     </div>
     ${proj ? `<button class="d-open-btn" id="dOpenFinder" style="--i:1">
       <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       在 Finder 中打开项目</button>` : ""}
+    <p class="time-quality">会话全部历史${qualityLabel(d) ? " · " + esc(qualityLabel(d)) : ""}</p>
+    ${intervalRows ? `<div class="time-quality">观察区间（最近 ${Math.min(intervals.length, 20)} / ${intervals.length} 个，区间内具体发生时间未知）<ul>${intervalRows}</ul></div>` : ""}
     <div class="d-sec" style="--i:2">按模型分解</div>
     ${modelRows}
   `;
@@ -491,7 +535,12 @@ function setToolFilter(tool) {
 /* ─────────── 扫描 ─────────── */
 async function startScan() {
   if (state.scanning) return;
-  try { await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); }
+  try {
+    const response = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!response.ok && response.status !== 409) throw new Error("scan request failed");
+    // Only a user-initiated accepted scan bypasses the quota cache once.
+    state.forceQuotaAfterScan = response.ok;
+  }
   catch (e) { toast("扫描请求失败：无法连接本地服务"); return; }
   setScanning(true);
 }
@@ -511,9 +560,15 @@ async function pollScan() {
       else {
         const r = s.last.results || {};
         const added = Object.values(r).reduce((a, x) => a + (x.added || 0), 0);
-        toast("✓ 扫描完成 · 新增 " + added + " 条事件");
+        const warnings = Object.values(r).flatMap(x => [
+          x.counter_resets ? x.counter_resets + " 个累计计数器重置，已更新基线" : "", x.warning || ""
+        ]).filter(Boolean);
+        toast("✓ 扫描完成 · 新增 " + added + " 条事件" +
+          (warnings.length ? "；" + warnings.join("；") : ""), warnings.length ? 7000 : 2600);
       }
-      refreshAll(); loadSessions(); loadQuotas(true);
+      const forceQuota = state.forceQuotaAfterScan;
+      state.forceQuotaAfterScan = false;
+      await refreshAll(forceQuota);
     } else if (!s.running) { setScanning(false); }
   } catch (e) { /* 服务未就绪时忽略 */ }
 }
@@ -540,7 +595,7 @@ document.querySelectorAll("#rangeChips button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#rangeChips button").forEach(x => x.classList.remove("on"));
   b.classList.add("on"); state.range = b.dataset.range;
   moveRangeInk();
-  refreshAll(); if (!$("#view-sessions").classList.contains("hidden")) loadSessions();
+  refreshAll();
 });
 window.addEventListener("resize", moveRangeInk);
 
