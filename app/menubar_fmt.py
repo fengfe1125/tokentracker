@@ -37,11 +37,20 @@ def best_window(entry: dict) -> dict | None:
     return best
 
 
+def fmt_quota(window: dict) -> str:
+    """Mark the selected window's actual source, independently of entry notes."""
+    if window.get("source") == "official":
+        marker = "~" if window.get("stale") else ""
+    else:
+        marker = "≈"
+    return f"{marker}{window['pct']:.0f}%"
+
+
 def fmt_title(today: dict | None, entries: list | None, provider: str | None) -> str:
     """状态栏标题：`⚡ 12.30M · C 45%`。
 
     today={"tokens": n} | None；provider 为 quotas entry 的 id，"off"/None = 仅今日用量。
-    选中平台无数据时自动降级为仅今日用量；entry 带 note（官方数据 stale）时百分比加 ~。
+    选中平台无数据时降级为仅今日用量；官方 stale 加 ~，本地估算加 ≈。
     """
     base = f"⚡ {fmt_tokens(today['tokens'])}" if today else "⚡ —"
     if not provider or provider == "off":
@@ -51,8 +60,7 @@ def fmt_title(today: dict | None, entries: list | None, provider: str | None) ->
     if best is None:
         return base
     glyph = PROVIDER_GLYPH.get(provider) or (entry.get("name") or "?")[:1]
-    stale = "~" if entry.get("note") else ""
-    return f"{base} · {glyph} {stale}{best['pct']:.0f}%"
+    return f"{base} · {glyph} {fmt_quota(best)}"
 
 
 # ------------------------------------------------------------ 偏好持久化 ----

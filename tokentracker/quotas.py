@@ -134,9 +134,13 @@ def compute(conn, force: bool = False) -> dict:
                     "pct": round(ow["pct"], 1),
                     "used": ow.get("used"), "limit": ow.get("limit"),
                     "resets_at": ow.get("resets_at"), "source": "official",
+                    "stale": bool(official.get("_stale_min")),
                 })
                 continue
             pct = (used / limit * 100) if limit else (0.0 if used == 0 else None)
+            unallocated = db.window_unallocated(
+                conn, start, tool=tool, model_prefix=prefix,
+                include_cache=include_cache, usd=(unit == "usd"))
             windows.append({
                 "key": key, "label": lim.get("label", key),
                 "unit": unit,
@@ -144,6 +148,8 @@ def compute(conn, force: bool = False) -> dict:
                 "limit": limit,
                 "pct": round(pct, 1) if pct is not None else None,
                 "resets_at": None, "source": "local",
+                "stale": False,
+                "unallocated": round(unallocated, 2) if unit == "usd" else int(unallocated),
             })
         status = ""
         if official and official.get("_stale_min"):

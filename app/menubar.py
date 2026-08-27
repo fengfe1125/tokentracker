@@ -28,7 +28,7 @@ from AppKit import (  # noqa: F401  (pyobjc 由 pywebview 依赖带入)
 from PyObjCTools import AppHelper
 
 from app.menubar_fmt import (  # noqa: E402
-    DEFAULT_PROVIDER, fmt_title, fmt_tokens, load_prefs, save_prefs,
+    DEFAULT_PROVIDER, best_window, fmt_quota, fmt_title, fmt_tokens, load_prefs, save_prefs,
 )
 
 REFRESH_DATA = 60.0   # 统计/配额刷新间隔
@@ -205,7 +205,7 @@ class MenuBar(NSObject):
             stats = _get(self.tt_url + "/api/stats?range=day")
             t = stats.get("total") or {}
             self.tt_info["today"] = {
-                "tokens": (t.get("input") or 0) + (t.get("output") or 0),
+                "tokens": t.get("tokens") or 0,
                 "cost": t.get("cost") or 0,
             }
         except Exception:
@@ -216,18 +216,14 @@ class MenuBar(NSObject):
             self.tt_info["entries"] = entries
             lines = []
             for e in entries:
-                best = None
-                for w in e.get("windows") or []:
-                    if w.get("pct") is None:
-                        continue
-                    if not best or w["pct"] > best["pct"]:
-                        best = w
+                best = best_window(e)
                 if best:
                     lines.append(f"{e.get('name', '?')} · {best.get('label', '')} "
-                                 f"{best['pct']:.0f}%")
+                                 f"{fmt_quota(best)}")
             self.tt_info["quotas"] = lines[:MAX_QUOTA_LINES]
         except Exception:
-            pass
+            self.tt_info.pop("entries", None)
+            self.tt_info.pop("quotas", None)
 
     def tt_loop(self):
         last_data = 0.0

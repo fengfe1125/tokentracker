@@ -26,18 +26,23 @@
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import math
 import os
 import re
 import select
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 _KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
 _CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -59,6 +64,18 @@ _TTL_OK = 120     # 成功结果缓存
 _TTL_ERR = 120    # 失败退避（限流接口不宜高频重试）
 _STALE_MAX = 24 * 3600   # 磁盘兜底缓存最长可用 24h
 _cache: dict = {}
+_cache_lock = threading.Lock()
+_disk_lock = threading.Lock()
+
+
+class _ProviderCache:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.generation = 0
+        self.attempt = None
+        self.success = None
+        self.retry_until = 0.0
+        self.rate_limit_until = 0.0
 
 
 def _disk_path() -> str:
@@ -71,7 +88,8 @@ def _disk_load(key: str):
         with open(_disk_path(), encoding="utf-8") as f:
             store = json.load(f)
         ts, data = store[key]
-        if time.time() - ts > _STALE_MAX:
+        if (not isinstance(data, dict) or data.get("error")
+                or not 0 <= time.time() - ts <= _STALE_MAX):
             return None, None
         return ts, data
     except (OSError, ValueError, KeyError, TypeError):
@@ -80,56 +98,102 @@ def _disk_load(key: str):
 
 def _disk_store(key: str, ts: float, data: dict):
     """成功结果落盘（跨进程共享，限流时互为兜底）；只存配额数字，不含凭据。"""
+    tmp = None
     try:
-        store = {}
-        try:
-            with open(_disk_path(), encoding="utf-8") as f:
-                store = json.load(f)
-        except (OSError, ValueError):
-            pass
-        store[key] = [ts, data]
-        os.makedirs(os.path.dirname(_disk_path()), exist_ok=True)
-        tmp = _disk_path() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(store, f)
-        os.replace(tmp, _disk_path())
-    except OSError:
+        path = _disk_path()
+        directory = os.path.dirname(path)
+        os.makedirs(directory, exist_ok=True)
+        # The persistent lock file must not be replaced with the JSON inode.
+        with _disk_lock, open(path + ".lock", "a+b") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            store = {}
+            try:
+                with open(path, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    store = loaded
+            except (OSError, ValueError):
+                pass
+            store[key] = [ts, data]
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=directory, prefix=".official_cache.",
+                                             suffix=".tmp", delete=False) as f:
+                tmp = f.name
+                json.dump(store, f, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+    except (OSError, ValueError, TypeError):
         pass
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
-def _cached(key: str, fn, force: bool = False):
-    """stale-if-error：成功写内存+磁盘；失败回退最近一次成功结果并标记 _stale_min。
-
-    force=True（手动「立即扫描」）跳过 TTL 直接重抓，失败仍回退 stale。"""
-    now = time.time()
-    hit = _cache.get(key)
-    if hit and not force:
-        ttl = _TTL_OK if hit[1].get("_ok") else _cache_ttl.get(key, _TTL_ERR)
-        if now - hit[0] < ttl:
-            return hit[1]
-    try:
-        data = fn()
-        data = dict(data, _ok=not data.get("error"))
-    except Exception as e:  # noqa: BLE001
-        data = {"error": "network", "detail": str(e), "_ok": False}
+def _cached_result(key: str, state: _ProviderCache, now: float):
+    data = state.attempt[1]
     if data.get("_ok"):
-        _cache[key] = (now, data)
-        _disk_store(key, now, data)
-        return data
-    stale_ts, stale = (hit if hit and hit[1].get("_ok") else (None, None))
+        if now - state.attempt[0] < _TTL_OK:
+            return data
+        # A successful fallback can still carry an upstream rate limit. Once
+        # its normal TTL ends it is stale, not fresh for the entire backoff.
+        data = {"error": "http_429", "detail": "官方接口限流，等待 Retry-After", "_ok": False}
+    stale_ts, stale = state.success or (None, None)
+    if stale is not None and not 0 <= now - stale_ts <= _STALE_MAX:
+        state.success = None
+        stale = None
     if stale is None:
         stale_ts, stale = _disk_load(key)
+        if stale is not None:
+            state.success = (stale_ts, stale)
     if stale is not None:
-        out = dict(stale, _stale_min=max(1, int((now - stale_ts) / 60)),
-                   _err=data.get("detail") or data.get("error") or "")
-        return out
-    # 失败入缓存：接口返回 Retry-After（如 429）时按其时长退避，避免把限流越刷越长
-    _cache_ttl[key] = max(_TTL_ERR, min(int(data.get("_retry_after") or 0), 24 * 3600))
-    _cache[key] = (now, data)
+        return dict(stale, _stale_min=max(1, int((now - stale_ts) / 60)),
+                    _err=data.get("detail") or data.get("error") or "")
     return data
 
 
-_cache_ttl: dict = {}
+def _cached(key: str, fn, force: bool = False):
+    """Coalesce provider requests; retain success separately from failed attempts.
+
+    Force skips ordinary TTLs, never server rate limits. Callers arriving during
+    an existing request share its result, including simultaneous forced callers.
+    """
+    with _cache_lock:
+        state = _cache.setdefault(key, _ProviderCache())
+        generation = state.generation
+    with state.lock:
+        now = time.time()
+        force = force and generation == state.generation
+        if state.attempt and (now < state.rate_limit_until
+                              or (not force and now < state.retry_until)):
+            return _cached_result(key, state, now)
+        try:
+            data = fn()
+            data = dict(data, _ok=not data.get("error"))
+        except Exception as e:  # noqa: BLE001
+            data = {"error": "network", "detail": str(e), "_ok": False}
+        now = time.time()
+        state.attempt = (now, data)
+        try:
+            retry_after = max(0.0, float(data.get("_retry_after") or 0))
+        except (TypeError, ValueError, OverflowError):
+            retry_after = 0.0
+        if not math.isfinite(retry_after):
+            retry_after = 0.0
+        if data.get("_ok"):
+            state.success = (now, data)
+            state.retry_until = now + max(_TTL_OK, retry_after)
+            _disk_store(key, now, data)
+        else:
+            state.retry_until = now + max(_TTL_ERR, retry_after)
+        state.rate_limit_until = (state.retry_until if retry_after > 0
+                                  or data.get("error") == "http_429" else 0.0)
+        result = _cached_result(key, state, now)
+        state.generation += 1
+        return result
 
 
 def _iso_ms(s) -> int | None:
@@ -153,23 +217,30 @@ def _http_json(url: str, headers: dict, body: bytes | None = None, method: str =
             data = json.loads(e.read().decode("utf-8", "replace"))
         except ValueError:
             data = {}
-        if isinstance(data, dict):
+        if not isinstance(data, dict):
+            data = {}
+        retry_after = (e.headers or {}).get("Retry-After")
+        try:
+            ra = int(retry_after or 0)
+        except (TypeError, ValueError):
             try:
-                ra = int(e.headers.get("Retry-After") or 0)
-            except (TypeError, ValueError):
+                ra = math.ceil(parsedate_to_datetime(retry_after).timestamp() - time.time())
+            except (TypeError, ValueError, OverflowError, AttributeError):
                 ra = 0
-            if ra > 0:
-                data["_retry_after"] = ra
+        if ra > 0:
+            data["_retry_after"] = ra
         return e.code, data
     except Exception as e:  # noqa: BLE001
         return 0, {"error": str(e)}
 
 
 def _pct(v) -> float | None:
-    if v is None:
+    """Official utilization fields are percentages, including values below 1%."""
+    try:
+        p = float(v)
+    except (TypeError, ValueError, OverflowError):
         return None
-    p = float(v)
-    return p * 100 if 0 < p <= 1 else p
+    return p if math.isfinite(p) else None
 
 
 # ---------------------------------------------------------------- Claude ----
@@ -470,6 +541,8 @@ def claude_oauth_usage() -> dict:
     if desk:
         if oauth_err:
             desk["_oauth_err"] = oauth_err.get("error")
+            if oauth_err.get("error") == "http_429":
+                desk["_retry_after"] = oauth_err.get("_retry_after") or _TTL_ERR
         return desk
     if not cands:
         return {"error": "no_credentials",
@@ -515,7 +588,8 @@ def kimi_usage() -> dict:
         "https://api.kimi.com/coding/v1/usages",
         {"Authorization": f"Bearer {tok}", "Accept": "application/json"})
     if status != 200 or not isinstance(data, dict):
-        return {"error": f"http_{status}", "detail": f"Kimi usages 接口返回 {status}"}
+        return {"error": f"http_{status}", "detail": f"Kimi usages 接口返回 {status}",
+                "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}
     windows = {}
     usage = data.get("usage") or {}
     limits = data.get("limits") or []
@@ -750,7 +824,8 @@ def _codex_usage_wham() -> dict:
             save(tokens)
         status, data = _call(tokens["access_token"])
     if status != 200 or not isinstance(data, dict):
-        return {"error": f"http_{status}", "detail": f"wham/usage 返回 {status}"}
+        return {"error": f"http_{status}", "detail": f"wham/usage 返回 {status}",
+                "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}
     rl = data.get("rate_limit") or {}
     windows = {}
     for w in (rl.get("primary_window"), rl.get("secondary_window")):
@@ -774,7 +849,7 @@ def _codex_usage_wham() -> dict:
 def codex_usage() -> dict:
     """wham/usage HTTP 端点为主，app-server RPC 兑底（结果带 _via 标明走的那条路）。"""
     r = _codex_usage_wham()
-    if not r.get("error"):
+    if not r.get("error") or r.get("error") == "http_429":
         return r
     wham_err = r
     r = _codex_usage_rpc()
@@ -782,7 +857,8 @@ def codex_usage() -> dict:
         return r
     # 两条路都挂：报主路错误，附上兑底原因
     return {"error": wham_err.get("error"),
-            "detail": f"{wham_err.get('detail')}；RPC 兑底也失败：{r.get('detail')}"}
+            "detail": f"{wham_err.get('detail')}；RPC 兑底也失败：{r.get('detail')}",
+            "_retry_after": wham_err.get("_retry_after")}
 
 
 def _codex_usage_rpc() -> dict:
@@ -864,7 +940,8 @@ def go_usage() -> dict:
     if status == 401 or status == 403:
         return {"error": "no_sub", "detail": "没有生效的 OpenCode Go 订阅，或 API Key 无效"}
     if status != 200:
-        return {"error": f"http_{status}", "detail": f"Go 额度接口返回 {status}（{last_err}）"}
+        return {"error": f"http_{status}", "detail": f"Go 额度接口返回 {status}（{last_err}）",
+                "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}
     usage = data.get("usage")
     if not isinstance(usage, dict):
         return {"error": "no_usage", "detail": "Go 额度响应缺少 usage 字段"}

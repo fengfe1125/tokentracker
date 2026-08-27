@@ -105,9 +105,10 @@ class MenuBarTitleTest(unittest.TestCase):
 
     ENTRIES = [
         {"id": "claude", "name": "Claude Code", "note": "",
-         "windows": [{"key": "5h", "pct": 45.0}, {"key": "7d", "pct": 12.0}]},
+         "windows": [{"key": "5h", "pct": 45.0, "source": "official", "stale": False},
+                     {"key": "7d", "pct": 12.0, "source": "official", "stale": False}]},
         {"id": "codex", "name": "Codex", "note": "",
-         "windows": [{"key": "5h", "pct": 8.0}]},
+         "windows": [{"key": "5h", "pct": 8.0, "source": "official", "stale": False}]},
     ]
 
     def test_fmt_title(self):
@@ -122,8 +123,9 @@ class MenuBarTitleTest(unittest.TestCase):
         self.assertEqual(fmt_title(today, [], "claude"), "⚡ 12.30M")
         # 无今日数据时 base 是 ⚡ —
         self.assertEqual(fmt_title(None, self.ENTRIES, "claude"), "⚡ — · C 45%")
-        # 官方数据 stale（entry 带 note）→ 百分比加 ~ 前缀
-        stale = [dict(self.ENTRIES[0], note="官方接口暂时不可用")]
+        # 官方窗口显式 stale → 百分比加 ~ 前缀
+        stale = [dict(self.ENTRIES[0], windows=[dict(w, stale=True)
+                                              for w in self.ENTRIES[0]["windows"]])]
         self.assertEqual(fmt_title(today, stale, "claude"), "⚡ 12.30M · C ~45%")
         # 窗口 pct 全为 None → 降级
         none_win = [{"id": "claude", "name": "C", "windows": [{"key": "5h", "pct": None}]}]
