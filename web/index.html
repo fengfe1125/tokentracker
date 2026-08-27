@@ -222,7 +222,7 @@ function renderQuota(quotas){
   if (!quotas.entries || !quotas.entries.length){ $("quota").innerHTML = '<div class="empty">暂无配额配置（编辑 quotas.json）</div>'; return; }
   $("quota").innerHTML = quotas.entries.map(e => {
     const srcB = e.source==="official"
-      ? '<span class="qbadge official">官方</span>'
+      ? '<span class="qbadge official">官方' + (e.via ? ' · ' + esc({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : '') + '</span>'
       : '<span class="qbadge local">本地估算</span>';
     const wins = (e.windows||[]).map(w => {
       const width = w.pct==null ? 0 : Math.min(w.pct, 100);

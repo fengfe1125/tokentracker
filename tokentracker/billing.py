@@ -1,22 +1,26 @@
-"""官方订阅配额抓取（只读，本地发起，凭据只在本进程内存中使用，绝不落盘）。
+"""官方订阅配额抓取（只读优先；仅在 token 轮换时回写来源，防止把官方 CLI 登出）。
 
 参考实现（GitHub 调研结论）：
-- Claude：GET https://api.anthropic.com/api/oauth/usage
-  （CodexBar docs/claude.md；Bearer 用凭据里的 accessToken；
-   字段是 utilization（0-100）+ resets_at（ISO）；头 anthropic-beta: oauth-2025-04-20）
-  凭据解析顺序：macOS 钥匙串「Claude Code-credentials」→ ~/.claude/.credentials.json
-  （macOS 上 Claude Code 把登录态写在钥匙串，credentials.json 常是过期残留——
-   只读文件会导致拿到过期 token、接口 429，表现为「一直监测不出来」）。
-  accessToken 过期时自动用 refreshToken 换新的并写回来源（轮换刷新令牌必须回写，
-  否则 Claude Code 本体下次刷新会失败被登出）。
+- Claude：三级回退链（CodexBar docs/claude.md + zach-source/ccswitch）
+  1. 桌面 App 采样文件 ~/Library/Application Support/Claude/plan-usage-history.json
+     （桌面 App 每 ~5 分钟自采，无需凭据；Claude Code 2.1.x 会清空自己钥匙串里的
+      claudeAiOauth（官方 bug #84331/#88583），这条路完全不受影响，样本 <30min 有效）
+  2. GET https://api.anthropic.com/api/oauth/usage（Bearer + anthropic-beta: oauth-2025-04-20）
+     凭据来源遍历：钥匙串「Claude Code-credentials」→ ~/.claude/.credentials.json
+     → 本地快照 ~/.tokentracker/claude_cred_backup.json（见到有效凭据就快照，
+     官方存储被清空时从快照复活）；跳过空壳条目，逐个尝试直到成功。
+     刷新失败时委托官方 CLI（隔离 CLAUDE_CONFIG_DIR + CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+     跑 `claude auth login`，ccswitch 同款），抗端点/UA 协议变更。
+  3. 全灭 → 提示 claude auth login 重新登录 / 打开桌面 App。
 - Kimi：先 POST https://auth.kimi.com/api/oauth/token 用 refresh_token 换新 access token
   （kimi-code 源码 packages/oauth/src/oauth.ts：client_id=17e5f671-...，15 分钟实效），
   再 GET https://api.kimi.com/coding/v1/usages ---官方 CLI 真正使用的接口
   （CodexBar docs/kimi.md + parseCodeAPIUsage），返回请求次数的 5 小时窗口与周期配额。
-- Codex：spawn `codex -s read-only -a untrusted app-server`，JSON-RPC over stdio
-  （claude-usage-rs/src/menubar.rs：initialize → initialized → account/rateLimits/read），
-  返回 primary/secondary 窗口 usedPercent + windowDurationMins(300=5h,10080=周) + resetsAt(秒)
-  + planType + credits 余额。无需登录：直接复用本机已登录的 Codex CLI。
+- Codex：主路 GET https://chatgpt.com/backend-api/wham/usage（CodexBar docs/codex.md +
+  headroom subscription/codex_rate_limits.py；Bearer 用 ~/.codex/auth.json 的 access_token
+  + ChatGPT-Account-Id 头；401 时向 auth.openai.com/oauth/token 刷新并原子写回）。
+  兑底 spawn `codex -s read-only -a untrusted app-server` JSON-RPC over stdio
+  （新版 codex-cli 上 RPC 协议不稳定，故降为兑底）。结果带 _via 标明走的那条路。
 
 凭据过期/无效时返回 {"error": ...}，由上层降级为本地窗口估算，绝不阻塞。
 """
@@ -47,6 +51,10 @@ _GO_QUOTA_URL = "https://opencode.ai/zen/go/v1/usage"
 _GO_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 _CODEX_WIN_BY_MIN = {300: "5h", 10_080: "7d", 43_200: "month", 44_640: "month"}
+_CODEX_WIN_BY_SEC = {18_000: "5h", 604_800: "7d", 2_592_000: "month", 2_678_400: "month"}
+_CODEX_WHAM_URL = "https://chatgpt.com/backend-api/wham/usage"
+_CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
+_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _TTL_OK = 120     # 成功结果缓存
 _TTL_ERR = 120    # 失败退避（限流接口不宜高频重试）
 _STALE_MAX = 24 * 3600   # 磁盘兜底缓存最长可用 24h
@@ -89,11 +97,13 @@ def _disk_store(key: str, ts: float, data: dict):
         pass
 
 
-def _cached(key: str, fn):
-    """stale-if-error：成功写内存+磁盘；失败回退最近一次成功结果并标记 _stale_min。"""
+def _cached(key: str, fn, force: bool = False):
+    """stale-if-error：成功写内存+磁盘；失败回退最近一次成功结果并标记 _stale_min。
+
+    force=True（手动「立即扫描」）跳过 TTL 直接重抓，失败仍回退 stale。"""
     now = time.time()
     hit = _cache.get(key)
-    if hit:
+    if hit and not force:
         ttl = _TTL_OK if hit[1].get("_ok") else _cache_ttl.get(key, _TTL_ERR)
         if now - hit[0] < ttl:
             return hit[1]
@@ -200,18 +210,54 @@ def _kc_write(data: dict) -> bool:
         return False
 
 
-def _claude_credentials():
-    """解析 Claude 凭据 → (oauth_dict, write_back(oauth)->None)。
+# ------------------------------------------------- Claude 凭据快照（P2） ----
+def _claude_snap_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".tokentracker", "claude_cred_backup.json")
 
-    钥匙串与 ~/.claude/.credentials.json 两处都试，挑 accessToken 最新的一份；
-    write_back 会把刷新后的 oauth 写回它原来的来源。
+
+def _claude_snap_save(oauth: dict):
+    """见到有效凭据（含 refreshToken）时快照一份到 ~/.tokentracker/（0600）。
+
+    Claude Code 2.1.x 会清空自己钥匙串里的 claudeAiOauth（官方 bug #84331/#88583），
+    有这份快照就能在官方存储被清空后自行复活（ccswitch 同款思路）。
+    """
+    if not oauth.get("refreshToken"):
+        return
+    try:
+        p = _claude_snap_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"claudeAiOauth": oauth, "saved_at": time.time()}, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _claude_snap_load() -> dict | None:
+    try:
+        with open(_claude_snap_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        o = d.get("claudeAiOauth")
+        return o if isinstance(o, dict) and (o.get("refreshToken") or o.get("accessToken")) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _claude_credentials() -> list:
+    """全部凭据来源 → [(oauth_dict, write_back|None, source_label), ...]。
+
+    钥匙串、~/.claude/.credentials.json、本地快照三处都试，跳过被清空的空壳条目
+    （accessToken/refreshToken 皆空、expiresAt=0 —— Claude Code 2.1.x bug 的特征）。
+    按 expiresAt 从新到旧排序，调用方逐个尝试直到成功。
     """
     cands = []
     kc = _kc_read()
     if kc:
         def kc_save(oauth, _kc=kc):
             _kc_write(dict(_kc, claudeAiOauth=oauth))
-        cands.append((kc["claudeAiOauth"], kc_save))
+        cands.append((kc["claudeAiOauth"], kc_save, "keychain"))
     path = os.path.expanduser("~/.claude/.credentials.json")
     try:
         with open(path, encoding="utf-8") as f:
@@ -226,13 +272,18 @@ def _claude_credentials():
                     os.replace(tmp, _path)
                 except OSError:
                     pass
-            cands.append((cred["claudeAiOauth"], file_save))
+            cands.append((cred["claudeAiOauth"], file_save, "file"))
     except (OSError, ValueError):
         pass
-    if not cands:
-        return None, None
+    snap = _claude_snap_load()
+    if snap:
+        def snap_save(oauth):
+            _claude_snap_save(oauth)
+        cands.append((snap, snap_save, "snapshot"))
+    # 跳过空壳（官方 bug 清空的条目）
+    cands = [c for c in cands if c[0].get("accessToken") or c[0].get("refreshToken")]
     cands.sort(key=lambda c: c[0].get("expiresAt") or 0, reverse=True)
-    return cands[0]
+    return cands
 
 
 def _claude_refresh(refresh_token: str) -> dict:
@@ -248,68 +299,186 @@ def _claude_refresh(refresh_token: str) -> dict:
     return data
 
 
-def claude_oauth_usage() -> dict:
-    """GET api.anthropic.com/api/oauth/usage → {windows:{5h,7d,..}, plan}"""
-    oauth, save = _claude_credentials()
-    if not oauth:
-        return {"error": "no_credentials",
-                "detail": "未找到 Claude 登录态（钥匙串 / ~/.claude/.credentials.json）"}
-    tok = oauth.get("accessToken")
-    if not tok:
-        return {"error": "no_token", "detail": "凭据里没有 accessToken（未登录）"}
-    exp = oauth.get("expiresAt") or 0
-    if exp and time.time() * 1000 > exp - 60_000:  # 已过期或 1 分钟内过期 → 自动刷新
-        rt = oauth.get("refreshToken")
-        if not rt:
-            return {"error": "expired", "detail": "Claude 登录态已过期，请在 Claude Code 重新登录"}
-        try:
-            d = _claude_refresh(rt)
-        except Exception as e:  # noqa: BLE001
-            return {"error": "refresh_failed",
-                    "detail": f"Claude token 刷新失败({e})，请在 Claude Code 重新登录"}
-        # 刷新令牌会轮换：必须写回来源，否则 Claude Code 本体下次刷新会被登出
-        oauth["accessToken"] = d["access_token"]
-        if d.get("refresh_token"):
-            oauth["refreshToken"] = d["refresh_token"]
-        oauth["expiresAt"] = int(time.time() * 1000) + int(d.get("expires_in", 28800)) * 1000
-        if save:
-            save(oauth)
-        tok = oauth["accessToken"]
-    status, data = _http_json(
+def _claude_refresh_cli(refresh_token: str) -> dict:
+    """手写刷新失败时，委托官方 CLI 刷新（ccswitch 的思路）：
+    隔离 CLAUDE_CONFIG_DIR + CLAUDE_CODE_OAUTH_REFRESH_TOKEN 环境变量跑
+    `claude auth login`，端点/UA/scope 全由官方 CLI 决定，抗协议变更。
+    返回 {"access_token", "refresh_token"?, "expires_in"}。"""
+    claude = shutil.which("claude")
+    if not claude:
+        raise RuntimeError("未找到 claude CLI")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="tt-refresh-")
+    try:
+        cred_file = os.path.join(tmp, ".credentials.json")
+        with open(cred_file, "w", encoding="utf-8") as f:
+            json.dump({"claudeAiOauth": {"refreshToken": refresh_token}}, f)
+        os.chmod(cred_file, 0o600)
+        with open(os.path.join(tmp, ".claude.json"), "w", encoding="utf-8") as f:
+            f.write('{"hasCompletedOnboarding":true}')
+        env = dict(os.environ)
+        env.update({"CLAUDE_CONFIG_DIR": tmp,
+                    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": refresh_token,
+                    "CLAUDE_CODE_OAUTH_SCOPES": "openid,profile,email,offline_access"})
+        r = subprocess.run([claude, "auth", "login"], env=env, cwd=tmp,
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout or "login failed").strip()[:120])
+        with open(cred_file, encoding="utf-8") as f:
+            o = (json.load(f).get("claudeAiOauth") or {})
+        if not o.get("accessToken"):
+            raise RuntimeError("CLI 未返回新 token")
+        exp_ms = o.get("expiresAt") or 0
+        return {"access_token": o["accessToken"],
+                "refresh_token": o.get("refreshToken"),
+                "expires_in": max(60, int((exp_ms - time.time() * 1000) / 1000))}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _claude_desktop_usage() -> dict | None:
+    """Claude 桌面 App 的配额采样文件（无需凭据）：
+    ~/Library/Application Support/Claude/plan-usage-history.json，桌面 App 每 ~5 分钟
+    采样一次 {fh: 5h百分比, sd: 7d百分比}。样本 <30 分钟认为有效。"""
+    path = os.path.join(os.path.expanduser("~"),
+                        "Library", "Application Support", "Claude", "plan-usage-history.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            samples = (json.load(f).get("samples") or [])
+        if not samples:
+            return None
+        last = samples[-1]
+        age_min = (time.time() * 1000 - last.get("t", 0)) / 60000
+        if age_min > 30:
+            return None
+        u = last.get("u") or {}
+        windows = {}
+        if u.get("fh") is not None:
+            windows["5h"] = {"pct": float(u["fh"]), "resets_at": None}
+        if u.get("sd") is not None:
+            windows["7d"] = {"pct": float(u["sd"]), "resets_at": None}
+        if not windows:
+            return None
+        return {"windows": windows, "_via": "desktop",
+                "_sample_age_min": max(0, int(age_min))}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _claude_usage_http(tok: str):
+    return _http_json(
         "https://api.anthropic.com/api/oauth/usage",
         {"Authorization": f"Bearer {tok}",
          "anthropic-beta": "oauth-2025-04-20",
          "Content-Type": "application/json"},
     )
-    if status == 401:
-        return {"error": "expired", "detail": "Claude access token 失效，请在 Claude Code 重新登录"}
+
+
+def _claude_try_source(oauth: dict, save) -> dict:
+    """单个凭据来源：access token 直接调 → 过期/401 则刷新（手写 → CLI 委托）后重试。
+    成功时刷新后的凭据写回来源。失败抛不出，返回 {"error": ...}。"""
+    tok = oauth.get("accessToken")
+    exp = oauth.get("expiresAt") or 0
+    need_refresh = not tok or (exp and time.time() * 1000 > exp - 60_000)
+    if not need_refresh:
+        status, data = _claude_usage_http(tok)
+        if status == 200:
+            return {"data": data, "oauth": oauth}
+        if status == 429:
+            return {"error": "http_429", "detail": "Claude usage 接口限流，稍后自动重试",
+                    "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}
+        if status != 401:
+            return {"error": f"http_{status}", "detail": f"Claude usage 接口返回 {status}"}
+        need_refresh = True  # 401 → 尝试刷新
+    rt = oauth.get("refreshToken")
+    if not rt:
+        return {"error": "expired", "detail": "Claude 登录态已过期且无 refreshToken"}
+    d = None
+    err = ""
+    try:
+        d = _claude_refresh(rt)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+        try:
+            d = _claude_refresh_cli(rt)  # 官方 CLI 委托刷新（抗协议变更）
+        except Exception as e2:  # noqa: BLE001
+            err = f"{err}；CLI 委托也失败({e2})"
+    if not d:
+        return {"error": "refresh_failed", "detail": f"Claude token 刷新失败({err})"}
+    # 刷新令牌会轮换：必须写回来源，否则 Claude Code 本体下次刷新会被登出
+    oauth["accessToken"] = d["access_token"]
+    if d.get("refresh_token"):
+        oauth["refreshToken"] = d["refresh_token"]
+    oauth["expiresAt"] = int(time.time() * 1000) + int(d.get("expires_in", 28800)) * 1000
+    if save:
+        save(oauth)
+    status, data = _claude_usage_http(oauth["accessToken"])
+    if status == 200:
+        return {"data": data, "oauth": oauth}
     if status == 429:
         return {"error": "http_429", "detail": "Claude usage 接口限流，稍后自动重试",
                 "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}
-    if status != 200:
-        return {"error": f"http_{status}", "detail": f"Claude usage 接口返回 {status}"}
-    if not isinstance(data, dict):
-        return {"error": "parse", "detail": "接口响应格式异常"}
-    windows = {}
-    for key, label in (("five_hour", "5h"), ("seven_day", "7d"),
-                       ("seven_day_sonnet", "7d_sonnet"), ("seven_day_opus", "7d_opus")):
-        w = data.get(key)
-        if isinstance(w, dict):
-            pct = _pct(w.get("utilization") if w.get("utilization") is not None
-                       else w.get("used_percentage"))
-            if pct is not None:
-                windows[label] = {"pct": pct, "resets_at": _iso_ms(w.get("resets_at"))}
-    if not windows:
-        return {"error": "no_windows", "detail": "接口未返回窗口数据"}
-    extra = data.get("extra_usage") or {}
-    plan = (data.get("plan") or data.get("rate_limit_tier")
-            or _CLAUDE_PLAN.get(str(oauth.get("subscriptionType") or "").lower())
-            or oauth.get("subscriptionType") or "")
-    return {"windows": windows,
-            "plan": plan,
-            "extra": {"used_credits": extra.get("used_credits"),
-                      "monthly_limit": extra.get("monthly_limit"),
-                      "disabled": extra.get("disabled_reason")}}
+    return {"error": f"http_{status}", "detail": f"Claude usage 接口刷新后仍返回 {status}"}
+
+
+def claude_oauth_usage() -> dict:
+    """Claude 官方配额，三级回退：
+    1. 桌面 App 采样文件（<30min，无需凭据，绕过 Claude Code 2.1.x 清空钥匙串的 bug）
+    2. OAuth usage API：遍历钥匙串/文件/本地快照所有凭据源，逐个尝试直到成功
+    3. 全灭 → 可操作的错误提示
+    """
+    # 1) 桌面采样（桌面 App 登录态独立于 CLI，最抗造）
+    desk = _claude_desktop_usage()
+
+    # 2) OAuth API（能拿到 resets_at 和更细的 sonnet/opus 窗口，成功则用更丰富的那份）
+    cands = _claude_credentials()
+    oauth_err = None
+    for oauth, save, src in cands:
+        r = _claude_try_source(oauth, save)
+        if r.get("data") is not None:
+            data = r["data"]
+            if not isinstance(data, dict):
+                oauth_err = {"error": "parse", "detail": "接口响应格式异常"}
+                continue
+            windows = {}
+            for key, label in (("five_hour", "5h"), ("seven_day", "7d"),
+                               ("seven_day_sonnet", "7d_sonnet"), ("seven_day_opus", "7d_opus")):
+                w = data.get(key)
+                if isinstance(w, dict):
+                    pct = _pct(w.get("utilization") if w.get("utilization") is not None
+                               else w.get("used_percentage"))
+                    if pct is not None:
+                        windows[label] = {"pct": pct, "resets_at": _iso_ms(w.get("resets_at"))}
+            if windows:
+                _claude_snap_save(r["oauth"])  # 凭据有效 → 快照（防官方存储再被清空）
+                extra = data.get("extra_usage") or {}
+                plan = (data.get("plan") or data.get("rate_limit_tier")
+                        or _CLAUDE_PLAN.get(str(r["oauth"].get("subscriptionType") or "").lower())
+                        or r["oauth"].get("subscriptionType") or "")
+                return {"windows": windows, "plan": plan, "_via": "oauth",
+                        "extra": {"used_credits": extra.get("used_credits"),
+                                  "monthly_limit": extra.get("monthly_limit"),
+                                  "disabled": extra.get("disabled_reason")}}
+            oauth_err = {"error": "no_windows", "detail": "接口未返回窗口数据"}
+            continue
+        oauth_err = r
+        # 限流是接口问题不是凭据问题，换源无意义，直接停
+        if r.get("error") == "http_429":
+            break
+
+    # 3) OAuth 全灭 → 桌面采样顶底（标记来源）
+    if desk:
+        if oauth_err:
+            desk["_oauth_err"] = oauth_err.get("error")
+        return desk
+    if not cands:
+        return {"error": "no_credentials",
+                "detail": "未找到 Claude 登录态（钥匙串 / ~/.claude/.credentials.json 均为空）"}
+    err = dict(oauth_err or {"error": "unknown"})
+    if err.get("error") in ("expired", "refresh_failed"):
+        err["detail"] = (err.get("detail", "") +
+                         "。请在终端执行 claude auth login 重新登录，或打开一次 Claude 桌面 App")
+    return err
 
 
 # ------------------------------------------------------------------ Kimi ----
@@ -505,8 +674,119 @@ def _codex_debug(err, bin_path, env, proc, got_any_line):
         pass
 
 
+def _codex_auth_path() -> str:
+    home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    return os.path.join(home, "auth.json")
+
+
+def _codex_credentials():
+    """读 ~/.codex/auth.json → (tokens_dict, write_back(tokens)->None)。"""
+    path = _codex_auth_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None, None
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        return None, None
+
+    def save(new_tokens, _path=path, _data=data):
+        try:
+            _data["tokens"] = new_tokens
+            _data["last_refresh"] = datetime.now().astimezone().isoformat()
+            tmp = _path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(_data, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, _path)
+        except OSError:
+            pass
+    return tokens, save
+
+
+def _codex_refresh(refresh_token: str) -> dict:
+    """refresh_token 换新 token（与 Codex CLI 同一 public client）。"""
+    body = json.dumps({"grant_type": "refresh_token", "refresh_token": refresh_token,
+                       "client_id": _CODEX_CLIENT_ID}).encode()
+    status, data = _http_json(
+        _CODEX_TOKEN_URL, {"Content-Type": "application/json"}, body=body, method="POST")
+    if status != 200 or not isinstance(data, dict) or not data.get("access_token"):
+        raise RuntimeError(f"HTTP {status}")
+    return data
+
+
+def _codex_usage_wham() -> dict:
+    """GET chatgpt.com/backend-api/wham/usage（CodexBar/headroom 同款端点）。
+
+    比 spawn `codex app-server` 稳：不依赖 CLI 版本协议，实测 codex-cli 0.150.1
+    上 app-server RPC 已挂而本端点正常。401 时用 refresh_token 换新并原子写回
+    auth.json（refresh token 轮换，不写回会把 Codex CLI 登出）。
+    """
+    tokens, save = _codex_credentials()
+    if not tokens:
+        return {"error": "no_credentials", "detail": "未找到 ~/.codex/auth.json 登录态"}
+
+    def _call(tok):
+        headers = {"Authorization": f"Bearer {tok}", "Accept": "application/json",
+                   "User-Agent": "codex_cli_rs/0.150.1"}
+        if tokens.get("account_id"):
+            headers["ChatGPT-Account-Id"] = tokens["account_id"]
+        return _http_json(_CODEX_WHAM_URL, headers)
+
+    status, data = _call(tokens["access_token"])
+    if status == 401 and tokens.get("refresh_token"):
+        try:
+            d = _codex_refresh(tokens["refresh_token"])
+        except Exception as e:  # noqa: BLE001
+            return {"error": "refresh_failed",
+                    "detail": f"Codex token 刷新失败({e})，请运行 codex 重新登录"}
+        tokens["access_token"] = d["access_token"]
+        if d.get("refresh_token"):
+            tokens["refresh_token"] = d["refresh_token"]
+        if d.get("id_token"):
+            tokens["id_token"] = d["id_token"]
+        if save:
+            save(tokens)
+        status, data = _call(tokens["access_token"])
+    if status != 200 or not isinstance(data, dict):
+        return {"error": f"http_{status}", "detail": f"wham/usage 返回 {status}"}
+    rl = data.get("rate_limit") or {}
+    windows = {}
+    for w in (rl.get("primary_window"), rl.get("secondary_window")):
+        if not isinstance(w, dict):
+            continue
+        key = _CODEX_WIN_BY_SEC.get(w.get("limit_window_seconds"))
+        pct = w.get("used_percent")
+        if key and pct is not None:
+            resets = w.get("reset_at")
+            windows[key] = {"pct": float(pct),
+                            "resets_at": int(resets * 1000) if resets and resets < 1e12 else resets}
+    if not windows:
+        return {"error": "no_windows", "detail": "wham/usage 无窗口数据"}
+    credits = data.get("credits") or {}
+    return {"windows": windows, "plan": data.get("plan_type") or "", "_via": "wham",
+            "extra": {"balance": credits.get("balance"),
+                      "unlimited": credits.get("unlimited"),
+                      "spend_reached": (data.get("spend_control") or {}).get("reached")}}
+
+
 def codex_usage() -> dict:
-    """codex app-server RPC → {windows:{5h?,7d}, plan, credits}"""
+    """wham/usage HTTP 端点为主，app-server RPC 兑底（结果带 _via 标明走的那条路）。"""
+    r = _codex_usage_wham()
+    if not r.get("error"):
+        return r
+    wham_err = r
+    r = _codex_usage_rpc()
+    if not r.get("error"):
+        return r
+    # 两条路都挂：报主路错误，附上兑底原因
+    return {"error": wham_err.get("error"),
+            "detail": f"{wham_err.get('detail')}；RPC 兑底也失败：{r.get('detail')}"}
+
+
+def _codex_usage_rpc() -> dict:
+    """codex app-server RPC → {windows:{5h?,7d}, plan, credits}（兑底路径）"""
     bin_path = _find_codex()
     if not bin_path:
         return {"error": "no_binary", "detail": "未找到 codex 命令"}
@@ -531,7 +811,7 @@ def codex_usage() -> dict:
         return {"error": "no_windows", "detail": "Codex 无窗口数据"}
     credits = rl.get("credits") or {}
     return {"windows": windows,
-            "plan": rl.get("planType") or "",
+            "plan": rl.get("planType") or "", "_via": "rpc",
             "extra": {"balance": credits.get("balance"),
                       "unlimited": credits.get("unlimited"),
                       "spend_reached": rl.get("spendControlReached")}}

@@ -103,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/quotas":
             conn = db.connect()
             try:
-                data = compute_quotas(conn)
+                data = compute_quotas(conn, force=q.get("force", [""])[0] in ("1", "true"))
             finally:
                 conn.close()
             self._send(200, data)

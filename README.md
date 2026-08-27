@@ -80,24 +80,27 @@ cd tokentracker
 
 顶部配额卡片固定显示 **5 小时 / 周 (7天) / 月度** 三个窗口的进度，**不随页面时间范围变化**。数据两级来源：
 
-1. **官方**（凭据有效时）：Claude 走 `api.anthropic.com/api/oauth/usage`（复用 `~/.claude/.credentials.json` 的 accessToken）；Kimi 走 `www.kimi.com` gateway usages（复用 `~/.kimi-code/credentials/kimi-code.json` + 设备头）。参考 [CodexBar](https://github.com/steipete/CodexBar) 的调研文档。显示官方百分比与重置倒计时；凭据失效自动降级并在卡片标注原因（重新登录对应工具即可恢复）。
+1. **官方**（凭据有效时）：显示官方百分比与重置倒计时，徽标同时标注走的那条路（`官方 · 桌面采样 / API / wham / RPC`）；凭据失效自动降级并在卡片标注原因。
+   - **Claude** 三级回退链：① 桌面 App 采样文件（`~/Library/Application Support/Claude/plan-usage-history.json`，桌面 App 每 ~5 分钟自采，无需凭据，<30min 有效；不受 Claude Code 2.1.x 清空钥匙串的官方 bug 影响）→ ② `api.anthropic.com/api/oauth/usage`（凭据遍历钥匙串 / `~/.claude/.credentials.json` / 本地快照 `~/.tokentracker/claude_cred_backup.json`，跳过被清空的空壳条目逐个尝试；手写刷新失败再委托官方 CLI `claude auth login` 环境变量刷新）→ ③ 提示重新登录。见到有效凭据自动快照，官方存储再被清空也能自行复活。
+   - **Kimi**：`auth.kimi.com` 自动刷新 15 分钟短效 token → `api.kimi.com/coding/v1/usages`。
+   - **Codex**：主路 `chatgpt.com/backend-api/wham/usage`（复用 `~/.codex/auth.json`，401 自动刷新并原子写回），`codex app-server` RPC 兑底。
 2. **本地估算**（always 可用）：从汇总库统计各窗口真实用量（token 或估算成本），对比 `quotas.json` 里配置的上限。
 
 内置条目（`quotas.json` 可改）：
 
 | 卡片 | 窗口 | 数据 |
 |---|---|---|
-| Claude Code | 5h / 7d | **官方** `api.anthropic.com/api/oauth/usage`（utilization + 重置倒计时） |
+| Claude Code | 5h / 7d | **官方**：桌面 App 采样文件 → `api.anthropic.com/api/oauth/usage` 回退链（见上） |
 | Kimi | 5h / 7d / 月度 | **官方**：`auth.kimi.com` 自动刷新 15 分钟短效 token → `api.kimi.com/coding/v1/usages`（请求次数配额）；月度窗口本地测算 |
 | **OpenCode Go** | 5h / 7d / 月度 | **官方** `opencode.ai/zen/go/v1/usage`（Key 自动发现：`~/.local/share/opencode/auth.json` 或 `OPENCODE_GO_API_KEY`；实现参考 DSH cost-meter 插件 queryGoQuota） |
-| Codex | 7d | **官方**：spawn `codex app-server`（JSON-RPC `account/rateLimits/read`，claude-usage-rs 同款实现） |
+| Codex | 5h / 7d | **官方**：`chatgpt.com/backend-api/wham/usage`（CodexBar/headroom 同款），`codex app-server` RPC 兑底 |
 | opencode | 月度=$60 | GO 月度等值；用量=opencode 本地成本 |
 
 ```bash
 ./tt quotas   # 终端查看全部窗口
 ```
 
-官方抓取实现参考：[CodexBar docs/claude.md](https://github.com/steipete/CodexBar/blob/main/docs/claude.md)、[CodexBar docs/kimi.md](https://github.com/steipete/CodexBar/blob/main/docs/kimi.md)、[metrik](https://github.com/keros68/metrik) 的 Agent 配额来源表、[OpenCode Go 文档](https://opencode.ai/docs/go/)。
+官方抓取实现参考：[CodexBar docs/claude.md](https://github.com/steipete/CodexBar/blob/main/docs/claude.md)、[CodexBar docs/codex.md](https://github.com/steipete/CodexBar/blob/main/docs/codex.md)、[zach-source/ccswitch](https://github.com/zach-source/ccswitch)（CLI 委托刷新 + 凭据快照思路）、[headroom](https://github.com/chopratejas/headroom)（wham/usage 端点）、[OpenCode Go 文档](https://opencode.ai/docs/go/)。
 
 ## 每日趋势图 Y 轴
 

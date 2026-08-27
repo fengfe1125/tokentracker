@@ -46,6 +46,7 @@ DEFAULT_QUOTAS = {
         {"id": "codex", "name": "Codex", "plan": "ChatGPT 订阅",
          "tool": "codex", "official": "codex",
          "windows": {
+             "5h": {"label": "5 小时", "limit_tokens": 100_000_000},
              "7d": {"label": "周 (7天)", "limit_tokens": 500_000_000},
          }},
     ],
@@ -87,9 +88,9 @@ def _window_start(key: str) -> int:
     return now_ms - 24 * 3600 * 1000
 
 
-def compute(conn) -> dict:
+def compute(conn, force: bool = False) -> dict:
     cfg = load_quotas()
-    # 官方抓取并行执行，任一失败/超时（≤8s）不阻塞整体
+    # 官方抓取并行执行，任一失败/超时（≤8s）不阻塞整体；force=手动刷新，跳过 TTL 缓存
     oauths = {e.get("official") for e in cfg.get("entries", []) if e.get("official")}
     official_cache: dict = {}
     if oauths:
@@ -98,7 +99,7 @@ def compute(conn) -> dict:
                   "kimi": _billing.kimi_usage,
                   "codex": _billing.codex_usage,
                   "go": _billing.go_usage}.get(name)
-            return _billing._cached(name, fn) if fn else None
+            return _billing._cached(name, fn, force=force) if fn else None
         with ThreadPoolExecutor(max_workers=len(oauths)) as pool:
             for name, res in zip(oauths, pool.map(_fetch, oauths)):
                 official_cache[name] = res
@@ -155,9 +156,11 @@ def compute(conn) -> dict:
             op = str(official["plan"])
             # 官方 plan 与配置重复时只保留信息量更大的一边（如 "Pro" vs "Pro / Max"）
             plan = plan if not plan or op.lower() in plan.lower() else f"{op} · {plan}".strip(" ·")
+        via = (official or {}).get("_via") if any_official else None
         entries.append({
             "id": e["id"], "name": e["name"], "plan": plan,
             "source": "official" if any_official else "local",
+            "via": via,
             "note": status, "windows": windows,
         })
     return {"entries": entries}
