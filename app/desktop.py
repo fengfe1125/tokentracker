@@ -17,7 +17,6 @@ import os
 import subprocess
 import sys
 import threading
-import urllib.request
 
 # 仓库根加入 sys.path（PyInstaller 打包后自动在 _MEIPASS，无需此步）
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -95,25 +94,15 @@ class Api:
 
     def quit(self):
         self.quitting = True          # 让 closing 拦截器放行，真正退出
+        server.stop()
         try:
             webview.destroy()
         except Exception:
             os._exit(0)
 
 
-def _autoscan(url: str):
-    """启动后自动扫描一次（POST /api/scan，由 server 管理状态与并发）。"""
-    try:
-        req = urllib.request.Request(
-            url + "/api/scan", data=b"{}", headers={"Content-Type": "application/json"}
-        )
-        urllib.request.urlopen(req, timeout=8)
-    except Exception:
-        pass
-
-
 def main():
-    url = server.serve(8765)  # 后台线程运行，返回实际地址
+    url = server.serve(8765, auto_scan=os.environ.get("TOKENTRACKER_NO_AUTOSCAN") != "1")
 
     api = Api()
     api.main = webview.create_window(
@@ -163,11 +152,9 @@ def main():
         AppHelper.callAfter(_apply)
 
     def _after_start():
-        # 事件循环已就绪：原生窗口修饰 + 状态栏图标 + 可选自动扫描
+        # 事件循环已就绪：原生窗口修饰 + 状态栏图标；扫描由Python服务定时执行。
         _style_native_window()
         api.menubar = install_menubar(api, url)
-        if os.environ.get("TOKENTRACKER_NO_AUTOSCAN") != "1":
-            threading.Thread(target=_autoscan, args=(url,), daemon=True).start()
         if os.environ.get("TT_SELFCHECK") == "1":
             threading.Thread(target=_selfcheck, daemon=True).start()
 
@@ -204,7 +191,10 @@ def main():
         if os.environ.get("TT_QUIT_AFTER") == "1":
             api.quit()   # 验证退出路径（穿过 closing 拦截器）
 
-    webview.start(func=_after_start)  # 阻塞事件循环
+    try:
+        webview.start(func=_after_start)  # 阻塞事件循环
+    finally:
+        server.stop(url)
 
 
 if __name__ == "__main__":

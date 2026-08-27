@@ -499,3 +499,8 @@ td.num, th.num { text-align: right; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Timestamp quality stays visible without being folded into usage totals. */
+.time-quality { font-size: 11px; color: var(--ink-2); line-height: 1.6; overflow-wrap: anywhere; }
+.time-quality:empty { display: none; }
+.table-card { overflow-x: auto; }
