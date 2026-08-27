@@ -84,8 +84,8 @@ async function loadDaily() {
   const d = await jget("/api/daily?range=" + state.range);
   drawTrend(d.rows);
 }
-async function loadQuotas() {
-  const d = await jget("/api/quotas");
+async function loadQuotas(force) {
+  const d = await jget("/api/quotas" + (force ? "?force=1" : ""));
   renderQuotas(d.entries || []);
 }
 async function loadModels() {
@@ -256,7 +256,7 @@ function renderQuotas(entries) {
       <div class="q-head">
         <span class="q-name">${e.name}</span>
         <span class="q-plan" title="${e.plan || ""}">${e.plan || ""}</span>
-        <span class="badge ${e.source === "official" ? "official" : ""}">${e.source === "official" ? "官方" : "本地估算"}</span>
+        <span class="badge ${e.source === "official" ? "official" : ""}">${e.source === "official" ? "官方" + (e.via ? " · " + ({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : "") : "本地估算"}</span>
       </div>
       <div class="q-wins">${(e.windows || []).map(w => winRow(e.id, w)).join("")}</div>
       ${e.note ? `<div class="q-note">⚠ ${e.note}</div>` : ""}
@@ -476,7 +476,7 @@ async function pollScan() {
         const added = Object.values(r).reduce((a, x) => a + (x.added || 0), 0);
         toast("✓ 扫描完成 · 新增 " + added + " 条事件");
       }
-      refreshAll(); loadSessions();
+      refreshAll(); loadSessions(); loadQuotas(true);
     } else if (!s.running) { setScanning(false); }
   } catch (e) { /* 服务未就绪时忽略 */ }
 }

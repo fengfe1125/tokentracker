@@ -130,5 +130,138 @@ class ServerTest(unittest.TestCase):
         self.assertIn("claude", self._get("/api/detect"))
 
 
+class BillingTest(unittest.TestCase):
+    """官方配额抓取的回退链：全部离线，用 monkeypatch 隔离网络/钥匙串/桌面 App。"""
+
+    def setUp(self):
+        from tokentracker import billing
+        self.b = billing
+        # 快照路径隔离到临时目录
+        self._restore = [("_claude_snap_path", billing._claude_snap_path)]
+        billing._claude_snap_path = lambda: os.path.join(_TMP, "claude_cred_backup.json")
+        if os.path.exists(billing._claude_snap_path()):
+            os.remove(billing._claude_snap_path())
+        # ~ 重定向到空临时目录：绝不读真实钥匙串替代文件 / 桌面 App 采样
+        import tokentracker.billing as bm
+        self._restore.append(("_expanduser", bm.os.path.expanduser))
+        real = self._restore[-1][1]
+        empty = os.path.join(_TMP, "nohome")
+        os.makedirs(empty, exist_ok=True)
+        bm.os.path.expanduser = lambda x: x.replace("~", empty, 1) if x.startswith("~") else real(x)
+
+    def _patch(self, name, fn):
+        """打补丁并登记，tearDown 统一恢复。"""
+        if not hasattr(self, "_patched"):
+            self._patched = []
+        if not any(n == name for n, _ in self._patched):
+            self._patched.append((name, getattr(self.b, name)))
+        setattr(self.b, name, fn)
+
+    def tearDown(self):  # noqa: F811
+        import tokentracker.billing as bm
+        for name, val in self._restore:
+            if name == "_expanduser":
+                bm.os.path.expanduser = val
+            else:
+                setattr(self.b, name, val)
+        for name, val in getattr(self, "_patched", []):
+            setattr(self.b, name, val)
+
+    # ---- Codex wham/usage ----
+    def test_codex_wham_window_mapping(self):
+        b = self.b
+        payload = {"plan_type": "plus",
+                   "rate_limit": {"primary_window": {"used_percent": 67,
+                                                     "limit_window_seconds": 18000,
+                                                     "reset_at": 1787812845},
+                                  "secondary_window": {"used_percent": 42,
+                                                       "limit_window_seconds": 604800,
+                                                       "reset_at": 1788338599}},
+                   "credits": {"balance": "0", "unlimited": False}}
+        self._patch("_codex_credentials", lambda: ({"access_token": "t", "account_id": "a"}, None))
+        self._patch("_http_json", lambda *a, **k: (200, payload))
+        r = b._codex_usage_wham()
+        self.assertEqual(r["_via"], "wham")
+        self.assertEqual(r["windows"]["5h"]["pct"], 67.0)
+        self.assertEqual(r["windows"]["7d"]["resets_at"], 1788338599000)
+        self.assertEqual(r["plan"], "plus")
+
+    def test_codex_falls_back_to_rpc(self):
+        b = self.b
+        self._patch("_codex_usage_wham", lambda: {"error": "http_401", "detail": "x"})
+        self._patch("_codex_usage_rpc",
+                    lambda: {"windows": {"7d": {"pct": 1.0}}, "plan": "plus", "_via": "rpc"})
+        r = b.codex_usage()
+        self.assertEqual(r["_via"], "rpc")
+        # 两条都挂时报主路错误并附兑底原因
+        self._patch("_codex_usage_rpc", lambda: {"error": "rpc_failed", "detail": "y"})
+        r = b.codex_usage()
+        self.assertEqual(r["error"], "http_401")
+        self.assertIn("y", r["detail"])
+
+    # ---- Claude 桌面采样 ----
+    def test_desktop_sample_fresh_and_stale(self):
+        b = self.b
+        import time as _t
+        import tokentracker.billing as bm
+        home = os.path.join(_TMP, "fakehome")
+        lib = os.path.join(home, "Library", "Application Support", "Claude")
+        os.makedirs(lib, exist_ok=True)
+        real = bm.os.path.expanduser
+        bm.os.path.expanduser = lambda x: x.replace("~", home, 1) if x.startswith("~") else real(x)
+        try:
+            p = os.path.join(lib, "plan-usage-history.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"samples": [{"t": int(_t.time() * 1000) - 60_000,
+                                        "u": {"fh": 22, "sd": 64}}]}, f)
+            r = b._claude_desktop_usage()
+            self.assertEqual(r["_via"], "desktop")
+            self.assertEqual(r["windows"]["5h"]["pct"], 22.0)
+            # 31 分钟前的样本 → 失效
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"samples": [{"t": int(_t.time() * 1000) - 31 * 60_000,
+                                        "u": {"fh": 22, "sd": 64}}]}, f)
+            self.assertIsNone(b._claude_desktop_usage())
+        finally:
+            bm.os.path.expanduser = real
+
+    # ---- Claude 凭据快照与空壳过滤 ----
+    def test_snap_save_and_blank_filtered(self):
+        b = self.b
+        # 空壳（官方 bug 清空的条目）不应进入候选；文件/快照均为空（~ 已隔离）
+        self._patch("_kc_read", lambda: {"claudeAiOauth": {"accessToken": "",
+                                                           "refreshToken": "", "expiresAt": 0}})
+        self.assertEqual(b._claude_credentials(), [])
+        # 快照写入/读取回环
+        b._claude_snap_save({"accessToken": "a", "refreshToken": "r", "expiresAt": 1})
+        snap = b._claude_snap_load()
+        self.assertEqual(snap["refreshToken"], "r")
+        # 无 refreshToken 不快照
+        os.remove(b._claude_snap_path())
+        b._claude_snap_save({"accessToken": "a"})
+        self.assertIsNone(b._claude_snap_load())
+
+    def test_claude_failover_to_snapshot(self):
+        """主凭据刷新失败时，自动换快照源并成功。"""
+        b = self.b
+        b._claude_snap_save({"accessToken": "good-tok", "refreshToken": "good-rt",
+                             "expiresAt": 9_999_999_999_999, "subscriptionType": "pro"})
+        self._patch("_kc_read", lambda: {"claudeAiOauth": {"accessToken": "",
+                                                           "refreshToken": "bad-rt",
+                                                           "expiresAt": 9_999_999_999_999}})
+        self._patch("_claude_refresh",
+                    lambda rt: (_ for _ in ()).throw(RuntimeError("HTTP 400")))
+        self._patch("_claude_refresh_cli",
+                    lambda rt: (_ for _ in ()).throw(RuntimeError("nope")))
+        calls = []
+        self._patch("_claude_usage_http",
+                    lambda tok: (calls.append(tok),
+                                 (200, {"five_hour": {"utilization": 42,
+                                                      "resets_at": None}}))[1])
+        r = b.claude_oauth_usage()
+        self.assertEqual(r["windows"]["5h"]["pct"], 42)
+        self.assertEqual(calls, ["good-tok"])  # 坏源刷新失败后换快照源成功
+
+
 if __name__ == "__main__":
     unittest.main()
