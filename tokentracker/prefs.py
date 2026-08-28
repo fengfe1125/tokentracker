@@ -12,6 +12,7 @@ DEFAULTS = {
     "menubar_provider": "claude",   # 状态栏标题追加显示的平台配额；"off" = 仅今日用量
     "menubar_compact": False,       # 紧凑标题（刘海屏 / 菜单栏图标多时防被挤出）
     "launch_at_login": False,       # 开机自动启动（桌面 App 写入 LaunchAgent）
+    "terminal_app": "auto",         # 继续会话用哪个终端：auto/terminal/iterm/wezterm/ghostty
 }
 
 

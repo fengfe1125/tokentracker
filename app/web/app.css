@@ -532,3 +532,28 @@ td.num, th.num { text-align: right; }
 .switch input:checked + i::after { transform: translateX(16px); }
 .switch input:disabled + i { opacity: .45; cursor: not-allowed; }
 .switch:active input:not(:disabled) + i::after { transform-origin: center; scale: 1.12; }
+
+/* ─────────── 继续会话 ─────────── */
+th.act, td.act { width: 36px; text-align: center; }
+.row-resume {
+  width: 26px; height: 26px; padding: 0; line-height: 1;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink-3); font-size: 10px; cursor: pointer;
+  transition: all .15s var(--ease-out);
+}
+.row-resume:hover {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: var(--accent-soft); transform: scale(1.1);
+}
+.row-resume:active { transform: scale(.94); }
+.d-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.d-actions .d-open-btn { flex: 1; }
+.d-open-btn.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+.d-open-btn.primary:hover:not(:disabled) {
+  background: var(--accent-deep); border-color: var(--accent-deep); color: #fff;
+}
+.d-open-btn:disabled { opacity: .5; cursor: not-allowed; }
+.d-open-btn:disabled:hover { border-color: var(--line); color: var(--ink-2); background: var(--bg); transform: none; }
+.d-open-btn.primary:disabled:hover { color: #fff; background: var(--accent); border-color: var(--accent); }

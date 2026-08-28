@@ -27,7 +27,7 @@ import webview  # noqa: E402
 
 from app import loginitem  # noqa: E402
 from app.menubar import install_menubar  # noqa: E402
-from tokentracker import server  # noqa: E402
+from tokentracker import prefs, resume, server  # noqa: E402
 
 MAIN_W, MAIN_H = 1180, 780
 
@@ -97,6 +97,37 @@ class Api:
         except OSError:
             pass
         return self.open_in_finder(path)
+
+    # ------------------------------------------------------------ 继续会话 ----
+    def resume_session(self, tool: str, session_id: str,
+                       project: str = "", cwd: str = "") -> dict:
+        """在终端恢复会话；终端打不开时自动复制命令到剪贴板兜底。"""
+        cmd, reason = resume.shell_line(tool, session_id or "", project or "",
+                                        cwd_override=cwd or None)
+        if cmd is None:
+            return {"ok": False, "copied": False, "reason": reason, "command": ""}
+        term = prefs.load_prefs().get("terminal_app", "auto")
+        if resume.open_terminal(cmd, term):
+            return {"ok": True, "copied": False, "reason": "", "command": cmd}
+        copied = resume.copy_to_clipboard(cmd)
+        return {"ok": False, "copied": copied, "command": cmd,
+                "reason": "终端打开失败" + ("，命令已复制到剪贴板" if copied else "")}
+
+    def copy_resume_command(self, tool: str, session_id: str, project: str = "") -> str:
+        cmd, _ = resume.shell_line(tool, session_id or "", project or "")
+        if cmd:
+            resume.copy_to_clipboard(cmd)
+        return cmd or ""
+
+    def pick_resume_directory(self) -> str:
+        """项目目录已移动/改名时，原生面板改选工作目录。"""
+        if not self.main:
+            return ""
+        try:
+            result = self.main.create_file_dialog(webview.FOLDER_DIALOG)
+            return result[0] if result else ""
+        except Exception:
+            return ""
 
     def open_in_finder(self, path: str) -> bool:
         """在 Finder 中打开目录。claude 的 project 是 slug（/→-），尝试还原。"""

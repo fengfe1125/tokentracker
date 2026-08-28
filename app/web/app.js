@@ -428,6 +428,7 @@ function renderSessions() {
       <td class="num">${fmtT(r.cache_write)}</td>
       <td class="num cost-cell">${r.cost == null ? "—" : fmtCost(r.cost)}</td>
       <td class="num">${esc(r.events)}</td>
+      <td class="act"><button class="row-resume" data-i="${i}" title="在终端继续此会话">▶</button></td>
     </tr>`;
   }).join("");
   [...$("#sessBody").children].forEach(el => {
@@ -435,6 +436,11 @@ function renderSessions() {
       const r = sortedRows()[+el.dataset.i];
       if (r) openDrawer(r);
     };
+  });
+  document.querySelectorAll(".row-resume").forEach(btn => btn.onclick = e => {
+    e.stopPropagation();
+    const r = sortedRows()[+btn.dataset.i];
+    if (r) quickResume(r);
   });
   // 表头排序箭头
   document.querySelectorAll("th.sortable").forEach(th => {
@@ -469,6 +475,77 @@ function closeDrawer() {
   $("#drawer").classList.remove("show");
   $("#drawerMask").classList.remove("show");
 }
+
+/* 「继续会话」可用性：命令在服务端生成（浏览器模式也能拿到），打开终端只有桌面桥能做 */
+async function resumeInfo(r) {
+  try {
+    const resp = await fetch("/api/resume?tool=" + encodeURIComponent(r.tool) +
+      "&session_id=" + encodeURIComponent(r.session_id || "") +
+      "&project=" + encodeURIComponent(r.project || ""));
+    return await resp.json();
+  } catch (e) { return { ok: false, reason: "服务未就绪", command: "" }; }
+}
+
+async function copyResumeCmd(r, cmd) {
+  if (!cmd) return;
+  try { await navigator.clipboard.writeText(cmd); toast("✓ 命令已复制，到终端粘贴执行"); }
+  catch (e) {
+    const a = api();
+    if (a && typeof a.copy_resume_command === "function") {
+      await a.copy_resume_command(r.tool, r.session_id || "", r.project || "");
+      toast("✓ 命令已复制，到终端粘贴执行");
+    } else toast("复制失败，请手动复制：" + cmd, 6000);
+  }
+}
+
+/* 行内 ▶：可直接恢复就一键开终端，否则打开抽屉看原因 / 选目录 / 复制命令 */
+async function quickResume(r) {
+  const bridge = api();
+  const canLaunch = !!(bridge && typeof bridge.resume_session === "function");
+  const info = await resumeInfo(r);
+  if (info.ok && !info.cwd_missing && canLaunch) {
+    const res = await bridge.resume_session(r.tool, r.session_id || "", r.project || "", "");
+    toast(res.ok ? "✓ 已在终端中恢复会话" : (res.reason || "终端打开失败"), 4000);
+  } else if (info.ok && info.command && !canLaunch) {
+    copyResumeCmd(r, info.command);   // 浏览器模式降级为复制命令
+  } else {
+    openDrawer(r);
+  }
+}
+
+async function setupDrawerResume(r) {
+  const resumeBtn = $("#dResume"), copyBtn = $("#dCopyCmd");
+  if (!resumeBtn || !copyBtn) return;
+  const info = await resumeInfo(r);
+  const bridge = api();
+  const canLaunch = !!(bridge && typeof bridge.resume_session === "function");
+  if (info.ok && info.command) {
+    copyBtn.disabled = false;
+    copyBtn.title = info.command;
+    if (canLaunch) {
+      resumeBtn.disabled = false;
+      resumeBtn.title = info.command;
+      if (info.cwd_missing) resumeBtn.textContent = "▶ 选择目录并继续…";
+    } else {
+      resumeBtn.title = "直接打开终端仅桌面 App 支持，可用「复制命令」";
+    }
+  } else {
+    resumeBtn.textContent = "▶ " + (info.reason || "不可恢复");
+    resumeBtn.title = info.reason || "";
+  }
+  resumeBtn.onclick = async () => {
+    if (resumeBtn.disabled || !canLaunch) return;
+    let cwd = "";
+    if (info.cwd_missing) {
+      cwd = await bridge.pick_resume_directory();
+      if (!cwd) return;   // 用户取消
+    }
+    const res = await bridge.resume_session(r.tool, r.session_id || "", r.project || "", cwd);
+    toast(res.ok ? "✓ 已在终端中恢复会话" : (res.reason || "终端打开失败"), 4000);
+  };
+  copyBtn.onclick = () => copyResumeCmd(r, info.command || "");
+}
+
 async function openDrawer(r) {
   const meta = TOOL[r.tool] || { name: r.tool };
   $("#dTitle").textContent = r.project || r.session_id || "会话详情";
@@ -501,6 +578,10 @@ async function openDrawer(r) {
       <div class="d-stat"><div class="v">${esc(d.events ?? "—")}</div><div class="k">事件数</div></div>
       <div class="d-stat"><div class="v">${(d.models || []).length}</div><div class="k">模型数</div></div>
     </div>
+    <div class="d-actions" style="--i:1">
+      <button class="d-open-btn primary" id="dResume" disabled>▶ 继续会话</button>
+      <button class="d-open-btn" id="dCopyCmd" disabled title="">复制命令</button>
+    </div>
     ${proj ? `<button class="d-open-btn" id="dOpenFinder" style="--i:1">
       <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       在 Finder 中打开项目</button>` : ""}
@@ -515,6 +596,7 @@ async function openDrawer(r) {
     const ok = a ? await a.open_in_finder(proj) : false;
     toast(ok ? "已在 Finder 中打开" : "路径不存在：" + proj);
   };
+  setupDrawerResume(r);
 }
 
 /* ─────────── 过滤 chips ─────────── */
@@ -591,6 +673,8 @@ async function loadSettings() {
     sel.appendChild(off);
     sel.value = s.menubar_provider || "off";
     if (sel.value !== (s.menubar_provider || "off")) sel.value = "off"; // 平台已下架时回退
+    const termSel = $("#setTerminal");
+    if (termSel) termSel.value = s.terminal_app || "auto";
     $("#setCompact").checked = !!s.menubar_compact;
     $("#setLogin").checked = !!s.launch_at_login;
   } catch (e) { /* 服务未就绪时忽略 */ }
@@ -623,6 +707,7 @@ async function saveSetting(key, value) {
 $("#setProvider").onchange = e => saveSetting("menubar_provider", e.target.value);
 $("#setCompact").onchange = e => saveSetting("menubar_compact", e.target.checked);
 $("#setLogin").onchange = e => saveSetting("launch_at_login", e.target.checked);
+$("#setTerminal").onchange = e => saveSetting("terminal_app", e.target.value);
 $("#openDataDir").onclick = () => {
   const a = api();
   if (a && typeof a.open_data_folder === "function") a.open_data_folder();

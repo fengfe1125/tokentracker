@@ -132,6 +132,7 @@
             <th class="num sortable" data-sort="cache_write">缓存写</th>
             <th class="num sortable" data-sort="cost">成本</th>
             <th class="num sortable" data-sort="events">事件</th>
+            <th class="act" title="在终端继续此会话"></th>
           </tr></thead>
           <tbody id="sessBody"></tbody>
         </table>
@@ -180,6 +181,19 @@
             <span>登录 macOS 后自动打开 TokenTracker，状态栏常驻不丢</span>
           </div>
           <label class="switch"><input type="checkbox" id="setLogin"><i></i></label>
+        </div>
+        <div class="set-row">
+          <div class="set-info">
+            <b>终端 App</b>
+            <span>「继续会话」在哪个终端里打开</span>
+          </div>
+          <select id="setTerminal" class="set-select">
+            <option value="auto">自动检测</option>
+            <option value="terminal">Terminal</option>
+            <option value="iterm">iTerm2</option>
+            <option value="wezterm">WezTerm</option>
+            <option value="ghostty">Ghostty</option>
+          </select>
         </div>
       </div>
 

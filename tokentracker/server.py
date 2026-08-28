@@ -12,7 +12,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import db, prefs, pricing
+from . import db, prefs, pricing, resume
 from .quotas import DEFAULT_QUOTAS, compute as compute_quotas
 from .scanners import ALL, detect_all, run_all
 
@@ -116,6 +116,7 @@ _SETTINGS_SCHEMA = {
     "menubar_provider": lambda v: isinstance(v, str) and bool(_PROVIDER_ID.fullmatch(v)),
     "menubar_compact": lambda v: isinstance(v, bool),
     "launch_at_login": lambda v: isinstance(v, bool),
+    "terminal_app": lambda v: v in resume.TERMINAL_APPS,
 }
 
 
@@ -230,6 +231,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, self.server.scan_service.snapshot())
         elif p == "/api/settings":
             self._send(200, _settings_payload())
+        elif p == "/api/resume":
+            self._send(200, resume.info(q.get("tool", [""])[0],
+                                        q.get("session_id", [""])[0],
+                                        q.get("project", [""])[0]))
         elif p.startswith("/app/"):
             self._static(p[len("/app/"):], APP_WEB_DIR)
         elif p.startswith("/api/"):

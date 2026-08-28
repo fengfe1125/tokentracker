@@ -165,6 +165,28 @@ class HandlerTest(unittest.TestCase):
             self.assertTrue(saved["menubar_compact"])
             self.assertTrue(saved["launch_at_login"])
 
+    def test_settings_terminal_app_whitelist(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(
+                server.prefs, "prefs_path", return_value=os.path.join(d, "settings.json")):
+            ok = self.handler("/api/settings", b'{"terminal_app": "iterm"}')
+            ok.do_POST()
+            self.assertEqual(ok._send.call_args.args[0], 200)
+            bad = self.handler("/api/settings", b'{"terminal_app": "emacs"}')
+            bad.do_POST()
+            self.assertEqual(bad._send.call_args.args[0], 400)
+            self.assertEqual(server.prefs.load_prefs()["terminal_app"], "iterm")
+
+    def test_resume_endpoint(self):
+        unsupported = self.handler("/api/resume?tool=dsh&session_id=session-x&project=/tmp")
+        unsupported.do_GET()
+        code, payload = unsupported._send.call_args.args
+        self.assertEqual(code, 200)
+        self.assertFalse(payload["ok"])
+        self.assertIn("不支持", payload["reason"])
+        empty = self.handler("/api/resume?tool=&session_id=")
+        empty.do_GET()
+        self.assertFalse(empty._send.call_args.args[1]["ok"])
+
     def test_malformed_requests_do_not_start_scan(self):
         for body in (b'[]', b'not json', b'{"tools":["../../anything"]}', b'{"tools":"claude"}'):
             with self.subTest(body=body):
