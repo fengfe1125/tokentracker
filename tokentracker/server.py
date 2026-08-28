@@ -5,14 +5,15 @@ import copy
 import json
 import mimetypes
 import os
+import re
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import db, pricing
-from .quotas import compute as compute_quotas
+from . import db, prefs, pricing
+from .quotas import DEFAULT_QUOTAS, compute as compute_quotas
 from .scanners import ALL, detect_all, run_all
 
 # 资源根目录：PyInstaller 打包后位于 _MEIPASS，开发时位于仓库根
@@ -109,6 +110,24 @@ class ScanService:
 
 _servers = {}
 
+# 设置页（/api/settings）允许读写的键与校验规则；未列出的键一律拒绝。
+_PROVIDER_ID = re.compile(r"off|[a-z0-9][a-z0-9_-]{0,23}\Z")
+_SETTINGS_SCHEMA = {
+    "menubar_provider": lambda v: isinstance(v, str) and bool(_PROVIDER_ID.fullmatch(v)),
+    "menubar_compact": lambda v: isinstance(v, bool),
+    "launch_at_login": lambda v: isinstance(v, bool),
+}
+
+
+def _settings_payload() -> dict:
+    raw = prefs.load_prefs()
+    settings = dict(prefs.DEFAULTS)
+    settings.update({k: v for k, v in raw.items()
+                     if k in _SETTINGS_SCHEMA and _SETTINGS_SCHEMA[k](v)})
+    providers = [{"id": e["id"], "name": e["name"]}
+                 for e in DEFAULT_QUOTAS.get("entries", [])]
+    return {"settings": settings, "providers": providers}
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "TokenTracker/0.1"
@@ -117,6 +136,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     # ------------------------------------------------------------ 工具 ----
+    def _json_object(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        if not 0 <= length <= 16384:
+            raise ValueError("invalid request size")
+        body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        if not isinstance(body, dict):
+            raise ValueError("expected a JSON object")
+        return body
+
     def _send(self, code: int, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -200,6 +228,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, data)
         elif p == "/api/scan/status":
             self._send(200, self.server.scan_service.snapshot())
+        elif p == "/api/settings":
+            self._send(200, _settings_payload())
         elif p.startswith("/app/"):
             self._static(p[len("/app/"):], APP_WEB_DIR)
         elif p.startswith("/api/"):
@@ -209,14 +239,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path).path
+        if p == "/api/settings":
+            try:
+                body = self._json_object()
+                unknown = [k for k in body if k not in _SETTINGS_SCHEMA]
+                if unknown:
+                    raise ValueError("unknown settings: " + ", ".join(sorted(unknown)))
+                invalid = [k for k, v in body.items() if not _SETTINGS_SCHEMA[k](v)]
+                if invalid:
+                    raise ValueError("invalid value for: " + ", ".join(sorted(invalid)))
+            except (ValueError, UnicodeError) as e:
+                self._send(400, {"error": str(e)})
+                return
+            current = prefs.load_prefs()
+            current.update(body)
+            prefs.save_prefs(current)
+            self._send(200, {"ok": True, **_settings_payload()})
+            return
         if p == "/api/scan":
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                if not 0 <= length <= 16384:
-                    raise ValueError("invalid request size")
-                body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-                if not isinstance(body, dict):
-                    raise ValueError("expected a JSON object")
+                body = self._json_object()
                 tools = body.get("tools")
                 if tools is not None and (not isinstance(tools, list) or
                                           any(not isinstance(t, str) or t not in ALL for t in tools)):

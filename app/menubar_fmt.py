@@ -6,11 +6,10 @@
 """
 from __future__ import annotations
 
-import json
-import os
+from tokentracker import prefs as _prefs
 
 PROVIDER_GLYPH = {"claude": "C", "codex": "X", "kimi": "K", "go": "G"}
-DEFAULT_PROVIDER = "claude"   # 默认：今日用量 + Claude Code 配额；"off" = 仅今日用量
+DEFAULT_PROVIDER = _prefs.DEFAULTS["menubar_provider"]  # "off" = 仅今日用量
 
 
 def fmt_tokens(n) -> str:
@@ -46,13 +45,16 @@ def fmt_quota(window: dict) -> str:
     return f"{marker}{window['pct']:.0f}%"
 
 
-def fmt_title(today: dict | None, entries: list | None, provider: str | None) -> str:
-    """状态栏标题：`⚡ 12.30M · C 45%`。
+def fmt_title(today: dict | None, entries: list | None, provider: str | None,
+              compact: bool = False) -> str:
+    """状态栏标题：`⚡ 12.30M · C 45%`；紧凑模式 `⚡12.30M·C45%`。
 
     today={"tokens": n} | None；provider 为 quotas entry 的 id，"off"/None = 仅今日用量。
     选中平台无数据时降级为仅今日用量；官方 stale 加 ~，本地估算加 ≈。
+    紧凑模式去掉所有空格（刘海屏 / 菜单栏图标拥挤时防止被挤出屏幕）。
     """
-    base = f"⚡ {fmt_tokens(today['tokens'])}" if today else "⚡ —"
+    sep, mid = ("", "·") if compact else (" ", " · ")
+    base = f"⚡{sep}{fmt_tokens(today['tokens'])}" if today else f"⚡{sep}—"
     if not provider or provider == "off":
         return base
     entry = next((e for e in (entries or []) if e.get("id") == provider), None)
@@ -60,30 +62,19 @@ def fmt_title(today: dict | None, entries: list | None, provider: str | None) ->
     if best is None:
         return base
     glyph = PROVIDER_GLYPH.get(provider) or (entry.get("name") or "?")[:1]
-    return f"{base} · {glyph} {fmt_quota(best)}"
+    return f"{base}{mid}{glyph}{sep}{fmt_quota(best)}"
 
 
 # ------------------------------------------------------------ 偏好持久化 ----
+# 规范实现位于 tokentracker.prefs（服务端设置页也要读写）；此处包一层转发，
+# 调用方 patch 本模块的 prefs_path 仍然生效（测试隔离依赖这一点）。
 def prefs_path() -> str:
-    return os.path.join(os.path.expanduser("~"), ".tokentracker", "settings.json")
+    return _prefs.prefs_path()
 
 
 def load_prefs() -> dict:
-    try:
-        with open(prefs_path(), encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return _prefs.load_prefs(prefs_path())
 
 
 def save_prefs(prefs: dict) -> None:
-    try:
-        p = prefs_path()
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        tmp = p + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(prefs, f)
-        os.replace(tmp, p)
-    except OSError:
-        pass
+    _prefs.save_prefs(prefs, prefs_path())

@@ -78,6 +78,45 @@ class MenuBarTest(unittest.TestCase):
             self.bar.ttPickProvider_(sender)
             self.assertEqual(menubar_fmt.load_prefs()["menubar_provider"], "off")
 
+    def test_settings_page_changes_hot_reload(self):
+        self.bar.tt_prefs = {"menubar_provider": "claude"}
+        self.bar.tt_provider = "claude"
+        self.bar.tt_compact = False
+        self.bar.tt_login_applied = False
+        self.bar.tt_status = None
+        self.bar.tt_scanning = False
+        new_prefs = {"menubar_provider": "codex", "menubar_compact": True,
+                     "launch_at_login": True}
+        with patch.object(self.mb, "load_prefs", return_value=new_prefs), \
+                patch.object(self.mb.loginitem, "set_enabled", return_value=True) as apply_login:
+            self.bar.tt_reload_prefs()
+        self.assertEqual(self.bar.tt_provider, "codex")
+        self.assertTrue(self.bar.tt_compact)
+        apply_login.assert_called_once_with(True)
+        self.assertTrue(self.bar.tt_login_applied)
+
+    def test_unchanged_settings_skip_reload(self):
+        prefs = {"menubar_provider": "claude"}
+        self.bar.tt_prefs = prefs
+        with patch.object(self.mb, "load_prefs", return_value=dict(prefs)), \
+                patch.object(self.mb.loginitem, "set_enabled") as apply_login:
+            self.bar.tt_reload_prefs()
+        apply_login.assert_not_called()
+
+
+class CompactTitleTest(unittest.TestCase):
+    def test_compact_title_removes_all_spaces(self):
+        entry = {"id": "claude", "windows": [{"pct": 45, "source": "official",
+                                              "stale": False}]}
+        self.assertEqual(menubar_fmt.fmt_title({"tokens": 32522521}, [entry], "claude"),
+                         "⚡ 32.52M · C 45%")
+        self.assertEqual(
+            menubar_fmt.fmt_title({"tokens": 32522521}, [entry], "claude", compact=True),
+            "⚡32.52M·C45%")
+        self.assertEqual(menubar_fmt.fmt_title(None, None, "off", compact=True), "⚡—")
+        self.assertEqual(
+            menubar_fmt.fmt_title({"tokens": 100}, None, "off", compact=True), "⚡100")
+
 
 class TitleSourceTest(unittest.TestCase):
     def test_source_marker_does_not_depend_on_note(self):

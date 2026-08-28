@@ -27,6 +27,7 @@ from AppKit import (  # noqa: F401  (pyobjc 由 pywebview 依赖带入)
 )
 from PyObjCTools import AppHelper
 
+from app import loginitem  # noqa: E402
 from app.menubar_fmt import (  # noqa: E402
     DEFAULT_PROVIDER, best_window, fmt_quota, fmt_title, fmt_tokens, load_prefs, save_prefs,
 )
@@ -51,7 +52,10 @@ class MenuBar(NSObject):
         self.tt_info = {}          # {"today": {...}, "quotas": [str, ...], "entries": [...]}
         self.tt_scanning = False
         # 状态栏标题里显示哪个平台的配额（"off" = 仅今日用量），持久化到 settings.json
-        self.tt_provider = load_prefs().get("menubar_provider", DEFAULT_PROVIDER)
+        self.tt_prefs = load_prefs()
+        self.tt_provider = self.tt_prefs.get("menubar_provider", DEFAULT_PROVIDER)
+        self.tt_compact = bool(self.tt_prefs.get("menubar_compact"))
+        self.tt_login_applied = loginitem.is_enabled()
 
     # --------------------------------------------------------- UI（主线程）----
     def tt_install_ui(self):
@@ -86,6 +90,7 @@ class MenuBar(NSObject):
 
         menu.addItem_(NSMenuItem.separatorItem())
         self.tt_add_action(menu, "打开主面板", "ttOpenMain:")
+        self.tt_add_action(menu, "设置…", "ttOpenSettings:", key=",")
         self.tt_add_action(menu, "立即扫描", "ttRescan:")
         menu.addItem_(NSMenuItem.separatorItem())
         self.tt_add_action(menu, "退出 TokenTracker", "ttQuitApp:", key="q")
@@ -105,17 +110,24 @@ class MenuBar(NSObject):
             return
         self.tt_status.button().setTitle_(
             fmt_title(self.tt_info.get("today"),
-                      self.tt_info.get("entries"), self.tt_provider))
+                      self.tt_info.get("entries"), self.tt_provider,
+                      compact=self.tt_compact))
 
     # ------------------------------------------------------- 菜单动作（ObjC）----
     def ttOpenMain_(self, sender):
         self.tt_show_main()
 
+    def ttOpenSettings_(self, sender):
+        api = self.tt_api
+        if hasattr(api, "open_settings"):
+            api.open_settings()
+        else:
+            self.tt_show_main()
+
     def ttRescan_(self, sender):
         threading.Thread(target=self.tt_trigger_scan, daemon=True).start()
 
-    def ttPickProvider_(self, sender):
-        pid = str(sender.representedObject() or "")
+    def tt_pick_provider(self, pid):
         if not pid or pid == self.tt_provider:
             return
         self.tt_provider = pid
@@ -123,6 +135,22 @@ class MenuBar(NSObject):
         prefs["menubar_provider"] = pid
         save_prefs(prefs)
         self.tt_apply_title()
+
+    def tt_reload_prefs(self):
+        """设置页（/api/settings）写入后热生效：标题平台、紧凑模式、开机自启。"""
+        prefs = load_prefs()
+        if prefs == self.tt_prefs:
+            return
+        self.tt_prefs = prefs
+        self.tt_provider = prefs.get("menubar_provider", DEFAULT_PROVIDER)
+        self.tt_compact = bool(prefs.get("menubar_compact"))
+        want_login = bool(prefs.get("launch_at_login"))
+        if want_login != self.tt_login_applied and loginitem.set_enabled(want_login):
+            self.tt_login_applied = want_login
+        AppHelper.callAfter(self.tt_apply_title)
+
+    def ttPickProvider_(self, sender):
+        self.tt_pick_provider(str(sender.representedObject() or ""))
 
     def ttQuitApp_(self, sender):
         self.tt_api.quit()
@@ -239,6 +267,7 @@ class MenuBar(NSObject):
                 self.tt_fetch_data()
                 last_data = now
             was_scanning = self.tt_scanning
+            self.tt_reload_prefs()   # 设置页改动 5 秒内生效
             AppHelper.callAfter(self.tt_apply_title)
             time.sleep(POLL)
 
@@ -249,7 +278,8 @@ class MenuBar(NSObject):
         except Exception:
             title = None
         return {"installed": self.tt_status is not None, "title": title,
-                "provider": self.tt_provider, "info": dict(self.tt_info)}
+                "provider": self.tt_provider, "compact": self.tt_compact,
+                "info": dict(self.tt_info)}
 
 
 def install_menubar(api, url: str) -> MenuBar:

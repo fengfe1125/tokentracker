@@ -573,12 +573,70 @@ async function pollScan() {
   } catch (e) { /* 服务未就绪时忽略 */ }
 }
 
+/* ─────────── 设置 ─────────── */
+async function loadSettings() {
+  try {
+    const r = await fetch("/api/settings");
+    const d = await r.json();
+    const s = d.settings || {};
+    const sel = $("#setProvider");
+    sel.innerHTML = "";
+    for (const p of d.providers || []) {
+      const o = document.createElement("option");
+      o.value = p.id; o.textContent = "今日用量 + " + p.name;
+      sel.appendChild(o);
+    }
+    const off = document.createElement("option");
+    off.value = "off"; off.textContent = "仅今日用量";
+    sel.appendChild(off);
+    sel.value = s.menubar_provider || "off";
+    if (sel.value !== (s.menubar_provider || "off")) sel.value = "off"; // 平台已下架时回退
+    $("#setCompact").checked = !!s.menubar_compact;
+    $("#setLogin").checked = !!s.launch_at_login;
+  } catch (e) { /* 服务未就绪时忽略 */ }
+  const bridge = api(), loginInput = $("#setLogin"), hint = $("#loginHint");
+  if (!bridge || typeof bridge.launch_at_login_supported !== "function") {
+    loginInput.disabled = true;
+    hint.textContent = "开机自启仅桌面 App 支持";
+  } else {
+    Promise.resolve(bridge.launch_at_login_supported()).then(ok => {
+      loginInput.disabled = !ok;
+      hint.textContent = ok ? "" : "开机自启仅打包后的 TokenTracker.app 支持";
+    }).catch(() => { loginInput.disabled = true; });
+  }
+}
+
+async function saveSetting(key, value) {
+  try {
+    const r = await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: value }) });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast("保存失败：" + (d.error || r.status));
+      loadSettings();   // 回滚到实际值
+      return;
+    }
+    toast("✓ 已保存 · 状态栏 5 秒内生效");
+  } catch (e) { toast("保存失败：服务未就绪"); }
+}
+
+$("#setProvider").onchange = e => saveSetting("menubar_provider", e.target.value);
+$("#setCompact").onchange = e => saveSetting("menubar_compact", e.target.checked);
+$("#setLogin").onchange = e => saveSetting("launch_at_login", e.target.checked);
+$("#openDataDir").onclick = () => {
+  const a = api();
+  if (a && typeof a.open_data_folder === "function") a.open_data_folder();
+  else toast("数据目录：~/.tokentracker");
+};
+
 /* ─────────── 事件绑定 ─────────── */
 function switchView(name) {
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $("#view-overview").classList.toggle("hidden", name !== "overview");
   $("#view-sessions").classList.toggle("hidden", name !== "sessions");
+  $("#view-settings").classList.toggle("hidden", name !== "settings");
   if (name === "sessions") loadSessions();
+  if (name === "settings") loadSettings();
 }
 document.querySelectorAll(".nav-item").forEach(b => b.onclick = () => switchView(b.dataset.view));
 
@@ -619,13 +677,14 @@ document.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
 $("#drawerClose").onclick = closeDrawer;
 $("#drawerMask").onclick = closeDrawer;
 
-/* 快捷键：⌘1/⌘2 切视图 · ⌘R 扫描 · ⌘W 关闭面板 · Esc 关抽屉 */
+/* 快捷键：⌘1/⌘2 切视图 · ⌘, 设置 · ⌘R 扫描 · ⌘W 关闭面板 · Esc 关抽屉 */
 document.addEventListener("keydown", e => {
   const mod = e.metaKey || e.ctrlKey;
   if (e.key === "Escape") closeDrawer();
   else if (mod && e.key.toLowerCase() === "w") { e.preventDefault(); closeApp(); }
   else if (mod && e.key === "1") { e.preventDefault(); switchView("overview"); }
   else if (mod && e.key === "2") { e.preventDefault(); switchView("sessions"); }
+  else if (mod && e.key === ",") { e.preventDefault(); switchView("settings"); }
   else if (mod && e.key.toLowerCase() === "r") { e.preventDefault(); startScan(); }
 });
 
@@ -709,6 +768,7 @@ function showSkeletons() {
   await refreshAll();
   moveRangeInk();
   if (location.hash === "#sessions") switchView("sessions");   // 深链直达
+  else if (location.hash === "#settings") switchView("settings");
   setInterval(pollScan, 4000);      // 扫描状态
   setInterval(refreshAll, 60000);   // 定时刷新（新日志入库后自动跟上）
 })();

@@ -134,6 +134,37 @@ class HandlerTest(unittest.TestCase):
         handler.server.scan_service.request.assert_called_once_with(tools=["claude"], full=True, source="manual")
         self.assertEqual(handler._send.call_args.args[0], 409)
 
+    def test_settings_get_returns_defaults_and_providers(self):
+        handler = self.handler("/api/settings")
+        with tempfile.TemporaryDirectory() as d, patch.object(
+                server.prefs, "prefs_path", return_value=os.path.join(d, "settings.json")):
+            handler.do_GET()
+        code, payload = handler._send.call_args.args
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["settings"], dict(server.prefs.DEFAULTS))
+        self.assertIn({"id": "claude", "name": "Claude Code"}, payload["providers"])
+
+    def test_settings_post_validates_and_merges(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(
+                server.prefs, "prefs_path", return_value=os.path.join(d, "settings.json")):
+            for body in (b'{"menubar_compact": "yes"}', b'{"rm_rf": true}',
+                         b'{"menubar_provider": "../../etc"}', b'[]', b'not json'):
+                with self.subTest(body=body):
+                    bad = self.handler("/api/settings", body)
+                    bad.do_POST()
+                    self.assertEqual(bad._send.call_args.args[0], 400)
+            ok = self.handler("/api/settings",
+                              b'{"menubar_provider": "kimi", "launch_at_login": true}')
+            ok.do_POST()
+            self.assertEqual(ok._send.call_args.args[0], 200)
+            self.assertEqual(server.prefs.load_prefs()["menubar_provider"], "kimi")
+            again = self.handler("/api/settings", b'{"menubar_compact": true}')
+            again.do_POST()
+            saved = server.prefs.load_prefs()
+            self.assertEqual(saved["menubar_provider"], "kimi")   # 局部更新不覆盖其他键
+            self.assertTrue(saved["menubar_compact"])
+            self.assertTrue(saved["launch_at_login"])
+
     def test_malformed_requests_do_not_start_scan(self):
         for body in (b'[]', b'not json', b'{"tools":["../../anything"]}', b'{"tools":"claude"}'):
             with self.subTest(body=body):

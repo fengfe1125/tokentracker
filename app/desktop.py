@@ -25,6 +25,7 @@ if _ROOT not in sys.path:
 
 import webview  # noqa: E402
 
+from app import loginitem  # noqa: E402
 from app.menubar import install_menubar  # noqa: E402
 from tokentracker import server  # noqa: E402
 
@@ -74,6 +75,28 @@ class Api:
                 self.main.show()
             except Exception:
                 pass
+
+    def open_settings(self):
+        """唤出主面板并切到设置视图（状态栏菜单「设置…」）。"""
+        self.show_main()
+        if self.main:
+            try:
+                self.main.evaluate_js(
+                    "typeof switchView==='function'&&switchView('settings')")
+            except Exception:
+                pass
+
+    def launch_at_login_supported(self) -> bool:
+        return loginitem.supported()
+
+    def open_data_folder(self) -> bool:
+        """在 Finder 打开本地数据目录（不存在则先创建）。"""
+        path = os.path.join(os.path.expanduser("~"), ".tokentracker")
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            pass
+        return self.open_in_finder(path)
 
     def open_in_finder(self, path: str) -> bool:
         """在 Finder 中打开目录。claude 的 project 是 slug（/→-），尝试还原。"""

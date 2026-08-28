@@ -497,3 +497,38 @@ td.num, th.num { text-align: right; }
 .time-quality { font-size: 11px; color: var(--ink-2); line-height: 1.6; overflow-wrap: anywhere; }
 .time-quality:empty { display: none; }
 .table-card { overflow-x: auto; }
+
+/* ─────────── 设置页 ─────────── */
+.settings-card { max-width: 640px; margin-bottom: 14px; }
+.set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 12px 0; border-top: 1px solid var(--line);
+}
+.set-row:first-of-type { border-top: none; padding-top: 2px; }
+.set-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.set-info b { font-size: 13px; font-weight: 600; }
+.set-info span { font-size: 11px; color: var(--ink-3); line-height: 1.5; }
+.set-select {
+  flex-shrink: 0; font: inherit; font-size: 12.5px; color: var(--ink);
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg); cursor: pointer; transition: border-color .15s;
+}
+.set-select:hover { border-color: var(--line-strong); }
+.set-select:focus { outline: none; border-color: var(--accent); }
+
+/* iOS 风格开关 */
+.switch { position: relative; flex-shrink: 0; display: inline-block; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch i {
+  display: block; width: 40px; height: 24px; border-radius: 12px;
+  background: var(--line-strong); transition: background .2s var(--ease-out);
+}
+.switch i::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.22);
+  transition: transform .2s var(--ease-spring);
+}
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { transform: translateX(16px); }
+.switch input:disabled + i { opacity: .45; cursor: not-allowed; }
+.switch:active input:not(:disabled) + i::after { transform-origin: center; scale: 1.12; }
