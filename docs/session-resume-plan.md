@@ -19,7 +19,7 @@ cc-switch 的 Session Manager resume 流程：
 |---|---|---|---|
 | Claude Code | `claude --resume <uuid>` | uuid（= jsonl 文件名） | ✅ |
 | Codex | `codex resume <uuid>` | uuid | ✅ |
-| Kimi Code | `kimi --session <uuid>` | uuid | ✅ |
+| Kimi Code | `kimi --session session_<uuid>`（CLI 的会话 ID 带 `session_` 前缀，见 `~/.kimi-code/session_index.jsonl`；扫描器存的裸 uuid 需补回） | uuid | ✅ |
 | opencode | `opencode --session <ses_*>` | `ses_...` | ✅ |
 | Pi | `pi --session <id>`（支持部分 uuid） | uuid | ✅ |
 | Hermes | `hermes --resume <session>` | `20260801_223831_db58bf` | ✅ |

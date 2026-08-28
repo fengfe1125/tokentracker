@@ -29,12 +29,20 @@ _APP_NAMES = {"terminal": "Terminal", "iterm": "iTerm",
               "wezterm": "WezTerm", "ghostty": "Ghostty"}
 
 
+def _resume_id(tool: str, session_id: str) -> str:
+    """kimi CLI 的会话 ID 带 session_ 前缀（见 ~/.kimi-code/session_index.jsonl），
+    扫描器存的是事件文件名剥掉前缀的裸 uuid，恢复时要补回去。"""
+    if tool == "kimi" and session_id and not session_id.startswith("session_"):
+        return "session_" + session_id
+    return session_id
+
+
 def resume_argv(tool: str, session_id: str) -> list[str] | None:
     """工具不支持或无会话 ID → None。"""
     prefix = RESUME_PREFIX.get(tool)
     if not prefix or not session_id:
         return None
-    return [*prefix, session_id]
+    return [*prefix, _resume_id(tool, session_id)]
 
 
 def cli_missing(argv: list[str]) -> str | None:

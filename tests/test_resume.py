@@ -12,7 +12,10 @@ class ArgvTest(unittest.TestCase):
     def test_command_matrix(self):
         self.assertEqual(resume.resume_argv("claude", "abc"), ["claude", "--resume", "abc"])
         self.assertEqual(resume.resume_argv("codex", "abc"), ["codex", "resume", "abc"])
-        self.assertEqual(resume.resume_argv("kimi", "abc"), ["kimi", "--session", "abc"])
+        self.assertEqual(resume.resume_argv("kimi", "abc"), ["kimi", "--session", "session_abc"])
+        # kimi CLI 的会话 ID 带 session_ 前缀；已带前缀的幂等
+        self.assertEqual(resume.resume_argv("kimi", "session_abc"),
+                         ["kimi", "--session", "session_abc"])
         self.assertEqual(resume.resume_argv("opencode", "s1"), ["opencode", "--session", "s1"])
         self.assertEqual(resume.resume_argv("pi", "abc"), ["pi", "--session", "abc"])
         self.assertEqual(resume.resume_argv("hermes", "s1"), ["hermes", "--resume", "s1"])
