@@ -11,6 +11,7 @@ import os
 DEFAULTS = {
     "menubar_provider": "claude",   # 状态栏标题追加显示的平台配额；"off" = 仅今日用量
     "menubar_compact": False,       # 紧凑标题（刘海屏 / 菜单栏图标多时防被挤出）
+    "menubar_ring": True,           # 圆环显示配额（彩色扇形圆代替 ⚡，标题省掉百分比数字）
     "launch_at_login": False,       # 开机自动启动（桌面 App 写入 LaunchAgent）
     "terminal_app": "auto",         # 继续会话用哪个终端：auto/terminal/iterm/wezterm/ghostty
     "unit_yi": False,               # 大数以「亿」显示（≥1e8，界面与状态栏同步）

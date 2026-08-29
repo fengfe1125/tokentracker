@@ -720,6 +720,7 @@ async function loadSettings() {
     state.unitYi = !!s.unit_yi;
     $("#setUnitYi").checked = state.unitYi;
     $("#setCompact").checked = !!s.menubar_compact;
+    $("#setRing").checked = s.menubar_ring !== false;
     $("#setLogin").checked = !!s.launch_at_login;
   } catch (e) { /* 服务未就绪时忽略 */ }
   const bridge = api(), loginInput = $("#setLogin"), hint = $("#loginHint");
@@ -750,6 +751,7 @@ async function saveSetting(key, value) {
 
 $("#setProvider").onchange = e => saveSetting("menubar_provider", e.target.value);
 $("#setCompact").onchange = e => saveSetting("menubar_compact", e.target.checked);
+$("#setRing").onchange = e => saveSetting("menubar_ring", e.target.checked);
 $("#setLogin").onchange = e => saveSetting("launch_at_login", e.target.checked);
 $("#setTerminal").onchange = e => saveSetting("terminal_app", e.target.value);
 $("#setUnitYi").onchange = e => {

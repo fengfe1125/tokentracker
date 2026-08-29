@@ -115,6 +115,7 @@ _PROVIDER_ID = re.compile(r"off|[a-z0-9][a-z0-9_-]{0,23}\Z")
 _SETTINGS_SCHEMA = {
     "menubar_provider": lambda v: isinstance(v, str) and bool(_PROVIDER_ID.fullmatch(v)),
     "menubar_compact": lambda v: isinstance(v, bool),
+    "menubar_ring": lambda v: isinstance(v, bool),
     "launch_at_login": lambda v: isinstance(v, bool),
     "terminal_app": lambda v: v in resume.TERMINAL_APPS,
     "unit_yi": lambda v: isinstance(v, bool),

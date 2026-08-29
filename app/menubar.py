@@ -27,7 +27,7 @@ import urllib.request
 from Foundation import NSMakeRect, NSMakeSize  # noqa: F401
 from AppKit import (  # noqa: F401  (pyobjc 由 pywebview 依赖带入)
     NSApp, NSAttributedString, NSBezierPath, NSColor,
-    NSForegroundColorAttributeName, NSImage, NSMenu, NSMenuItem,
+    NSForegroundColorAttributeName, NSImage, NSImageLeft, NSMenu, NSMenuItem,
     NSMutableAttributedString, NSObject, NSStatusBar, NSTimer, NSWorkspace,
     NSApplicationActivationPolicyAccessory,
     NSApplicationActivationPolicyRegular,
@@ -37,9 +37,9 @@ from PyObjCTools import AppHelper
 
 from app import loginitem  # noqa: E402
 from app.menubar_fmt import (  # noqa: E402
-    CRIT_PCT, FLASH_DUR, TOOL_HEX, best_window, fmt_quota, fmt_segments, fmt_title,
-    fmt_tokens, hex_rgb, load_prefs, pulse_alpha, quota_line_segments,
-    save_prefs, spinner_frame, flash_alpha, today_line_segments,
+    CRIT_PCT, FLASH_DUR, RING_PT, TOOL_HEX, best_window, fmt_quota, fmt_segments,
+    fmt_title, fmt_tokens, hex_rgb, load_prefs, pulse_alpha, quota_line_segments,
+    ring_glyph, ring_spec, save_prefs, spinner_frame, flash_alpha, today_line_segments,
 )
 
 REFRESH_DATA = 60.0     # 统计/配额刷新间隔
@@ -72,6 +72,7 @@ class MenuBar(NSObject):
         self.tt_scan_started = None    # 本轮扫描开始时间（旋转指示计帧）
         self.tt_last_plain = None      # 已写入 button 的纯文本（跳过重复赋值）
         self.tt_last_anim = None       # 已写入的动画帧 key
+        self.tt_last_ring = None       # 已写入的圆环图 key（同样跳过重复赋值）
         # 自愈状态
         self.tt_invisible_since = None
         self.tt_heal_level = 0         # 0 = 未自愈过（先重排），1 = 重排无效（重建）
@@ -82,6 +83,7 @@ class MenuBar(NSObject):
         self.tt_provider = self.tt_prefs.get("menubar_provider", "claude")
         self.tt_compact = bool(self.tt_prefs.get("menubar_compact"))
         self.tt_yi = bool(self.tt_prefs.get("unit_yi"))
+        self.tt_ring = bool(self.tt_prefs.get("menubar_ring", True))
         self.tt_login_applied = loginitem.is_enabled()
 
     # --------------------------------------------------------- 颜色 ----
@@ -101,6 +103,8 @@ class MenuBar(NSObject):
             return NSColor.systemOrangeColor()
         if role == "quota_crit":
             return NSColor.systemRedColor()
+        if role == "quota_none":
+            return NSColor.tertiaryLabelColor()
         if role.startswith("dot_"):
             rgb = TOOL_HEX.get(role[4:])
             if rgb:
@@ -130,13 +134,78 @@ class MenuBar(NSObject):
         img.setTemplate_(False)
         return img
 
+    def tt_ring_image(self, spec: dict, alpha: float = 1.0):
+        """状态栏配额圆：14pt 彩色扇形（填充角 = 百分比，颜色按紧急度）。
+
+        全部用 AppKit 矢量绘制，无图片资源；语义色（systemGreen/Orange/Red、
+        tertiaryLabel）在 drawingHandler 里取值，因此明暗模式自动跟随，
+        Retina 下按当前缩放重新光栅化，始终清晰。
+        pct 为 None（无配额数据 / 仅今日用量）时画灰色空心圆。
+        """
+        pct = spec.get("pct")
+        role = spec.get("role", "quota_none")
+        side = RING_PT
+        c = side / 2.0
+        r = c - 1.4                      # 留出描边与抗锯齿边距
+
+        def draw(rect):
+            color = self.tt_color(role)
+            if alpha < 1.0:
+                color = color.colorWithAlphaComponent_(alpha)
+            if pct is None:
+                color.setStroke()
+                ring = NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(c - r, c - r, r * 2, r * 2))
+                ring.setLineWidth_(1.3)
+                ring.stroke()
+                return True
+            # 未用完的部分：同色低透明轨道，让填充角一眼可读
+            color.colorWithAlphaComponent_(0.22 * alpha).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(c - r, c - r, r * 2, r * 2)).fill()
+            frac = max(0.0, min(1.0, float(pct) / 100.0))
+            if frac > 0:
+                color.setFill()
+                pie = NSBezierPath.bezierPath()
+                pie.moveToPoint_((c, c))
+                # 12 点方向起、顺时针扫过 frac 圈
+                pie.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
+                    (c, c), r, 90.0, 90.0 - 360.0 * frac, True)
+                pie.closePath()
+                pie.fill()
+            return True
+
+        img = NSImage.imageWithSize_flipped_drawingHandler_(
+            NSMakeSize(side, side), False, draw)
+        img.setTemplate_(False)          # 保留彩色，不被系统染成菜单栏单色
+        return img
+
+    def tt_apply_ring(self, btn, pulse=None):
+        """把配额圆写到状态栏按钮（变化才重绘：按整数百分点 + 量化脉冲缓存）。"""
+        if not self.tt_ring or self.tt_scanning:
+            # 以按钮实际状态为准（缓存键可能刚被重建/重置清空）
+            if self.tt_last_ring is not None or btn.image() is not None:
+                self.tt_last_ring = None
+                btn.setImage_(None)
+            return
+        spec = ring_spec(self.tt_info.get("entries"), self.tt_provider)
+        pct = spec.get("pct")
+        alpha = 1.0 if pulse is None else pulse
+        key = (None if pct is None else int(round(pct)), spec.get("role"),
+               None if pulse is None else round(alpha, 2))
+        if key == self.tt_last_ring:
+            return
+        self.tt_last_ring = key
+        btn.setImage_(self.tt_ring_image(spec, alpha))
+        btn.setImagePosition_(NSImageLeft)
+
     # --------------------------------------------------------- UI（主线程）----
     def tt_install_ui(self):
         # 菜单栏应用：无 Dock 图标；打开主面板时再临时切回 Regular
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         self.tt_status = NSStatusBar.systemStatusBar().statusItemWithLength_(
             NSVariableStatusItemLength)
-        self.tt_status.button().setTitle_("⚡ —")
+        self.tt_status.button().setTitle_("—" if self.tt_ring else "⚡ —")
 
         menu = NSMenu.alloc().init()
         menu.setDelegate_(self)
@@ -192,23 +261,28 @@ class MenuBar(NSObject):
             if key != self.tt_last_anim:
                 self.tt_last_anim = key
                 self.tt_last_plain = None
+                self.tt_apply_ring(btn)          # 扫描中收起圆环，避免与旋转指示打架
                 btn.setTitle_(plain)
                 btn.setAttributedTitle_(self.tt_attr(
                     [(plain, self.tt_color("dim"))]))
             return
         segs = fmt_segments(self.tt_info.get("today"), self.tt_info.get("entries"),
-                            self.tt_provider, self.tt_compact, self.tt_yi)
+                            self.tt_provider, self.tt_compact, self.tt_yi, self.tt_ring)
         plain = "".join(text for text, _ in segs)
+        # 圆环模式的标题里已无百分比段，脉冲只作用在圆上；
+        # 否则每帧都会用同样内容重写 attributedTitle（Tahoe 上会让图标消失）。
+        text_pulse = None if self.tt_ring else pulse
         parts = []
         for text, role in segs:
             color = self.tt_color(role)
             if role == "tokens" and flash is not None:
                 # 闪光：品牌橙 → 主色
                 color = self.tt_color("bolt").blendedColorWithFraction_ofColor_(flash, color)
-            elif role == "quota_crit" and pulse is not None:
-                color = color.colorWithAlphaComponent_(pulse)
+            elif role == "quota_crit" and text_pulse is not None:
+                color = color.colorWithAlphaComponent_(text_pulse)
             parts.append((text, color))
-        key = (plain, flash, pulse, None)
+        self.tt_apply_ring(btn, pulse)            # 圆环模式下由圆承担告急呼吸
+        key = (plain, flash, text_pulse, None)
         if plain != self.tt_last_plain:
             self.tt_last_plain = plain
             # NSVariableStatusItemLength 只按 setTitle_ 的纯文本测量宽度，
@@ -337,6 +411,7 @@ class MenuBar(NSObject):
         self.tt_install_ui()
         self.tt_last_plain = None
         self.tt_last_anim = None
+        self.tt_last_ring = None
         self.tt_render()
 
     def tt_nudge(self):
@@ -390,6 +465,7 @@ class MenuBar(NSObject):
         self.tt_provider = prefs.get("menubar_provider", "claude")
         self.tt_compact = bool(prefs.get("menubar_compact"))
         self.tt_yi = bool(prefs.get("unit_yi"))
+        self.tt_ring = bool(prefs.get("menubar_ring", True))
         want_login = bool(prefs.get("launch_at_login"))
         if want_login != self.tt_login_applied and loginitem.set_enabled(want_login):
             self.tt_login_applied = want_login
@@ -413,13 +489,23 @@ class MenuBar(NSObject):
                 it.setHidden_(True)
         self.tt_rebuild_display_menu()
 
+    def tt_title_preview(self, entries=None) -> str:
+        """菜单里「当前：」的纯文本预览；圆环模式下用近似字符代替彩色圆。"""
+        if entries is None:
+            entries = self.tt_info.get("entries") or []
+        text = fmt_title(self.tt_info.get("today"), entries, self.tt_provider,
+                         self.tt_compact, self.tt_yi, self.tt_ring)
+        if not self.tt_ring:
+            return text
+        glyph = ring_glyph(ring_spec(entries, self.tt_provider))
+        return f"{glyph}{'' if self.tt_compact else ' '}{text}"
+
     def tt_rebuild_display_menu(self):
         """按 /api/quotas 的 entries 重建「状态栏显示」子菜单（radio 勾选当前项）。"""
         entries = self.tt_info.get("entries") or []
         sub = NSMenu.alloc().init()
         preview = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "当前：" + fmt_title(self.tt_info.get("today"), entries,
-                                self.tt_provider, self.tt_compact, self.tt_yi), None, "")
+            "当前：" + self.tt_title_preview(entries), None, "")
         preview.setEnabled_(False)
         sub.addItem_(preview)
         sub.addItem_(NSMenuItem.separatorItem())
@@ -541,7 +627,9 @@ class MenuBar(NSObject):
             visible = None
         return {"installed": self.tt_status is not None, "title": title,
                 "visible": visible, "provider": self.tt_provider,
-                "compact": self.tt_compact, "info": dict(self.tt_info)}
+                "compact": self.tt_compact, "ring": self.tt_ring,
+                "ring_spec": ring_spec(self.tt_info.get("entries"), self.tt_provider),
+                "info": dict(self.tt_info)}
 
 
 def install_menubar(api, url: str) -> MenuBar:

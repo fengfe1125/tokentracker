@@ -89,27 +89,31 @@ def fmt_quota(window: dict) -> str:
 
 
 def fmt_title(today: dict | None, entries: list | None, provider: str | None,
-              compact: bool = False, yi: bool = False) -> str:
+              compact: bool = False, yi: bool = False, ring: bool = False) -> str:
     """纯文本标题（= 分段渲染的拼接；调试/预览/测试用）。语义见 fmt_segments。"""
-    return "".join(text for text, _ in fmt_segments(today, entries, provider, compact, yi))
+    return "".join(text for text, _ in fmt_segments(today, entries, provider, compact, yi, ring))
 
 
 def fmt_segments(today: dict | None, entries: list | None, provider: str | None,
-                 compact: bool = False, yi: bool = False) -> list[tuple[str, str]]:
+                 compact: bool = False, yi: bool = False,
+                 ring: bool = False) -> list[tuple[str, str]]:
     """状态栏标题分段：[(文本, role)]，role 由 AppKit 层映射为颜色。
 
     `⚡ 12.30M · C 45%`；紧凑模式 `⚡12.30M·C45%`（无空格，防刘海挤出）；
     yi=True 时 ≥1 亿的 token 以「亿」显示（如 `⚡0.55亿·C12%`）。
+    ring=True（圆环模式）时由 AppKit 层的彩色扇形圆承担品牌位与百分比表达，
+    文本里去掉 ⚡ 与百分比数字，只留 `12.30M·C`（估算/过期标记仍保留）。
     role：bolt ⚡品牌橙 / tokens 主色 / dim 弱化 / glyph 平台字母 /
     marker 过期估算标记 / quota_ok|warn|crit 配额紧急度。
     选中平台无数据时降级为仅今日用量；today 无数据时显示 ⚡ —。
     """
     sep = "" if compact else " "
-    segs: list[tuple[str, str]] = [("⚡", "bolt")]
+    lead = "" if ring else sep        # 圆环模式下图标与标题的间距由 AppKit 排版负责
+    segs: list[tuple[str, str]] = [] if ring else [("⚡", "bolt")]
     if today:
-        segs.append((f"{sep}{fmt_tokens(today['tokens'], yi)}", "tokens"))
+        segs.append((f"{lead}{fmt_tokens(today['tokens'], yi)}", "tokens"))
     else:
-        segs.append((f"{sep}—", "dim"))
+        segs.append((f"{lead}—", "dim"))
     if not provider or provider == "off":
         return segs
     entry = next((e for e in (entries or []) if e.get("id") == provider), None)
@@ -120,12 +124,46 @@ def fmt_segments(today: dict | None, entries: list | None, provider: str | None,
     segs.append(("·" if compact else " · ", "dim"))
     segs.append((glyph, "glyph"))
     marker = quota_marker(best)
+    if ring:
+        if marker:
+            segs.append((marker, "marker"))
+        return segs
     if marker:
         segs.append((f"{sep}{marker}", "marker"))
         segs.append((f"{best['pct']:.0f}%", quota_urgency(best.get("pct"))))
     else:
         segs.append((f"{sep}{best['pct']:.0f}%", quota_urgency(best.get("pct"))))
     return segs
+
+
+# ------------------------------------------------------------ 配额圆环 ----
+RING_PT = 14.0            # 状态栏圆环边长（pt）
+RING_GLYPHS = "○◔◑◕●"     # 纯文本近似（菜单预览/测试用；真身是 AppKit 矢量图）
+
+
+def ring_spec(entries: list | None, provider: str | None) -> dict:
+    """状态栏配额圆的绘制参数：{"pct": 0..100 | None, "role": ...}。
+
+    pct=None（灰色空心圆）= 选中平台无配额数据 / 仅今日用量模式；
+    role 复用标题的紧急度口径（quota_ok|warn|crit，阈值 50/80），
+    无数据时为 quota_none。
+    """
+    if provider and provider != "off":
+        entry = next((e for e in (entries or []) if e.get("id") == provider), None)
+        best = best_window(entry)
+        if best is not None and best.get("pct") is not None:
+            pct = max(0.0, min(100.0, float(best["pct"])))
+            return {"pct": pct, "role": quota_urgency(pct)}
+    return {"pct": None, "role": "quota_none"}
+
+
+def ring_glyph(spec: dict | None) -> str:
+    """圆环的纯文本近似字符（菜单里的「当前：」预览用）。"""
+    pct = (spec or {}).get("pct")
+    if pct is None:
+        return RING_GLYPHS[0]
+    idx = int(round(float(pct) / 100.0 * (len(RING_GLYPHS) - 1)))
+    return RING_GLYPHS[max(0, min(len(RING_GLYPHS) - 1, idx))]
 
 
 def today_line_segments(today: dict | None, yi: bool = False) -> list[tuple[str, str]]:

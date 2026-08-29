@@ -18,7 +18,8 @@ def _load_menubar():
     foundation.NSMakeRect = lambda x, y, w, h: (x, y, w, h)
     appkit = types.ModuleType("AppKit")
     for name in ("NSApp", "NSAttributedString", "NSBezierPath", "NSColor",
-                 "NSForegroundColorAttributeName", "NSImage", "NSMenu", "NSMenuItem",
+                 "NSForegroundColorAttributeName", "NSImage", "NSImageLeft",
+                 "NSMenu", "NSMenuItem",
                  "NSMutableAttributedString", "NSObject", "NSStatusBar", "NSTimer",
                  "NSWorkspace",
                  "NSApplicationActivationPolicyAccessory",
@@ -94,12 +95,13 @@ class MenuBarTest(unittest.TestCase):
         self.bar.tt_status = None
         self.bar.tt_scanning = False
         new_prefs = {"menubar_provider": "codex", "menubar_compact": True,
-                     "launch_at_login": True}
+                     "menubar_ring": False, "launch_at_login": True}
         with patch.object(self.mb, "load_prefs", return_value=new_prefs), \
                 patch.object(self.mb.loginitem, "set_enabled", return_value=True) as apply_login:
             self.bar.tt_reload_prefs()
         self.assertEqual(self.bar.tt_provider, "codex")
         self.assertTrue(self.bar.tt_compact)
+        self.assertFalse(self.bar.tt_ring)
         apply_login.assert_called_once_with(True)
         self.assertTrue(self.bar.tt_login_applied)
 
@@ -110,6 +112,53 @@ class MenuBarTest(unittest.TestCase):
                 patch.object(self.mb.loginitem, "set_enabled") as apply_login:
             self.bar.tt_reload_prefs()
         apply_login.assert_not_called()
+
+    def test_ring_image_is_redrawn_only_when_the_rounded_percent_changes(self):
+        """Tahoe 的重复赋值纪律：同一整数百分点不重新 setImage_。"""
+        self.bar.tt_ring = True
+        self.bar.tt_scanning = False
+        self.bar.tt_provider = "claude"
+        self.bar.tt_last_ring = None
+        btn = Mock()
+        window = {"pct": 56.2}
+        self.bar.tt_info = {"entries": [{"id": "claude", "windows": [window]}]}
+        with patch.object(self.bar, "tt_ring_image", return_value="img") as draw:
+            self.bar.tt_apply_ring(btn)
+            window["pct"] = 56.4          # 同一整数百分点 → 不重绘
+            self.bar.tt_apply_ring(btn)
+            self.assertEqual(draw.call_count, 1)
+            window["pct"] = 57.0          # 跨整数百分点 → 重绘
+            self.bar.tt_apply_ring(btn)
+            self.assertEqual(draw.call_count, 2)
+            window["pct"] = 85.0          # 跨紧急度 → 重绘且换色
+            self.bar.tt_apply_ring(btn)
+            self.assertEqual(draw.call_count, 3)
+            self.assertEqual(draw.call_args[0][0]["role"], "quota_crit")
+
+    def test_ring_disabled_or_scanning_clears_the_button_image(self):
+        self.bar.tt_provider = "claude"
+        self.bar.tt_info = {"entries": [{"id": "claude", "windows": [{"pct": 56}]}]}
+        # 缓存键仍在 / 缓存键已被重置（重建后）两种情况都要清干净
+        for ring, scanning, last in [(False, False, (56, "quota_warn", None)),
+                                     (True, True, (56, "quota_warn", None)),
+                                     (False, False, None)]:
+            with self.subTest(ring=ring, scanning=scanning, last=last):
+                btn = Mock()
+                btn.image.return_value = "stale-img"
+                self.bar.tt_ring, self.bar.tt_scanning = ring, scanning
+                self.bar.tt_last_ring = last
+                self.bar.tt_apply_ring(btn)
+                btn.setImage_.assert_called_once_with(None)
+                self.assertIsNone(self.bar.tt_last_ring)
+
+    def test_ring_disabled_with_no_image_does_not_touch_the_button(self):
+        """已经是无图状态就别再赋值（Tahoe 重复赋值纪律）。"""
+        btn = Mock()
+        btn.image.return_value = None
+        self.bar.tt_ring, self.bar.tt_scanning = False, False
+        self.bar.tt_last_ring = None
+        self.bar.tt_apply_ring(btn)
+        btn.setImage_.assert_not_called()
 
 
 class CompactTitleTest(unittest.TestCase):
@@ -124,6 +173,70 @@ class CompactTitleTest(unittest.TestCase):
         self.assertEqual(menubar_fmt.fmt_title(None, None, "off", compact=True), "⚡—")
         self.assertEqual(
             menubar_fmt.fmt_title({"tokens": 100}, None, "off", compact=True), "⚡100")
+
+
+class RingTitleTest(unittest.TestCase):
+    """圆环模式：文本去掉 ⚡ 与百分比数字，紧急度口径与标题一致（50/80）。"""
+
+    ENTRY = {"id": "claude", "windows": [{"pct": 56, "source": "official",
+                                         "stale": False}]}
+
+    def test_ring_title_drops_bolt_and_percent(self):
+        today = {"tokens": 87920000}
+        self.assertEqual(
+            menubar_fmt.fmt_title(today, [self.ENTRY], "claude", ring=True),
+            "87.92M · C")
+        self.assertEqual(
+            menubar_fmt.fmt_title(today, [self.ENTRY], "claude", compact=True, ring=True),
+            "87.92M·C")
+        # 非圆环模式保持原样
+        self.assertEqual(
+            menubar_fmt.fmt_title(today, [self.ENTRY], "claude", compact=True),
+            "⚡87.92M·C56%")
+
+    def test_ring_title_keeps_estimate_marker(self):
+        entry = {"id": "claude", "windows": [{"pct": 56, "source": "local",
+                                              "stale": False}]}
+        self.assertEqual(
+            menubar_fmt.fmt_title({"tokens": 100}, [entry], "claude", ring=True),
+            "100 · C≈")
+
+    def test_ring_title_without_quota_data(self):
+        self.assertEqual(
+            menubar_fmt.fmt_title({"tokens": 100}, [], "claude", ring=True), "100")
+        self.assertEqual(menubar_fmt.fmt_title(None, [], "off", ring=True), "—")
+
+    def test_ring_spec_matches_title_thresholds(self):
+        for pct, role in [(0, "quota_ok"), (12, "quota_ok"), (49.9, "quota_ok"),
+                          (50, "quota_warn"), (56, "quota_warn"), (79.9, "quota_warn"),
+                          (80, "quota_crit"), (100, "quota_crit")]:
+            entry = {"id": "claude", "windows": [{"pct": pct}]}
+            with self.subTest(pct=pct):
+                spec = menubar_fmt.ring_spec([entry], "claude")
+                self.assertEqual(spec["role"], role)
+                self.assertEqual(spec["pct"], pct)
+                self.assertEqual(spec["role"], menubar_fmt.quota_urgency(pct))
+
+    def test_ring_spec_is_grey_without_data(self):
+        for entries, provider in [([], "claude"), ([self.ENTRY], "off"),
+                                  ([self.ENTRY], None),
+                                  ([{"id": "claude", "windows": []}], "claude")]:
+            with self.subTest(provider=provider, entries=entries):
+                spec = menubar_fmt.ring_spec(entries, provider)
+                self.assertIsNone(spec["pct"])
+                self.assertEqual(spec["role"], "quota_none")
+
+    def test_ring_spec_clamps_out_of_range_pct(self):
+        self.assertEqual(
+            menubar_fmt.ring_spec([{"id": "c", "windows": [{"pct": 143}]}], "c")["pct"], 100.0)
+        self.assertEqual(
+            menubar_fmt.ring_spec([{"id": "c", "windows": [{"pct": -5}]}], "c")["pct"], 0.0)
+
+    def test_ring_glyph_tracks_fill(self):
+        self.assertEqual(menubar_fmt.ring_glyph({"pct": None}), "○")
+        self.assertEqual(menubar_fmt.ring_glyph({"pct": 0}), "○")
+        self.assertEqual(menubar_fmt.ring_glyph({"pct": 56}), "◑")
+        self.assertEqual(menubar_fmt.ring_glyph({"pct": 100}), "●")
 
 
 class TitleSourceTest(unittest.TestCase):
