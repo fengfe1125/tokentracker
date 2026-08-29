@@ -119,7 +119,9 @@ async function main() {
     page.context.mixed = mixed;
     page.run(code);
     const html = page.element(id).innerHTML;
-    for (const expected of ['过期官方', '本地估算', '~45%', '≈60%', '99 Token', '不包含在此窗口']) assert.ok(html.includes(expected), expected);
+    // 新版把来源状态收敛为圆点（title 说明），旧版是文字徽章；标记与口径注释两版一致
+    const staleLabel = page === desktop ? '官方数据过期' : '过期官方';
+    for (const expected of [staleLabel, '本地估算', '~45%', '≈60%', '99 Token', '不包含在此窗口']) assert.ok(html.includes(expected), expected);
     assert.ok(!html.includes('~50%'), 'entry.note must not mark a fresh window stale');
   }
   console.log('frontend rendering, token totals, quality labels, scan refresh, and window drag regressions passed');

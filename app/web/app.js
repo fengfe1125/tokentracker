@@ -13,6 +13,7 @@ const TOOL = {
   hermes:   { name: "Hermes",      color: "#e0a13e" },
   kimi:     { name: "Kimi",        color: "#e06a9a" },
   pi:       { name: "Pi",          color: "#7fb069" },
+  go:       { name: "OpenCode Go", color: "#8b7bd8" },
 };
 const TOOL_ORDER = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"];
 
@@ -312,20 +313,58 @@ function buildLegend() {
 }
 
 /* ─────────── 配额（进度条从旧值平滑滚动到新值） ─────────── */
+/* 订阅配额：环形健康卡。品牌色圆环 = 最紧窗口，右侧窗口明细行。 */
+function quotaUrgency(pct) {
+  return pct == null ? "" : (pct < 50 ? "good" : (pct < 80 ? "mid" : "bad"));
+}
+
 function renderQuotas(entries) {
   if (!entries.length) { $("#quotaList").innerHTML = '<div class="quota-empty">未配置配额</div>'; return; }
-  $("#quotaList").innerHTML = entries.map((e, i) => `
-    <div class="quota-item" style="--i:${i}">
-      <div class="q-head">
-        <span class="q-name">${esc(e.name)}</span>
-        <span class="q-plan" title="${esc(e.plan || "")}">${esc(e.plan || "")}</span>
-        <span class="badge ${e.source === "official" ? "official" : ""}">${esc(e.source === "official" ? "官方" + (e.via ? " · " + ({wham:"wham", rpc:"RPC", desktop:"桌面采样", oauth:"API"}[e.via] || e.via) : "") : "本地估算")}</span>
+  $("#quotaList").innerHTML = entries.map((e, i) => {
+    const brand = (TOOL[e.id] || {}).color || "#a8a49c";
+    const wins = e.windows || [];
+    const tight = wins.reduce((a, w) => (w.pct != null && (a == null || w.pct > a.pct) ? w : a), null);
+    const tpct = tight ? Math.max(0, Math.min(100, +tight.pct || 0)) : null;
+    const srcLabel = e.source === "official" ? (tight && tight.stale ? "过期官方" : "官方") : "本地估算";
+    const srcCls = e.source === "official" ? (tight && tight.stale ? "stale" : "official") : "local";
+    const urg = quotaUrgency(tpct);
+    return `
+    <div class="quota-item ${urg === "bad" ? "crit" : ""}" style="--i:${i};--brand:${brand};--state:var(--${urg === "bad" ? "red" : urg === "mid" ? "amber" : "green"})">
+      <div class="q-ring" data-qring="${esc(e.id)}" data-pct="${tpct ?? 0}"
+           title="最紧窗口：${esc(tight ? tight.label + (tpct != null ? " " + tpct + "%" : "") : "无数据")}">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <circle class="track" cx="24" cy="24" r="20"></circle>
+          <circle class="fill" cx="24" cy="24" r="20"></circle>
+        </svg>
+        <b class="q-pct">${tpct == null ? "—" : tpct + "%"}</b>
       </div>
-      <div class="q-wins">${(e.windows || []).map(w => winRow(e.id, w)).join("")}</div>
-      ${e.note ? `<div class="q-note">⚠ ${esc(e.note)}</div>` : ""}
-    </div>`).join("");
-  // 进度条动画：先放到旧值，下一帧滚到新值
+      <div class="q-body">
+        <div class="q-head">
+          <span class="q-name">${esc(e.name)}</span>
+          <span class="q-plan" title="${esc(e.plan || "")}">${esc(e.plan || "")}</span>
+          <span class="q-src ${srcCls}"><i></i>${srcLabel}</span>
+        </div>
+        <div class="q-wins">${wins.map(w => winRow(e.id, w, w === tight)).join("")}</div>
+        ${e.note ? `<div class="q-note">⚠ ${esc(e.note)}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+  // 动画：圆环从旧值滚到新值（首次从空环涨起），数字滚动，进度条沿用旧值过渡
   requestAnimationFrame(() => {
+    const C = 2 * Math.PI * 20;
+    document.querySelectorAll("#quotaList .q-ring").forEach(el => {
+      const k = "ring:" + el.dataset.qring, pct = +el.dataset.pct || 0;
+      const fill = el.querySelector(".fill");
+      fill.style.strokeDasharray = C;
+      const prev = state.quotaPrev[k];
+      fill.style.transition = "none";
+      fill.style.strokeDashoffset = C * (1 - (prev ?? 0) / 100);
+      void fill.getBoundingClientRect();
+      fill.style.transition = "";
+      fill.style.strokeDashoffset = C * (1 - pct / 100);
+      state.quotaPrev[k] = pct;
+      animateNum(el.querySelector(".q-pct"), pct, v => Math.round(v) + "%");
+    });
     document.querySelectorAll("#quotaList .q-bar i").forEach(el => {
       const k = el.dataset.qk, pct = +el.dataset.pct || 0;
       const prev = state.quotaPrev[k];
@@ -340,13 +379,12 @@ function renderQuotas(entries) {
     });
   });
 }
-function winRow(eid, w) {
+
+function winRow(eid, w, tight) {
   const pct = w.pct == null ? null : Math.max(0, Math.min(Number(w.pct) || 0, 100));
   const official = w.source === "official";
-  const source = official ? (w.stale ? "过期官方" : "官方") : "本地估算";
   const prefix = official ? (w.stale ? "~" : "") : "≈";
-  const cls = pct == null ? "" : (pct < 60 ? "good" : (pct < 85 ? "mid" : "bad"));
-  const barCls = pct == null ? "" : (pct < 60 ? "" : (pct < 85 ? "mid" : "bad"));
+  const cls = quotaUrgency(pct);
   const used = w.unit === "usd" ? fmtCost(w.used) : fmtT(w.used);
   const lim = w.unit === "usd" ? fmtCost(w.limit) : fmtT(w.limit);
   const pctTxt = pct == null ? "未设上限" : prefix + pct.toFixed(0) + "%";
@@ -354,12 +392,14 @@ function winRow(eid, w) {
   const reset = w.resets_at ? countdown(w.resets_at) : "";
   const detail = w.unit === "requests" ? `${w.used} / ${w.limit} 次`
     : (w.used != null && w.limit != null ? `${used} / ${lim}` : "");
-  const topRight = w.unit === "usd" ? "" : (w.used != null && w.limit != null ? used + " / " + lim + " " : "");
-  return `<div class="q-win" ${detail ? `title="${esc(detail)}"` : ""}>
-    <div class="w-top"><span>${esc(w.label)} <span class="badge ${official && !w.stale ? "official" : ""}">${source}</span></span>
-      <span>${topRight}<b class="pct ${cls}">${pctTxt}</b></span></div>
-    <div class="q-bar"><i class="${barCls}" data-qk="${esc(eid)}:${esc(w.key)}" data-pct="${pct ?? 0}" style="width:${pct ?? 0}%"></i></div>
-    ${reset ? `<div class="reset">${reset} 重置</div>` : ""}
+  const dotCls = official ? (w.stale ? "stale" : "official") : "local";
+  const dotTitle = official ? (w.stale ? "官方数据过期" : "官方") : "本地估算";
+  return `<div class="q-win ${tight ? "top" : ""}" ${detail ? `title="${esc(detail)}"` : ""}>
+    <i class="w-dot ${dotCls}" title="${dotTitle}"></i>
+    <span class="w-label">${esc(w.label)}</span>
+    <div class="q-bar"><i class="${cls === "good" ? "" : cls}" data-qk="${esc(eid)}:${esc(w.key)}" data-pct="${pct ?? 0}" style="width:${pct ?? 0}%"></i></div>
+    <b class="pct ${cls}">${pctTxt}</b>
+    ${reset ? `<span class="reset">${reset} 重置</span>` : ""}
     ${!official && ((Number(w.unallocated) || 0) !== 0) ? `<div class="q-note">未分配用量：${unallocated}（不包含在此窗口）</div>` : ""}
   </div>`;
 }
@@ -867,8 +907,8 @@ function showSkeletons() {
   buildFilterChips();
   await refreshAll();
   moveRangeInk();
-  if (location.hash === "#sessions") switchView("sessions");   // 深链直达
-  else if (location.hash === "#settings") switchView("settings");
+  const deep = location.hash.slice(1);
+  if (["overview", "sessions", "settings"].includes(deep)) switchView(deep);   // 深链直达
   setInterval(pollScan, 4000);      // 扫描状态
   setInterval(refreshAll, 60000);   // 定时刷新（新日志入库后自动跟上）
 })();

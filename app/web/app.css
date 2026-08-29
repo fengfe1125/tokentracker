@@ -301,41 +301,69 @@ html, body {
 .legend button:hover .sw { transform: scale(1.3); }
 .legend button.hidden { opacity: .35; text-decoration: line-through; }
 
-/* ─────────── 配额 ─────────── */
-.quota-list { display: flex; flex-direction: column; gap: 13px;
-  max-height: 322px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; }
-.quota-item { min-width: 0;
+/* ─────────── 订阅配额 · 环形健康卡 ─────────── */
+.quota-list { display: flex; flex-direction: column; gap: 14px;
+  max-height: 340px; overflow-y: auto; padding: 2px 4px 2px 2px; scrollbar-width: thin; }
+.quota-item { display: flex; gap: 13px; align-items: flex-start; min-width: 0;
   animation: riseIn .35s var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * 60ms); }
-.quota-item .q-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.quota-item .q-name { font-size: 12.5px; font-weight: 650; flex: none; }
-.quota-item .q-plan { font-size: 10px; color: var(--ink-3); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.badge {
-  font-size: 9.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px;
-  color: var(--ink-2); background: var(--bg-active); flex: none;
-  transition: all .2s;
+
+/* 品牌色圆环 = 最紧窗口；填充色 = 紧急度（--state 由内联注入） */
+.q-ring { position: relative; width: 52px; height: 52px; flex: none; margin-top: 1px; }
+.q-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
+.q-ring circle { fill: none; stroke-width: 4.5; stroke-linecap: round; }
+.q-ring .track { stroke: color-mix(in srgb, var(--brand) 16%, transparent); }
+.q-ring .fill { stroke: var(--state, var(--green));
+  transition: stroke-dashoffset .9s var(--ease-out), stroke .4s; }
+.quota-item.crit .q-ring .fill { animation: ringPulse 1.8s ease-in-out infinite; }
+@keyframes ringPulse {
+  50% { filter: drop-shadow(0 0 3px var(--red)); }
 }
-.badge.official { color: var(--green); background: var(--green-soft); }
-.q-wins { display: flex; flex-direction: column; gap: 6px; }
-.q-win { font-size: 10.5px; }
-.q-win .w-top { display: flex; justify-content: space-between; margin-bottom: 2px; color: var(--ink-2); }
-.q-win .w-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-.q-win .w-top .pct { font-weight: 700; font-variant-numeric: tabular-nums;
+.q-pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--ink);
+  letter-spacing: -.02em; }
+
+.q-body { flex: 1; min-width: 0; }
+.q-head { display: flex; align-items: baseline; gap: 7px; margin-bottom: 7px; }
+.q-name { font-size: 12.5px; font-weight: 650; flex: none; }
+.q-plan { font-size: 10px; color: var(--ink-3); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.q-src { display: inline-flex; align-items: center; gap: 4px; flex: none;
+  font-size: 9.5px; font-weight: 550; color: var(--ink-3); }
+.q-src i { width: 5px; height: 5px; border-radius: 50%; flex: none; }
+.q-src.official { color: var(--green); } .q-src.official i { background: var(--green); }
+.q-src.stale { color: var(--amber); } .q-src.stale i { border: 1.2px solid var(--amber); background: transparent; }
+.q-src.local { color: var(--ink-3); } .q-src.local i { background: var(--ink-3); opacity: .75; }
+
+/* 窗口明细行：圆点 + 标签 + 轨道 + 百分比 + 重置倒计时 */
+.q-wins { display: flex; flex-direction: column; gap: 7px; }
+.q-win { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center; gap: 7px; font-size: 10.5px; min-width: 0; }
+.q-win .w-label { color: var(--ink-2); white-space: nowrap; }
+.q-win .pct { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap;
   transition: color .3s; }
-.q-win .w-top .pct.good { color: var(--green); } .pct.mid { color: var(--amber); } .pct.bad { color: var(--red); }
-.q-bar { height: 4px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
+.q-win .pct.good { color: var(--green); }
+.q-win .pct.mid { color: var(--amber); }
+.q-win .pct.bad { color: var(--red); }
+.q-win .reset { font-size: 9.5px; color: var(--ink-3); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.q-win:not(.top) { opacity: .62; }
+.q-win:not(.top) .pct { font-weight: 600; }
+.q-win:not(.top):hover { opacity: 1; }
+
+.w-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; justify-self: center; }
+.w-dot.official { background: var(--green); }
+.w-dot.stale { border: 1.5px solid var(--amber); background: transparent; }
+.w-dot.local { background: var(--ink-3); opacity: .7; }
+
+.q-bar { height: 4px; border-radius: 3px; background: var(--bg-active); overflow: hidden; min-width: 0; }
 .q-bar i { display: block; height: 100%; border-radius: 3px;
   background: var(--green);
   transition: width .9s var(--ease-out), background .4s; }
 .q-bar i.mid { background: var(--amber); }
 .q-bar i.bad { background: var(--red); animation: barGlow 1.8s ease-in-out infinite; }
-.q-win .reset { font-size: 9.5px; color: var(--ink-3); margin-top: 1px; }
-.q-note {
-  font-size: 10px; color: var(--amber); background: var(--amber-soft);
-  border-radius: 6px; padding: 4px 8px; margin-top: 7px; line-height: 1.55;
-  animation: fadeIn .4s ease both;
-}
+.q-note { grid-column: 1 / -1;
+  font-size: 9.5px; color: var(--amber); line-height: 1.5; }
 .quota-empty { font-size: 12px; color: var(--ink-3); padding: 26px 0; text-align: center; }
 .quota-card .card-head { margin-bottom: 10px; }
 
