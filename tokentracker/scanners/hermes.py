@@ -85,9 +85,16 @@ def _scan_one(conn, path: str, prices, rows=None, owners=None) -> tuple[int, int
     for r in rows:
         parts = _identity(r)
         key = "|".join(str(x) for x in parts)
-        native, origin = r["actual_cost_usd"], "native"
-        if native is None:
-            native, origin = r["estimated_cost_usd"], "provider_estimate"
+        # 新版 hermes 常把 actual 记为 0 / cost_status=unknown：视为未知成本，
+        # 交给价格表估算（native_cost=None 时 put_snapshot 走 cost_for）。
+        actual = r["actual_cost_usd"] or 0
+        estimated = r["estimated_cost_usd"] or 0
+        if actual > 0:
+            native, origin = actual, "native"
+        elif estimated > 0:
+            native, origin = estimated, "provider_estimate"
+        else:
+            native, origin = None, "priced"
         legacy_key = key if owners is None or key not in owners or owners[key] == path else None
         inp, out, cached, written = _counts(r)
         result = db.put_snapshot(

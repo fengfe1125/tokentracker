@@ -61,7 +61,11 @@ class AggregateScannerTest(unittest.TestCase):
                 self.assertEqual(today["estimated_tokens"], 100)
                 self.assertEqual(today["unallocated"]["tokens"], 1000)
                 self.assertEqual(db.stats(self.conn,"all",scanner.NAME)[1]["tokens"], 1100)
-                self.assertEqual(db.stats(self.conn,"all",scanner.NAME)[1]["cost"], 0)
+                # hermes actual=0/est=NULL 视为未知成本 → 价格表估算；opencode 自带 0 保持 0
+                if scanner.NAME == "hermes":
+                    self.assertGreater(db.stats(self.conn,"all",scanner.NAME)[1]["cost"], 0)
+                else:
+                    self.assertEqual(db.stats(self.conn,"all",scanner.NAME)[1]["cost"], 0)
 
     def test_cross_month_interval_and_counter_reset(self):
         for scanner in (opencode, hermes):
@@ -226,3 +230,35 @@ class AggregateScannerTest(unittest.TestCase):
         self.assertFalse(read_too_early)
         with closing(db.connect(path)) as conn:
             self.assertEqual(db.stats(conn)[1]["tokens"], 120)
+
+    def _insert_usage(self, session_id, model, actual, estimated):
+        with closing(sqlite3.connect(self.paths["hermes"])) as conn, conn:
+            conn.execute(
+                "INSERT INTO session_model_usage VALUES (?,?,1000,0,0,0,0,?,?,1,1,1,'p','url','m','t')",
+                (session_id, model, estimated, actual))
+
+    def test_hermes_unknown_cost_falls_back_to_price_estimate(self):
+        """actual=0 且 estimated=0（新版 hermes 常见 unknown）→ 价格表估算。"""
+        self._insert_usage("u", "gpt-5", actual=0, estimated=0)
+        self.scan_at(hermes, self.start)
+        total = db.stats(self.conn, "all", "hermes")[1]
+        self.assertGreater(total["cost"], 0)
+        row = self.conn.execute(
+            "SELECT cost_source FROM usage_events WHERE tool='hermes' AND session_id='u'").fetchone()
+        self.assertEqual(row["cost_source"], "estimate")
+
+    def test_hermes_provider_estimate_preferred_over_zero_actual(self):
+        """actual=0 但 estimated>0 → 采用官方估算值。"""
+        self._insert_usage("e", "gpt-5", actual=0, estimated=0.5)
+        self.scan_at(hermes, self.start)
+        cost = self.conn.execute(
+            "SELECT SUM(cost) FROM usage_events WHERE tool='hermes' AND session_id='e'").fetchone()[0]
+        self.assertAlmostEqual(cost, 0.5)
+
+    def test_hermes_actual_cost_wins_when_positive(self):
+        """actual>0 → 以实际成本为准。"""
+        self._insert_usage("a", "gpt-5", actual=1.5, estimated=0.9)
+        self.scan_at(hermes, self.start)
+        cost = self.conn.execute(
+            "SELECT SUM(cost) FROM usage_events WHERE tool='hermes' AND session_id='a'").fetchone()[0]
+        self.assertAlmostEqual(cost, 1.5)
