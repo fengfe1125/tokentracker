@@ -89,6 +89,15 @@ class Api:
     def launch_at_login_supported(self) -> bool:
         return loginitem.supported()
 
+    def open_menubar_settings(self) -> bool:
+        """macOS 26 Tahoe：状态栏图标需系统设置 → 菜单栏 里手动允许（StatusKit 门控）。"""
+        try:
+            subprocess.Popen(["open",
+                              "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension"])
+            return True
+        except Exception:
+            return False
+
     def open_data_folder(self) -> bool:
         """在 Finder 打开本地数据目录（不存在则先创建）。"""
         path = os.path.join(os.path.expanduser("~"), ".tokentracker")

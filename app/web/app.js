@@ -713,6 +713,11 @@ $("#openDataDir").onclick = () => {
   if (a && typeof a.open_data_folder === "function") a.open_data_folder();
   else toast("数据目录：~/.tokentracker");
 };
+$("#openMenuBarSettings").onclick = () => {
+  const a = api();
+  if (a && typeof a.open_menubar_settings === "function") a.open_menubar_settings();
+  else toast("系统设置 → 菜单栏 → 允许 TokenTracker");
+};
 
 /* ─────────── 事件绑定 ─────────── */
 function switchView(name) {

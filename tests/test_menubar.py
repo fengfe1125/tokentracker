@@ -6,14 +6,21 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import Mock
 from unittest.mock import patch
 
 from app import menubar_fmt
 
 
 def _load_menubar():
+    foundation = types.ModuleType("Foundation")
+    foundation.NSMakeSize = lambda w, h: (w, h)
+    foundation.NSMakeRect = lambda x, y, w, h: (x, y, w, h)
     appkit = types.ModuleType("AppKit")
-    for name in ("NSApp", "NSMenu", "NSMenuItem", "NSStatusBar",
+    for name in ("NSApp", "NSAttributedString", "NSBezierPath", "NSColor",
+                 "NSForegroundColorAttributeName", "NSImage", "NSMenu", "NSMenuItem",
+                 "NSMutableAttributedString", "NSObject", "NSStatusBar", "NSTimer",
+                 "NSWorkspace",
                  "NSApplicationActivationPolicyAccessory",
                  "NSApplicationActivationPolicyRegular", "NSVariableStatusItemLength"):
         setattr(appkit, name, None)
@@ -23,7 +30,8 @@ def _load_menubar():
     spec = importlib.util.spec_from_file_location(
         "isolated_menubar", Path(__file__).resolve().parents[1] / "app" / "menubar.py")
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, {"AppKit": appkit, "PyObjCTools": helpers}):
+    with patch.dict(sys.modules, {"AppKit": appkit, "Foundation": foundation,
+                                  "PyObjCTools": helpers}):
         spec.loader.exec_module(module)
     return module
 
@@ -129,3 +137,130 @@ class TitleSourceTest(unittest.TestCase):
                         "pct": 45, "source": source, "stale": stale}]}
                     self.assertEqual(menubar_fmt.fmt_title({"tokens": 100}, [entry], "claude"),
                                      "⚡ 100 · C " + expected)
+
+
+class SegmentRenderTest(unittest.TestCase):
+    """分段着色与动画曲线的纯逻辑（AppKit 层只做 role→NSColor 映射）。"""
+
+    def test_segments_join_matches_title_text(self):
+        entry = {"id": "claude", "name": "Claude Code", "windows": [
+            {"pct": 45, "source": "official", "stale": False}]}
+        for compact in (False, True):
+            with self.subTest(compact=compact):
+                segs = menubar_fmt.fmt_segments({"tokens": 12300000}, [entry], "claude", compact)
+                self.assertEqual("".join(t for t, _ in segs),
+                                 menubar_fmt.fmt_title({"tokens": 12300000}, [entry],
+                                                       "claude", compact))
+
+    def test_roles_cover_urgency_and_markers(self):
+        for pct, role in [(10, "quota_ok"), (50, "quota_warn"), (79.9, "quota_warn"),
+                          (80, "quota_crit"), (100, "quota_crit")]:
+            with self.subTest(pct=pct):
+                entry = {"id": "claude", "windows": [{"pct": pct, "source": "official"}]}
+                roles = [r for _, r in menubar_fmt.fmt_segments({"tokens": 1}, [entry], "claude")]
+                self.assertEqual(roles[-1], role)
+        stale = {"id": "claude", "windows": [{"pct": 45, "source": "official", "stale": True}]}
+        local = {"id": "claude", "windows": [{"pct": 45, "source": "local"}]}
+        self.assertIn((" ~", "marker"),
+                      menubar_fmt.fmt_segments({"tokens": 1}, [stale], "claude"))
+        self.assertIn((" ≈", "marker"),
+                      menubar_fmt.fmt_segments({"tokens": 1}, [local], "claude"))
+
+    def test_menu_line_segments(self):
+        entry = {"id": "kimi", "name": "Kimi", "windows": [
+            {"pct": 74, "label": "周 (7天)", "source": "official"}]}
+        segs = menubar_fmt.quota_line_segments(entry)
+        self.assertEqual("".join(t for t, _ in segs), "● Kimi · 周 (7天) 74%")
+        self.assertEqual(segs[0][1], "dot_kimi")
+        self.assertEqual(segs[-1][1], "quota_warn")
+
+    def test_today_line_segments(self):
+        self.assertEqual("".join(t for t, _ in menubar_fmt.today_line_segments(
+            {"tokens": 1500, "cost": 2.5})), "今日 1.50K tokens · $2.50")
+        self.assertEqual(menubar_fmt.today_line_segments(None),
+                         [("今日暂无数据（点「立即扫描」）", "dim")])
+
+    def test_hex_rgb(self):
+        self.assertEqual(menubar_fmt.hex_rgb("#d97757"),
+                         (0xD9 / 255, 0x77 / 255, 0x57 / 255))
+        self.assertEqual(menubar_fmt.hex_rgb("d97757"),
+                         menubar_fmt.hex_rgb("#d97757"))
+
+    def test_animation_curves(self):
+        self.assertEqual(menubar_fmt.spinner_frame(10), menubar_fmt.SPINNER[0])
+        self.assertEqual(menubar_fmt.spinner_frame(3), menubar_fmt.SPINNER[3])
+        self.assertEqual(menubar_fmt.flash_alpha(-1), 0.0)
+        self.assertAlmostEqual(menubar_fmt.flash_alpha(0.3), 0.5)
+        self.assertEqual(menubar_fmt.flash_alpha(99), 1.0)
+        for t in (0, 0.5, 1.3, 2.0, 5.7):
+            a = menubar_fmt.pulse_alpha(t)
+            self.assertGreaterEqual(a, menubar_fmt.PULSE_MIN)
+            self.assertLessEqual(a, 1.0)
+
+
+class VisibilityHealTest(unittest.TestCase):
+    """自愈状态机：观察 → 重排 → 退避 → 重建；恢复可见后重置。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mb = _load_menubar()
+
+    def _bar(self, visible):
+        bar = self.mb.MenuBar()
+        bar.tt_status = Mock()
+        bar.tt_status.isVisible.return_value = visible
+        bar.tt_install_ui = Mock()
+        bar.tt_render = Mock()
+        bar.tt_log = Mock()
+        bar.tt_invisible_since = None
+        bar.tt_heal_level = 0
+        bar.tt_last_heal = 0.0
+        return bar
+
+    def test_heal_ladder_and_backoff(self):
+        bar = self._bar(visible=False)
+        clock = iter([100, 104, 111, 112, 142])
+        with patch.object(self.mb.time, "time", side_effect=lambda: next(clock)):
+            bar.tt_check_visibility()          # t=100 开始观察
+            self.assertEqual(bar.tt_invisible_since, 100)
+            bar.tt_check_visibility()          # t=104 未到 10s
+            bar.tt_status.setVisible_.assert_not_called()
+            bar.tt_check_visibility()          # t=111 首次自愈：重排
+            self.assertEqual(bar.tt_status.setVisible_.call_count, 2)
+            bar.tt_check_visibility()          # t=112 退避期内
+            bar.tt_install_ui.assert_not_called()
+            bar.tt_check_visibility()          # t=142 重排无效 → 重建
+            bar.tt_install_ui.assert_called_once()
+
+    def test_visible_resets_state(self):
+        bar = self._bar(visible=False)
+        clock = iter([100, 111])
+        with patch.object(self.mb.time, "time", side_effect=lambda: next(clock)):
+            bar.tt_check_visibility()
+            bar.tt_check_visibility()
+        self.assertEqual(bar.tt_heal_level, 1)
+        bar.tt_status.isVisible.return_value = True
+        with patch.object(self.mb.time, "time", return_value=200):
+            bar.tt_check_visibility()
+        self.assertIsNone(bar.tt_invisible_since)
+        self.assertEqual(bar.tt_heal_level, 0)
+
+    def test_no_status_item_is_safe(self):
+        bar = self._bar(visible=False)
+        bar.tt_status = None
+        bar.tt_check_visibility()   # 不抛异常即可
+
+    def test_periodic_nudge_toggles_visibility(self):
+        """无条件轻推：isVisible 探测不到的卡隐藏，靠周期 setVisible 翻转恢复。"""
+        bar = self._bar(visible=True)
+        bar.tt_last_nudge = 0.0
+        with patch.object(self.mb.time, "time", return_value=300):
+            bar.tt_nudge()
+        self.assertEqual(bar.tt_status.setVisible_.call_count, 2)
+        self.assertEqual([c.args[0] for c in bar.tt_status.setVisible_.call_args_list],
+                         [False, True])
+
+    def test_nudge_without_item_is_safe(self):
+        bar = self._bar(visible=True)
+        bar.tt_status = None
+        bar.tt_nudge()
