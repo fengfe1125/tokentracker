@@ -12,9 +12,15 @@
      刷新失败时委托官方 CLI（隔离 CLAUDE_CONFIG_DIR + CLAUDE_CODE_OAUTH_REFRESH_TOKEN
      跑 `claude auth login`，ccswitch 同款），抗端点/UA 协议变更。
   3. 全灭 → 提示 claude auth login 重新登录 / 打开桌面 App。
-- Kimi：只读 KIMI_CODE_HOME（默认 ~/.kimi-code）中的现有 access_token，
-  GET https://api.kimi.com/coding/v1/usages；过期由 Kimi 自身刷新，绝不轮换或回写凭据。
-  （CodexBar docs/kimi.md + parseCodeAPIUsage），返回请求次数的 5 小时窗口与周期配额。
+- Kimi：只读 KIMI_CODE_HOME（默认 ~/.kimi-code）中的现有凭据，
+  GET https://api.kimi.com/coding/v1/usages；返回请求次数的 5 小时窗口与周期配额。
+  access_token 只有 ~15 分钟寿命且 Kimi Code 仅活跃时才会刷新（闲置即过期），
+  故过期时 TokenTracker 自刷新：POST {auth}/api/oauth/token（grant_type=refresh_token，
+  public client），结果原子写回凭据文件（refresh_token 每次轮换，必须写回——kimi-code
+  刷新时从磁盘重读，不写回才会把它登出）。flock 串行化多进程刷新，遇 invalid_grant
+  重读磁盘兜底并发竞争。登录流程绝不触碰（无 refresh_token 时报错并提示 kimi login）。
+  （端点与 client_id 取自 kimi-code 二进制；CodexBar docs/kimi.md 的只读策略会导致
+   闲置期面板长期「暂时不可用」，故升级为自刷新。）
 - Codex：主路 GET https://chatgpt.com/backend-api/wham/usage（CodexBar docs/codex.md +
   headroom subscription/codex_rate_limits.py；Bearer 用 ~/.codex/auth.json 的 access_token
   + ChatGPT-Account-Id 头；401 时向 auth.openai.com/oauth/token 刷新并原子写回）。
@@ -25,6 +31,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import math
@@ -50,6 +57,7 @@ _CLAUDE_KC_SERVICE = "Claude Code-credentials"
 _CLAUDE_PLAN = {"pro": "Pro", "max": "Max", "team": "Team", "enterprise": "Enterprise"}
 _KIMI_PLAN = {"LEVEL_BASIC": "基础版", "LEVEL_INTERMEDIATE": "中级版", "LEVEL_PREMIUM": "高级版",
               "LEVEL_UNLIMITED": "无限版", "LEVEL_PRO": "专业版"}
+_KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"   # kimi-code 二进制内置 public client
 _GO_QUOTA_URL = "https://opencode.ai/zen/go/v1/usage"
 _GO_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
@@ -573,8 +581,141 @@ def _kimi_credentials_version():
         return path, None
 
 
+def _kimi_oauth_host() -> str:
+    """Kimi OAuth host：环境变量覆盖（与 kimi-code 同名）→ region 文件 → CN 默认。
+    凭据里不记 region，kimi-code 把它写在 KIMI_CODE_HOME/region（mainland-cn 以外走 .ai）。"""
+    env = os.environ.get("KIMI_CODE_OAUTH_HOST") or os.environ.get("KIMI_OAUTH_HOST")
+    if env:
+        return env.rstrip("/")
+    root = os.environ.get("KIMI_CODE_HOME") or "~/.kimi-code"
+    try:
+        with open(os.path.join(os.path.expanduser(root), "region"), encoding="utf-8") as f:
+            if f.read().strip() not in ("", "mainland-cn"):
+                return "https://auth.kimi.ai"
+    except OSError:
+        pass
+    return "https://auth.kimi.com"
+
+
+def _kimi_api_base() -> str:
+    """usages 等业务 API 前缀：与 OAuth host 同域族（auth.kimi.com ↔ api.kimi.com）。"""
+    m = re.match(r"^(https://)auth\.(.+)$", _kimi_oauth_host())
+    return f"{m.group(1)}api.{m.group(2)}/coding/v1" if m else "https://api.kimi.com/coding/v1"
+
+
+@contextlib.contextmanager
+def _kimi_refresh_lock(timeout: float = 5.0):
+    """刷新凭据的跨进程互斥（menubar / serve / CLI 多进程都会轮询配额）。
+    锁文件常驻不删（与 official_cache.json.lock 同一约定），仅作 flock 载体。"""
+    path = os.path.join(os.path.dirname(_kimi_credentials_path()), ".tokentracker-refresh.lock")
+    f = open(path, "a+b")
+    try:
+        deadline = time.time() + timeout
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    raise TimeoutError("等待 Kimi 刷新锁超时") from None
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(f, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        f.close()
+
+
+def _kimi_write_credentials(path: str, cred: dict) -> None:
+    """原子写回凭据（tmp + replace，0600）；保留文件里的全部键。"""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cred, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _kimi_refresh_credentials(cred: dict) -> dict | None:
+    """refresh_token 换新凭据；失败（网络/invalid_grant/响应异常）返回 None。
+    refresh_token 每次刷新即轮换，旧的一用就废——并发刷新只有一个赢家。"""
+    rt = cred.get("refresh_token")
+    if not isinstance(rt, str) or not rt.strip():
+        return None
+    body = urllib.parse.urlencode({
+        "client_id": _KIMI_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": rt,
+    }).encode()
+    status, data = _http_json(
+        f"{_kimi_oauth_host()}/api/oauth/token",
+        {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        body=body, method="POST")
+    if status != 200 or not isinstance(data, dict) or not data.get("access_token"):
+        return None
+    try:
+        expires_in = float(data.get("expires_in") or 0)
+        if not math.isfinite(expires_in) or expires_in <= 0:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        expires_in = 900   # 实测 TTL ~15min，响应缺省时按同寿命保守处理
+    new = dict(cred, access_token=data["access_token"],
+               expires_at=time.time() + expires_in)
+    if data.get("refresh_token"):
+        new["refresh_token"] = data["refresh_token"]
+    if data.get("expires_in") is not None:
+        new["expires_in"] = data["expires_in"]
+    return new
+
+
+def _kimi_fresh_credentials(timeout: float = 5.0) -> dict | None:
+    """过期凭据自愈：加锁 → 锁内重读（可能刚被 kimi-code/别的进程刷新）→
+    自刷新 → 原子写回。返回可用凭据；不可恢复返回 None。
+    写回是必要的：refresh_token 轮换，kimi-code 下次刷新从磁盘重读新 token，
+    不写回才会把它的登录态弄失效。"""
+    path = _kimi_credentials_path()
+    try:
+        with _kimi_refresh_lock(timeout):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cred = json.load(f)
+            except (OSError, ValueError, UnicodeError):
+                return None
+            if not isinstance(cred, dict):
+                return None
+            try:
+                exp = float(cred.get("expires_at") or 0)
+            except (TypeError, ValueError, OverflowError):
+                exp = 0
+            if exp > time.time() and cred.get("access_token"):
+                return cred   # 锁内重读已新鲜：别人刷好了，直接用
+            new = _kimi_refresh_credentials(cred)
+            if new is None:
+                # 可能输给并发刷新（双方拿同一个旧 refresh_token，后动者 invalid_grant）：
+                # 赢家已把新凭据写盘，重读一次兜底。
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        again = json.load(f)
+                    exp2 = float(again.get("expires_at") or 0) if isinstance(again, dict) else 0
+                    if exp2 > time.time() and again.get("access_token"):
+                        return again
+                except (OSError, ValueError, UnicodeError, TypeError):
+                    pass
+                return None
+            try:
+                _kimi_write_credentials(path, new)
+            except OSError:
+                pass   # 写回失败：新 token 仍供本次使用，下轮重试
+            return new
+    except (TimeoutError, OSError):
+        return None
+
+
 def kimi_usage() -> dict:
-    """只读现有登录态；令牌刷新及凭据写入全部留给 Kimi。"""
+    """只读现有登录态；令牌过期时自刷新并原子写回（refresh_token 轮换，
+    kimi-code 从磁盘重读，写回才不会把它登出；仅过期才刷新，平常零写）。
+    登录流程绝不触碰——无 refresh_token 时报错并提示重新登录。"""
     try:
         with open(_kimi_credentials_path(), encoding="utf-8") as f:
             cred = json.load(f)
@@ -596,12 +737,32 @@ def kimi_usage() -> dict:
     except (TypeError, ValueError, OverflowError):
         return {"error": "parse", "detail": "Kimi 凭据有效期格式异常"}
     if expires and expires <= time.time():
-        return {"error": "expired", "detail": "Kimi 访问令牌已过期，等待 Kimi Code 更新；TokenTracker 不刷新登录态"}
+        # 已过期：Kimi Code 仅活跃时才刷新，闲置期干等会让面板长期「暂时不可用」。
+        fresh = _kimi_fresh_credentials()
+        fresh_tok = (fresh or {}).get("access_token")
+        if fresh and isinstance(fresh_tok, str) and fresh_tok.strip():
+            cred, tok = fresh, fresh_tok
+        elif not cred.get("refresh_token"):
+            return {"error": "expired",
+                    "detail": "Kimi 访问令牌已过期且无 refresh_token，请运行 kimi login 重新登录"}
+        else:
+            return {"error": "expired",
+                    "detail": "Kimi 访问令牌过期且自动刷新失败（refresh_token 可能已轮换），"
+                              "请运行 kimi login 重新登录"}
     status, data = _http_json(
-        "https://api.kimi.com/coding/v1/usages",
+        f"{_kimi_api_base()}/usages",
         {"Authorization": f"Bearer {tok}", "Accept": "application/json"})
     if status == 401:
-        return {"error": "expired", "detail": "Kimi 访问令牌暂不可用，等待 Kimi Code 更新登录态"}
+        # 磁盘 token 看着没过期却被拒（被别处轮换过）：走一次自愈，换新 token 重试一次。
+        fresh = _kimi_fresh_credentials()
+        fresh_tok = (fresh or {}).get("access_token")
+        if fresh and isinstance(fresh_tok, str) and fresh_tok.strip() and fresh_tok != tok:
+            tok = fresh_tok
+            status, data = _http_json(
+                f"{_kimi_api_base()}/usages",
+                {"Authorization": f"Bearer {tok}", "Accept": "application/json"})
+    if status == 401:
+        return {"error": "expired", "detail": "Kimi 访问令牌已过期，请运行 kimi login 重新登录"}
     if status != 200 or not isinstance(data, dict):
         return {"error": f"http_{status}", "detail": f"Kimi usages 接口返回 {status}",
                 "_retry_after": data.get("_retry_after") if isinstance(data, dict) else None}

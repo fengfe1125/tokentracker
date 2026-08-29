@@ -1,9 +1,11 @@
 """Offline billing cache and quota contract regression tests."""
+import fcntl
 import io
 import json
 import math
 import multiprocessing
 import os
+import stat
 import tempfile
 import threading
 import unittest
@@ -12,6 +14,7 @@ from contextlib import ExitStack
 from email.utils import formatdate
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import parse_qs
 from unittest.mock import Mock, patch
 
 from tokentracker import billing, quotas
@@ -22,6 +25,19 @@ def _cache_writer(path, key, start):
     start.wait(5)
     for i in range(15):
         billing._disk_store(key, 1_000_000, {"windows": {}, "sequence": i})
+
+
+def _kimi_lock_holder(lock_path, cred_path, fresh, acquired, wrote):
+    """持锁的"赢家"进程：拿到锁后稍等再把新鲜凭据写盘（模拟 kimi-code 并发刷新）。"""
+    import time as _time
+    with open(lock_path, "a+b") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        acquired.set()
+        _time.sleep(0.3)
+        with open(cred_path, "w", encoding="utf-8") as cf:
+            json.dump(fresh, cf)
+        wrote.set()
+        _time.sleep(0.4)   # 保持锁，让调用方确实排队
 
 
 class PercentageTest(unittest.TestCase):
@@ -112,13 +128,14 @@ class KimiReadOnlyTest(unittest.TestCase):
                                           {"Authorization": "Bearer fake-access", "Accept": "application/json"})
         self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
 
-    def test_invalid_or_expired_credentials_never_request_or_write(self):
+    def test_invalid_or_expired_credentials_without_refresh_token_never_request_or_write(self):
+        # 有 refresh_token 的过期凭据会走自刷新（见 KimiSelfRefreshTest），此处只测不可恢复类
         cases = [(None, "no_credentials"), (b"", "parse"), (b"{broken", "parse"),
                  (b"\xff", "parse"), (b"[]", "parse"), (b"null", "parse"),
                  (b'{"access_token":123}', "parse"),
                  (b'{"access_token":" "}', "no_token"),
                  (b'{"access_token":"","refresh_token":"fake-refresh"}', "no_token"),
-                 (b'{"access_token":"fake","expires_at":999999,"refresh_token":"fake-refresh"}', "expired"),
+                 (b'{"access_token":"fake","expires_at":999999}', "expired"),
                  (b'{"access_token":"fake","expires_at":"bad"}', "parse"),
                  (b'{"access_token":"fake","expires_at":1e999}', "parse")]
         for raw, expected in cases:
@@ -144,13 +161,15 @@ class KimiReadOnlyTest(unittest.TestCase):
         self.assertEqual(self.http.call_args.args[0], "https://api.kimi.com/coding/v1/usages")
         self.assertNotIn("method", self.http.call_args.kwargs)
 
-    def test_rejected_access_does_not_refresh_or_force_relogin(self):
+    def test_rejected_access_attempts_self_heal_then_reports_expired(self):
+        # 401 → 走一次自愈；锁内重读发现磁盘 token 原样（未过期未被轮换）→ 不盲目
+        # 消耗 refresh_token 轮换，直接报错且不改凭据
         before = self.write_credentials(refresh_token="fake-refresh")
         self.http.return_value = (401, {})
         result = billing.kimi_usage()
         self.assertEqual(result.get("error"), "expired")
-        self.assertIn("等待", result.get("detail", ""))
-        self.assertEqual(self.http.call_count, 1)
+        self.assertIn("kimi login", result.get("detail", ""))
+        self.assertEqual(self.http.call_count, 1)   # 只有 usages 一次（刷新端点未触发）
         self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
 
     def quota(self, force=False):
@@ -191,12 +210,203 @@ class KimiReadOnlyTest(unittest.TestCase):
         with patch.object(billing.time, "time", return_value=self.now + 901):
             entry = self.quota()
             self.assertTrue(entry["windows"][0]["stale"])
-            self.assertIn("等待 Kimi Code", entry["note"])
+            self.assertIn("kimi login", entry["note"])
         with patch.object(billing.time, "time", return_value=self.now + 86401):
             entry = self.quota()
             self.assertEqual(entry["source"], "local")
             self.assertEqual(entry["windows"][0]["pct"], 20)
         self.http.assert_called_once()
+
+
+class KimiSelfRefreshTest(unittest.TestCase):
+    """过期凭据自愈：flock 串行化 → 锁内重读 → 自刷新 → 原子写回。
+    refresh_token 每次刷新轮换，写回是必要的（kimi-code 从磁盘重读新 token）。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="tt_kimi_refresh_")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name) / ".kimi-code"
+        self.path = self.root / "credentials" / "kimi-code.json"
+        self.path.parent.mkdir(parents=True)
+        self.now = 1_000_000.0
+        self.usage_payload = {"usage": {"limit": 100, "remaining": 55}}
+        for p in [patch.dict(os.environ, {"HOME": temp.name, "KIMI_CODE_HOME": str(self.root)}),
+                  patch.object(billing, "_cache", {}),
+                  patch.object(billing.time, "time", return_value=self.now),
+                  patch.object(billing, "_disk_path", return_value=str(Path(temp.name) / "quota.json"))]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def write_credentials(self, **overrides):
+        data = {"access_token": "fake-access", "expires_at": self.now - 60,
+                "refresh_token": "fake-refresh", "scope": "FEATURE_CODING",
+                "token_type": "Bearer", "expires_in": 900, **overrides}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+        return data
+
+    def refresh_payload(self, **overrides):
+        return {"access_token": "new-access", "refresh_token": "new-refresh",
+                "expires_in": 900, **overrides}
+
+    def test_expired_token_refreshes_writes_back_and_uses_new_token(self):
+        self.write_credentials()
+        calls = []
+
+        def http(url, headers, body=None, method="GET"):
+            calls.append((url, headers, body, method))
+            if url.endswith("/api/oauth/token"):
+                return 200, self.refresh_payload()
+            return 200, self.usage_payload
+
+        with patch.object(billing, "_http_json", side_effect=http):
+            result = billing.kimi_usage()
+        self.assertEqual(result.get("windows", {}).get("7d", {}).get("pct"), 45)
+        # 刷新请求：form 编码 + public client_id
+        url, headers, body, method = calls[0]
+        self.assertEqual(url, "https://auth.kimi.com/api/oauth/token")
+        self.assertEqual(method, "POST")
+        self.assertEqual(headers["Content-Type"], "application/x-www-form-urlencoded")
+        self.assertEqual(parse_qs(body.decode()),
+                         {"client_id": [billing._KIMI_CLIENT_ID],
+                          "grant_type": ["refresh_token"],
+                          "refresh_token": ["fake-refresh"]})
+        # usages 用新 token
+        self.assertEqual(calls[1][0], "https://api.kimi.com/coding/v1/usages")
+        self.assertEqual(calls[1][1]["Authorization"], "Bearer new-access")
+        # 写回：全部键保留、token 轮换、expires_at 更新、0600
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["access_token"], "new-access")
+        self.assertEqual(saved["refresh_token"], "new-refresh")
+        self.assertEqual(saved["scope"], "FEATURE_CODING")
+        self.assertEqual(saved["expires_in"], 900)
+        self.assertAlmostEqual(saved["expires_at"], self.now + 900)
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+
+    def test_race_winner_credentials_used_without_refresh_call(self):
+        """持锁等待期间别的进程已刷新：锁内重读直接采用，零刷新请求。"""
+        self.write_credentials()
+        ctx = multiprocessing.get_context("spawn")
+        acquired, wrote = ctx.Event(), ctx.Event()
+        fresh = {"access_token": "winner-access", "expires_at": self.now + 900}
+        lock_path = str(self.path.parent / ".tokentracker-refresh.lock")
+        child = ctx.Process(target=_kimi_lock_holder,
+                            args=(lock_path, str(self.path), fresh, acquired, wrote))
+        child.start()
+        try:
+            self.assertTrue(acquired.wait(5))
+            self.assertTrue(wrote.wait(5))
+            calls = []
+
+            def http(url, headers, body=None, method="GET"):
+                calls.append(url)
+                return 200, self.usage_payload
+
+            with patch.object(billing, "_http_json", side_effect=http):
+                result = billing.kimi_usage()
+        finally:
+            child.join(10)
+            if child.is_alive():
+                child.terminate()
+                child.join()
+        self.assertEqual(child.exitcode, 0)
+        self.assertEqual(result.get("windows", {}).get("7d", {}).get("pct"), 45)
+        self.assertEqual(calls, ["https://api.kimi.com/coding/v1/usages"])
+
+    def test_refresh_invalid_grant_rereads_disk_for_winner_token(self):
+        """刷新撞上并发轮换（旧 refresh_token 一用即废）→ 重读磁盘拿赢家的新 token。"""
+        self.write_credentials()
+        calls = []
+
+        def http(url, headers, body=None, method="GET"):
+            calls.append(url)
+            if url.endswith("/api/oauth/token"):
+                # 赢家已把新凭据写盘，我们只是后动手的一方
+                self.path.write_text(json.dumps(
+                    {"access_token": "winner-access", "expires_at": self.now + 900,
+                     "refresh_token": "winner-refresh"}), encoding="utf-8")
+                return 400, {"error": "invalid_grant"}
+            return 200, self.usage_payload
+
+        with patch.object(billing, "_http_json", side_effect=http):
+            result = billing.kimi_usage()
+        self.assertEqual(result.get("windows", {}).get("7d", {}).get("pct"), 45)
+        self.assertEqual(calls[-1], "https://api.kimi.com/coding/v1/usages")
+
+    def test_refresh_failure_without_winner_reports_expired(self):
+        self.write_credentials()
+        raw_before = self.path.read_bytes()
+
+        def http(url, headers, body=None, method="GET"):
+            if url.endswith("/api/oauth/token"):
+                return 400, {"error": "invalid_grant"}
+            return 200, self.usage_payload
+
+        with patch.object(billing, "_http_json", side_effect=http):
+            result = billing.kimi_usage()
+        self.assertEqual(result.get("error"), "expired")
+        self.assertIn("自动刷新失败", result.get("detail", ""))
+        self.assertEqual(self.path.read_bytes(), raw_before)   # 败北不改凭据
+
+    def test_write_back_failure_still_uses_new_token(self):
+        self.write_credentials()
+
+        def http(url, headers, body=None, method="GET"):
+            if url.endswith("/api/oauth/token"):
+                return 200, self.refresh_payload()
+            return 200, self.usage_payload
+
+        with patch.object(billing, "_http_json", side_effect=http), \
+                patch.object(billing, "_kimi_write_credentials", side_effect=OSError("readonly")):
+            result = billing.kimi_usage()
+        self.assertEqual(result.get("windows", {}).get("7d", {}).get("pct"), 45)
+
+    def test_expired_without_refresh_token_errors_without_http(self):
+        self.write_credentials(refresh_token=None)
+        with patch.object(billing, "_http_json") as http:
+            result = billing.kimi_usage()
+        self.assertEqual(result.get("error"), "expired")
+        self.assertIn("无 refresh_token", result.get("detail", ""))
+        http.assert_not_called()
+
+    def test_lock_timeout_returns_none(self):
+        self.write_credentials()
+        lock_path = self.path.parent / ".tokentracker-refresh.lock"
+        with lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            # timeout=0：即使测试时钟被冻结也立即超时（deadline=now 首检即中）
+            self.assertIsNone(billing._kimi_fresh_credentials(timeout=0))
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    def test_non_mainland_region_uses_ai_hosts(self):
+        (self.root / "region").write_text("global", encoding="utf-8")
+        self.write_credentials()
+        calls = []
+
+        def http(url, headers, body=None, method="GET"):
+            calls.append(url)
+            if url.endswith("/api/oauth/token"):
+                return 200, self.refresh_payload()
+            return 200, self.usage_payload
+
+        with patch.object(billing, "_http_json", side_effect=http):
+            billing.kimi_usage()
+        self.assertEqual(calls[0], "https://auth.kimi.ai/api/oauth/token")
+        self.assertEqual(calls[1], "https://api.kimi.ai/coding/v1/usages")
+
+    def test_oauth_host_env_override(self):
+        self.write_credentials()
+        calls = []
+
+        def http(url, headers, body=None, method="GET"):
+            calls.append(url)
+            if url.endswith("/api/oauth/token"):
+                return 200, self.refresh_payload()
+            return 200, self.usage_payload
+
+        with patch.dict(os.environ, {"KIMI_CODE_OAUTH_HOST": "https://auth.example.com"}), \
+                patch.object(billing, "_http_json", side_effect=http):
+            billing.kimi_usage()
+        self.assertEqual(calls[0], "https://auth.example.com/api/oauth/token")
 
 
 class ProviderRetryTest(unittest.TestCase):
