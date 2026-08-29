@@ -264,3 +264,7 @@ class VisibilityHealTest(unittest.TestCase):
         bar = self._bar(visible=True)
         bar.tt_status = None
         bar.tt_nudge()
+
+    def test_module_has_json_for_get(self):
+        """_get 依赖 json；重写时曾漏 import 导致轮询静默失效（回归防护）。"""
+        self.assertTrue(hasattr(self.mb, "json"))
