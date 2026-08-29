@@ -13,6 +13,7 @@ DEFAULTS = {
     "menubar_compact": False,       # 紧凑标题（刘海屏 / 菜单栏图标多时防被挤出）
     "launch_at_login": False,       # 开机自动启动（桌面 App 写入 LaunchAgent）
     "terminal_app": "auto",         # 继续会话用哪个终端：auto/terminal/iterm/wezterm/ghostty
+    "unit_yi": False,               # 大数以「亿」显示（≥1e8，界面与状态栏同步）
 }
 
 

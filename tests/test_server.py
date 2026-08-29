@@ -320,3 +320,14 @@ class CliScanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_settings_unit_yi_whitelist(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(
+                server.prefs, "prefs_path", return_value=os.path.join(d, "settings.json")):
+            ok = self.handler("/api/settings", b'{"unit_yi": true}')
+            ok.do_POST()
+            self.assertEqual(ok._send.call_args.args[0], 200)
+            bad = self.handler("/api/settings", b'{"unit_yi": "yes"}')
+            bad.do_POST()
+            self.assertEqual(bad._send.call_args.args[0], 400)
+            self.assertTrue(server.prefs.load_prefs()["unit_yi"])

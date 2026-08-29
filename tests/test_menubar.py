@@ -268,3 +268,25 @@ class VisibilityHealTest(unittest.TestCase):
     def test_module_has_json_for_get(self):
         """_get 依赖 json；重写时曾漏 import 导致轮询静默失效（回归防护）。"""
         self.assertTrue(hasattr(self.mb, "json"))
+
+class UnitYiTest(unittest.TestCase):
+    """「亿」单位开关：≥1e8 以亿显示，状态栏与界面共用同一格式化。"""
+
+    def test_fmt_tokens_yi(self):
+        self.assertEqual(menubar_fmt.fmt_tokens(5.5e8, yi=True), "5.50亿")
+        self.assertEqual(menubar_fmt.fmt_tokens(1e8, yi=True), "1.00亿")
+        self.assertEqual(menubar_fmt.fmt_tokens(99_999_999, yi=True), "100.00M")
+        self.assertEqual(menubar_fmt.fmt_tokens(5.5e8), "550.00M")   # 关闭时保持原样
+
+    def test_title_segments_yi(self):
+        entry = {"id": "claude", "windows": [{"pct": 12, "source": "official"}]}
+        segs = menubar_fmt.fmt_segments({"tokens": 550_000_000}, [entry], "claude",
+                                        compact=True, yi=True)
+        self.assertIn(("5.50亿", "tokens"), segs)
+        self.assertEqual(menubar_fmt.fmt_title({"tokens": 550_000_000}, [entry],
+                                               "claude", compact=True, yi=True),
+                         "⚡5.50亿·C12%")
+
+    def test_today_line_yi(self):
+        segs = menubar_fmt.today_line_segments({"tokens": 3.3e8, "cost": 1.5}, yi=True)
+        self.assertIn(("3.30亿", "tokens"), segs)

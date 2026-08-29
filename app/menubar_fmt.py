@@ -53,8 +53,10 @@ def quota_marker(window: dict) -> str:
     return "≈"
 
 
-def fmt_tokens(n) -> str:
+def fmt_tokens(n, yi: bool = False) -> str:
     n = float(n or 0)
+    if yi and n >= 1e8:
+        return f"{n / 1e8:.2f}亿"
     if n >= 1e9:
         return f"{n / 1e9:.2f}B"
     if n >= 1e6:
@@ -87,16 +89,17 @@ def fmt_quota(window: dict) -> str:
 
 
 def fmt_title(today: dict | None, entries: list | None, provider: str | None,
-              compact: bool = False) -> str:
+              compact: bool = False, yi: bool = False) -> str:
     """纯文本标题（= 分段渲染的拼接；调试/预览/测试用）。语义见 fmt_segments。"""
-    return "".join(text for text, _ in fmt_segments(today, entries, provider, compact))
+    return "".join(text for text, _ in fmt_segments(today, entries, provider, compact, yi))
 
 
 def fmt_segments(today: dict | None, entries: list | None, provider: str | None,
-                 compact: bool = False) -> list[tuple[str, str]]:
+                 compact: bool = False, yi: bool = False) -> list[tuple[str, str]]:
     """状态栏标题分段：[(文本, role)]，role 由 AppKit 层映射为颜色。
 
-    `⚡ 12.30M · C 45%`；紧凑模式 `⚡12.30M·C45%`（无空格，防刘海挤出）。
+    `⚡ 12.30M · C 45%`；紧凑模式 `⚡12.30M·C45%`（无空格，防刘海挤出）；
+    yi=True 时 ≥1 亿的 token 以「亿」显示（如 `⚡0.55亿·C12%`）。
     role：bolt ⚡品牌橙 / tokens 主色 / dim 弱化 / glyph 平台字母 /
     marker 过期估算标记 / quota_ok|warn|crit 配额紧急度。
     选中平台无数据时降级为仅今日用量；today 无数据时显示 ⚡ —。
@@ -104,7 +107,7 @@ def fmt_segments(today: dict | None, entries: list | None, provider: str | None,
     sep = "" if compact else " "
     segs: list[tuple[str, str]] = [("⚡", "bolt")]
     if today:
-        segs.append((f"{sep}{fmt_tokens(today['tokens'])}", "tokens"))
+        segs.append((f"{sep}{fmt_tokens(today['tokens'], yi)}", "tokens"))
     else:
         segs.append((f"{sep}—", "dim"))
     if not provider or provider == "off":
@@ -125,11 +128,11 @@ def fmt_segments(today: dict | None, entries: list | None, provider: str | None,
     return segs
 
 
-def today_line_segments(today: dict | None) -> list[tuple[str, str]]:
+def today_line_segments(today: dict | None, yi: bool = False) -> list[tuple[str, str]]:
     """菜单首行分段：今日 xx tokens · $cost。"""
     if not today:
         return [("今日暂无数据（点「立即扫描」）", "dim")]
-    return [("今日 ", "dim"), (fmt_tokens(today["tokens"]), "tokens"),
+    return [("今日 ", "dim"), (fmt_tokens(today["tokens"], yi), "tokens"),
             (" tokens", "dim"), (" · ", "dim"), (f"${today['cost']:.2f}", "cost")]
 
 

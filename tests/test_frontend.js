@@ -69,6 +69,11 @@ async function main() {
   desktop.run('renderStatCards([row], {...row, sessions: 1, unallocated: {tokens: 3, cost: 1, events: 1}});');
   assert.equal(desktop.run('state.statPrev.tok'), 10, 'total must include all four token categories exactly once');
   assert.ok(desktop.element('#timeQuality').textContent.includes('未分配'));
+  // 「亿」单位开关：≥1e8 换单位，关闭时保持 K/M/B
+  assert.equal(desktop.run('fmtT(550000000)'), '550.00M');
+  assert.equal(desktop.run('state.unitYi = true; fmtT(550000000)'), '5.50亿');
+  assert.equal(desktop.run('fmtT(99999999)'), '100.00M');
+  assert.equal(desktop.run('state.unitYi = false; fmtT(550000000)'), '550.00M');
   desktop.run('drawTrend([{tool: "claude", d: "2026-08-01", ...row, tool: "claude"}]);');
   assert.equal(desktop.run('state.chart.data.datasets[0].data[0]'), 10);
   assert.ok(desktop.element('#sessBody').innerHTML.includes('10'), 'session total is shown');

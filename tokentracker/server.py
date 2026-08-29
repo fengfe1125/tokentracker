@@ -117,6 +117,7 @@ _SETTINGS_SCHEMA = {
     "menubar_compact": lambda v: isinstance(v, bool),
     "launch_at_login": lambda v: isinstance(v, bool),
     "terminal_app": lambda v: v in resume.TERMINAL_APPS,
+    "unit_yi": lambda v: isinstance(v, bool),
 }
 
 

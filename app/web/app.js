@@ -18,6 +18,7 @@ const TOOL_ORDER = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"
 
 const $ = (s, el = document) => el.querySelector(s);
 const fmtT = n => { n = +n || 0;
+  if (state.unitYi && n >= 1e8) return (n / 1e8).toFixed(2) + "亿";
   if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
   if (n >= 1e4) return (n / 1e3).toFixed(1) + "K";
@@ -75,6 +76,7 @@ function animateNum(el, to, fmtFn, dur = 700) {
 /* ─────────── 状态 ─────────── */
 const state = { range: "week", tool: null, chart: null, logScale: false,
                 scanning: false, detected: null, sessRows: [],
+                unitYi: false,
                 sort: { key: "ts", dir: -1 },
                 quotaPrev: {}, statPrev: {}, inFlight: 0, forceQuotaAfterScan: false };
 
@@ -675,6 +677,8 @@ async function loadSettings() {
     if (sel.value !== (s.menubar_provider || "off")) sel.value = "off"; // 平台已下架时回退
     const termSel = $("#setTerminal");
     if (termSel) termSel.value = s.terminal_app || "auto";
+    state.unitYi = !!s.unit_yi;
+    $("#setUnitYi").checked = state.unitYi;
     $("#setCompact").checked = !!s.menubar_compact;
     $("#setLogin").checked = !!s.launch_at_login;
   } catch (e) { /* 服务未就绪时忽略 */ }
@@ -708,6 +712,12 @@ $("#setProvider").onchange = e => saveSetting("menubar_provider", e.target.value
 $("#setCompact").onchange = e => saveSetting("menubar_compact", e.target.checked);
 $("#setLogin").onchange = e => saveSetting("launch_at_login", e.target.checked);
 $("#setTerminal").onchange = e => saveSetting("terminal_app", e.target.value);
+$("#setUnitYi").onchange = e => {
+  state.unitYi = e.target.checked;
+  saveSetting("unit_yi", e.target.checked);
+  refreshAll();                                   // 概览/图表即时换单位
+  if (!$("#view-sessions").classList.contains("hidden")) renderSessions();
+};
 $("#openDataDir").onclick = () => {
   const a = api();
   if (a && typeof a.open_data_folder === "function") a.open_data_folder();

@@ -81,6 +81,7 @@ class MenuBar(NSObject):
         self.tt_prefs = load_prefs()
         self.tt_provider = self.tt_prefs.get("menubar_provider", "claude")
         self.tt_compact = bool(self.tt_prefs.get("menubar_compact"))
+        self.tt_yi = bool(self.tt_prefs.get("unit_yi"))
         self.tt_login_applied = loginitem.is_enabled()
 
     # --------------------------------------------------------- 颜色 ----
@@ -196,7 +197,7 @@ class MenuBar(NSObject):
                     [(plain, self.tt_color("dim"))]))
             return
         segs = fmt_segments(self.tt_info.get("today"), self.tt_info.get("entries"),
-                            self.tt_provider, self.tt_compact)
+                            self.tt_provider, self.tt_compact, self.tt_yi)
         plain = "".join(text for text, _ in segs)
         parts = []
         for text, role in segs:
@@ -388,6 +389,7 @@ class MenuBar(NSObject):
         self.tt_prefs = prefs
         self.tt_provider = prefs.get("menubar_provider", "claude")
         self.tt_compact = bool(prefs.get("menubar_compact"))
+        self.tt_yi = bool(prefs.get("unit_yi"))
         want_login = bool(prefs.get("launch_at_login"))
         if want_login != self.tt_login_applied and loginitem.set_enabled(want_login):
             self.tt_login_applied = want_login
@@ -401,7 +403,7 @@ class MenuBar(NSObject):
 
     def menuNeedsUpdate_(self, menu):
         self.tt_set_attributed(self.tt_mi_today,
-                               today_line_segments(self.tt_info.get("today")))
+                               today_line_segments(self.tt_info.get("today"), self.tt_yi))
         entries = (self.tt_info.get("entries") or [])[:MAX_QUOTA_LINES]
         for i, it in enumerate(self.tt_mi_quota):
             if i < len(entries):
@@ -417,7 +419,7 @@ class MenuBar(NSObject):
         sub = NSMenu.alloc().init()
         preview = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "当前：" + fmt_title(self.tt_info.get("today"), entries,
-                                self.tt_provider, self.tt_compact), None, "")
+                                self.tt_provider, self.tt_compact, self.tt_yi), None, "")
         preview.setEnabled_(False)
         sub.addItem_(preview)
         sub.addItem_(NSMenuItem.separatorItem())
