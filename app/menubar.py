@@ -91,7 +91,10 @@ class MenuBar(NSObject):
         """段落 role → NSColor（语义色自适应明暗模式）。纯数据在 menubar_fmt。"""
         if role == "bolt":
             return NSColor.colorWithCalibratedRed_green_blue_alpha_(*_ACCENT, 1.0)
-        if role == "tokens" or role == "ink":
+        if role == "tokens":
+            # 用量数字用品牌暖橙（圆环模式下承接闪电的品牌位；菜单今日行一致）
+            return NSColor.colorWithCalibratedRed_green_blue_alpha_(*_ACCENT, 1.0)
+        if role == "ink":
             return NSColor.labelColor()
         if role in ("dim", "glyph", "cost"):
             return NSColor.secondaryLabelColor()
@@ -272,12 +275,18 @@ class MenuBar(NSObject):
         # 圆环模式的标题里已无百分比段，脉冲只作用在圆上；
         # 否则每帧都会用同样内容重写 attributedTitle（Tahoe 上会让图标消失）。
         text_pulse = None if self.tt_ring else pulse
+        # 圆环模式：平台字母承担文字版的紧急度着色（与圆环同色呼应）
+        glyph_role = ring_spec(self.tt_info.get("entries"),
+                               self.tt_provider).get("role") if self.tt_ring else None
         parts = []
         for text, role in segs:
             color = self.tt_color(role)
+            if role == "glyph" and glyph_role:
+                color = self.tt_color(glyph_role)
             if role == "tokens" and flash is not None:
                 # 闪光：品牌橙 → 主色
-                color = self.tt_color("bolt").blendedColorWithFraction_ofColor_(flash, color)
+                color = self.tt_color("bolt").blendedColorWithFraction_ofColor_(
+                    flash, NSColor.labelColor())
             elif role == "quota_crit" and text_pulse is not None:
                 color = color.colorWithAlphaComponent_(text_pulse)
             parts.append((text, color))
