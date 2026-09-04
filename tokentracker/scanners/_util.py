@@ -36,10 +36,52 @@ def stat_key(path: str) -> dict:
 
 
 def changed(cursor: dict, path: str) -> bool:
+    """只比对指纹键（游标里可能携带 'o' 增量偏移等附加字段）。"""
     try:
-        return cursor.get(path) != stat_key(path)
+        stored = cursor.get(path) or {}
+        return any(stored.get(k) != v for k, v in stat_key(path).items())
     except OSError:
         return True
+
+
+def read_jsonl_delta(path: str, offset: int):
+    """增量读 JSONL：从字节偏移量（必须是行边界）开始，只解析新增完整行。
+
+    返回 (items, new_offset)；items 为 (line_byte_offset, obj)，line 偏移量
+    在仅追加的文件里是稳定的兜底键。offset 失效（截断 / 轮转 / 不在行边界）
+    返回 ([], -1)，调用方应全量重扫。
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return [], -1
+    if offset < 0 or offset > st.st_size:
+        return [], -1
+    items = []
+    new_offset = offset
+    with open(path, "rb") as f:
+        if offset:
+            f.seek(offset - 1)
+            if f.read(1) != b"\n":
+                return [], -1
+        f.seek(offset)
+        while True:
+            pos = f.tell()
+            line = f.readline()
+            if not line:
+                new_offset = pos
+                break
+            if not line.endswith(b"\n"):   # 写入中的尾行：留给下次
+                new_offset = pos
+                break
+            new_offset = f.tell()
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                items.append((pos, obj))
+    return items, new_offset
 
 
 def iter_jsonl(path: str):

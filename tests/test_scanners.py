@@ -372,3 +372,49 @@ class TitleExtractionTest(unittest.TestCase):
         self.assertEqual(_util.user_text({"type": "assistant", "message": {"role": "assistant", "content": "x"}}), "")
         self.assertEqual(_util.user_text({"type": "summary", "summary": "x"}), "")
         self.assertEqual(_util.user_text({}), "")
+
+
+class ByteCursorTest(unittest.TestCase):
+    """字节游标增量读取（cc-switch 思路）：只读新增、防截断、防写入中尾行。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        import os
+        self.path = os.path.join(self.tmp.name, "s.jsonl")
+
+    def _write(self, lines):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+    def test_delta_reads_only_new_lines(self):
+        from tokentracker.scanners._util import read_jsonl_delta
+        self._write(['{"a":1}\n', '{"a":2}\n'])
+        items, off = read_jsonl_delta(self.path, 0)
+        self.assertEqual(len(items), 2)
+        # 追加一行后增量只读新行，行偏移稳定
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write('{"a":3}\n')
+        items, off2 = read_jsonl_delta(self.path, off)
+        self.assertEqual([o for o, _ in items], [off])
+        self.assertEqual(items[0][1]["a"], 3)
+        self.assertEqual(off2, os.path.getsize(self.path) if (os := __import__("os")) else None)
+
+    def test_incomplete_tail_line_deferred(self):
+        from tokentracker.scanners._util import read_jsonl_delta
+        self._write(['{"a":1}\n', '{"a":2'])   # 尾行写入中
+        items, off = read_jsonl_delta(self.path, 0)
+        self.assertEqual(len(items), 1)
+        self.assertLess(off, os.path.getsize(self.path))
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write('}\n')
+        items, off = read_jsonl_delta(self.path, off)
+        self.assertEqual(items[0][1]["a"], 2)
+
+    def test_truncation_and_misaligned_offset_force_full(self):
+        from tokentracker.scanners._util import read_jsonl_delta
+        self._write(['{"a":1}\n'])
+        size = os.path.getsize(self.path)
+        self.assertEqual(read_jsonl_delta(self.path, size + 100), ([], -1))  # 截断
+        self.assertEqual(read_jsonl_delta(self.path, 3), ([], -1))           # 不在行边界
