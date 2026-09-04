@@ -12,6 +12,8 @@ import shlex
 import shutil
 import subprocess
 
+from . import clifind
+
 # 工具 → resume 命令前缀（id 追加在最后）
 RESUME_PREFIX = {
     "claude": ("claude", "--resume"),
@@ -46,8 +48,8 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
 
 
 def cli_missing(argv: list[str]) -> str | None:
-    """CLI 不在 PATH 时返回可执行文件名，否则 None。"""
-    return argv[0] if shutil.which(argv[0]) is None else None
+    """CLI 解析不到时返回可执行文件名，否则 None。"""
+    return argv[0] if clifind.resolve(argv[0]) is None else None
 
 
 def _claude_cwd_from_jsonl(session_id: str, root: str | None = None) -> str | None:
@@ -92,15 +94,16 @@ def resolve_cwd(tool: str, session_id: str, project: str = "",
 def shell_line(tool: str, session_id: str, project: str = "",
                cwd_override: str | None = None,
                claude_root: str | None = None) -> tuple[str | None, str | None]:
-    """返回 (终端里执行的整行, 不可用原因)。每段 shlex.quote；目录存在才加 cd。"""
+    """返回 (终端里执行的整行, 不可用原因)。每段 shlex.quote；目录存在才加 cd。
+    CLI 用绝对路径（App 与 Terminal 两侧都不再依赖 PATH）。"""
     argv = resume_argv(tool, session_id)
     if argv is None:
         reason = "缺少会话 ID" if tool in RESUME_PREFIX else f"{tool} 不支持恢复会话"
         return None, reason
-    missing = cli_missing(argv)
-    if missing:
-        return None, f"未找到命令 {missing}（未安装或不在 PATH）"
-    cmd = " ".join(shlex.quote(a) for a in argv)
+    exe = clifind.resolve(argv[0])
+    if exe is None:
+        return None, f"未找到命令 {argv[0]}（未安装或不在常见路径）"
+    cmd = " ".join(shlex.quote(a) for a in [exe, *argv[1:]])
     cwd = None
     if cwd_override and os.path.isdir(cwd_override):
         cwd = cwd_override

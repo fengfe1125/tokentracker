@@ -30,7 +30,7 @@ class ShellLineTest(unittest.TestCase):
     def test_quotes_hostile_values(self):
         import shlex
         evil = '$(touch /tmp/pwned)";`id`'
-        with patch.object(resume.shutil, "which", return_value="/usr/bin/x"):
+        with patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"):
             cmd, reason = resume.shell_line("claude", evil, "/nonexistent-dir-xyz")
         self.assertIsNone(reason)
         self.assertIn(shlex.quote(evil), cmd)
@@ -38,13 +38,13 @@ class ShellLineTest(unittest.TestCase):
 
     def test_cds_into_existing_project(self):
         with tempfile.TemporaryDirectory() as d, \
-                patch.object(resume.shutil, "which", return_value="/usr/bin/x"):
+                patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"):
             cmd, _ = resume.shell_line("codex", "abc", d)
         self.assertTrue(cmd.startswith("cd "))
-        self.assertIn("codex resume abc", cmd)
+        self.assertTrue(cmd.endswith("resume abc"))
 
     def test_missing_cli_reports_reason(self):
-        with patch.object(resume.shutil, "which", return_value=None):
+        with patch.object(resume.clifind, "resolve", return_value=None):
             cmd, reason = resume.shell_line("claude", "abc", "")
         self.assertIsNone(cmd)
         self.assertIn("claude", reason)
@@ -56,7 +56,7 @@ class ShellLineTest(unittest.TestCase):
 
     def test_cwd_override_wins_when_directory_exists(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b, \
-                patch.object(resume.shutil, "which", return_value="/usr/bin/x"):
+                patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"):
             cmd, _ = resume.shell_line("codex", "abc", a, cwd_override=b)
         self.assertIn(f"cd {b}", cmd)
 
@@ -84,13 +84,13 @@ class InfoTest(unittest.TestCase):
         self.assertIn("不支持", payload["reason"])
 
     def test_missing_cli(self):
-        with patch.object(resume.shutil, "which", return_value=None):
+        with patch.object(resume.clifind, "resolve", return_value=None):
             payload = resume.info("claude", "abc", "")
         self.assertFalse(payload["ok"])
         self.assertIn("claude", payload["reason"])
 
     def test_ok_with_cwd_flag(self):
-        with patch.object(resume.shutil, "which", return_value="/usr/bin/x"), \
+        with patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"), \
                 tempfile.TemporaryDirectory() as d:
             payload = resume.info("codex", "abc", d)
             self.assertTrue(payload["ok"])
@@ -140,3 +140,53 @@ class TerminalTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CliFindTest(unittest.TestCase):
+    """三级 CLI 解析：进程 PATH → 登录 shell 探测 → 常见目录。"""
+
+    def setUp(self):
+        from tokentracker import clifind
+        self.cf = clifind
+        clifind.clear_cache()
+        self.addCleanup(clifind.clear_cache)
+
+    def test_which_hit_short_circuits(self):
+        with patch.object(self.cf.shutil, "which", return_value="/x/bin/kimi"):
+            self.assertEqual(self.cf.resolve("kimi"), "/x/bin/kimi")
+
+    def test_login_shell_probe_fallback_and_rc_noise(self):
+        import os, tempfile, types
+        with tempfile.TemporaryDirectory() as d:
+            exe = os.path.join(d, "kimi")
+            open(exe, "w").write("x")   # 探测函数会校验文件真实存在
+            # rc 文件回显提示语，command -v 的绝对路径在最后一行
+            fake = types.SimpleNamespace(stdout="加载完成!\n" + exe + "\n", returncode=0)
+            with patch.object(self.cf.shutil, "which", return_value=None), \
+                    patch.object(self.cf, "_probe_common_dirs", return_value=None):
+                self.assertEqual(self.cf.resolve("kimi", run=lambda *a, **k: fake), exe)
+
+    def test_common_dirs_fallback(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            exe = os.path.join(d, "mycli")
+            open(exe, "w").write("#!/bin/sh\n")
+            os.chmod(exe, 0o755)
+            with patch.object(self.cf.shutil, "which", return_value=None), \
+                    patch.object(self.cf, "_probe_login_shell", return_value=None), \
+                    patch.object(self.cf, "_COMMON_DIRS", (d,)):
+                self.assertEqual(self.cf.resolve("mycli"), exe)
+
+    def test_cache_and_missing(self):
+        calls = []
+        with patch.object(self.cf.shutil, "which", side_effect=lambda n: calls.append(n) or None), \
+                patch.object(self.cf, "_probe_login_shell", return_value=None), \
+                patch.object(self.cf, "_probe_common_dirs", return_value=None):
+            self.assertIsNone(self.cf.resolve("nope-cli"))
+            self.assertIsNone(self.cf.resolve("nope-cli"))   # 缓存命中
+        self.assertEqual(len(calls), 1)
+
+    def test_resume_command_uses_absolute_path(self):
+        with patch.object(resume.clifind, "resolve", return_value="/abs/path/kimi"):
+            cmd, reason = resume.shell_line("kimi", "abc", "/tmp")
+        self.assertIn("/abs/path/kimi --session session_abc", cmd)

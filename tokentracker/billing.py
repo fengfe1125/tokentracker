@@ -39,6 +39,8 @@ import os
 import re
 import select
 import shutil
+
+from . import clifind
 import subprocess
 import sys
 import tempfile
@@ -387,7 +389,7 @@ def _claude_refresh_cli(refresh_token: str) -> dict:
     隔离 CLAUDE_CONFIG_DIR + CLAUDE_CODE_OAUTH_REFRESH_TOKEN 环境变量跑
     `claude auth login`，端点/UA/scope 全由官方 CLI 决定，抗协议变更。
     返回 {"access_token", "refresh_token"?, "expires_in"}。"""
-    claude = shutil.which("claude")
+    claude = clifind.resolve("claude")
     if not claude:
         raise RuntimeError("未找到 claude CLI")
     import tempfile
@@ -837,14 +839,7 @@ def _spawn_env() -> dict:
 
 
 def _find_codex() -> str | None:
-    p = shutil.which("codex")
-    if p:
-        return p
-    for d in _extra_bin_dirs():
-        c = os.path.join(d, "codex")
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return None
+    return clifind.resolve("codex")
 
 
 def _codex_rpc(bin_path: str) -> dict:
