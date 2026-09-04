@@ -135,7 +135,7 @@ def fmt_ms(ms: int) -> str:
 _CONTEXT_PREFIXES = ("# AGENTS.md", "<INSTRUCTIONS>", "<environment_context>",
                      "<system-reminder>", "Caveat:", "<command-", "<local-command",
                      "<recommended_plugins", "<user_instructions",
-                     "## Referenced ChatGPT conversation",
+                     "## Referenced ChatGPT conversation", "<task-notification",
                      "The following is the Codex agent history")
 
 
