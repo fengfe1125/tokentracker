@@ -51,6 +51,7 @@ def scan(conn, prices, full: bool = False) -> dict:
                 model=_model_id(r["model"]), input=r["tokens_input"], output=r["tokens_output"],
                 cache_read=r["tokens_cache_read"], cache_write=r["tokens_cache_write"],
                 native_cost=r["cost"], prices=prices, legacy_key=str(r["id"]), observed_at=observed_at)
+            db.set_session_title(conn, NAME, str(r["id"]), r["title"] or "")
             added += result["added"]
             resets += result["counter_resets"]
             updated += 1

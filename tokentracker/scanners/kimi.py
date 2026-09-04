@@ -63,12 +63,17 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
             session_id = name[len("session_"):-len(".jsonl")]
             project = ""
             model_hint = ""
+            title = None
             for lineno, obj in iter_jsonl(path):
                 if not isinstance(obj, dict):
                     continue
                 kind = obj.get("kind")
                 env = obj.get("envelope") or {}
                 payload = env.get("payload") or {}
+                if title is None and kind == "event" and env.get("type") == "turn.started":
+                    prompt = payload.get("prompt")
+                    if isinstance(prompt, str) and prompt.strip():
+                        title = " ".join(prompt.split())[:120]
                 if kind == "event" and env.get("type") == "event.session.created":
                     sess = payload.get("session") or {}
                     meta = sess.get("metadata") or {}
@@ -100,6 +105,8 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                                       input=inp, output=outp, cache_read=cr,
                                       cache_write=cw, cost=cost)
             cursor[path] = snapshot
+            if title:
+                db.set_session_title(conn, NAME, session_id, title)
     return added, updated, files
 
 

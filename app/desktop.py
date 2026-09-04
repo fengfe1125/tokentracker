@@ -224,8 +224,19 @@ def main():
         # 事件循环已就绪：原生窗口修饰 + 状态栏图标；扫描由Python服务定时执行。
         _style_native_window()
         api.menubar = install_menubar(api, url)
+        threading.Thread(target=_check_update, daemon=True).start()
         if os.environ.get("TT_SELFCHECK") == "1":
             threading.Thread(target=_selfcheck, daemon=True).start()
+
+    def _check_update():
+        """启动 30s 后静默检查新版本（结果写缓存，设置页读取）。"""
+        import time as _t
+        _t.sleep(30)
+        try:
+            from tokentracker import updatecheck
+            updatecheck.check()
+        except Exception:
+            pass
 
     def _selfcheck():
         """开发自检：抓取主窗口渲染状态与状态栏状态写入 /tmp/tt_selfcheck.json。"""

@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 
 from .. import db, pricing
-from ._util import changed, expand, iter_jsonl, stat_key
+from ._util import changed, expand, iter_jsonl, stat_key, user_text
 
 NAME = "claude"
 DETAIL = "~/.claude/projects/**/*.jsonl"
@@ -60,9 +60,14 @@ def scan(conn, prices, full: bool = False) -> dict:
             except OSError:
                 continue
             session_id = name[:-6]
+            title = None
             for lineno, obj in iter_jsonl(path):
                 if not isinstance(obj, dict):
                     continue
+                if title is None:
+                    text = user_text(obj)
+                    if text:
+                        title = text
                 msg = obj.get("message")
                 msg = msg if isinstance(msg, dict) else {}
                 usage = msg.get("usage")
@@ -85,5 +90,7 @@ def scan(conn, prices, full: bool = False) -> dict:
                                       model=model, input=inp, output=outp,
                                       cache_read=cr, cache_write=cw, cost=cost)
             cursor[path] = snapshot
+            if title:
+                db.set_session_title(conn, NAME, session_id, title)
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files}

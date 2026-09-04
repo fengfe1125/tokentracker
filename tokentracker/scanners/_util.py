@@ -87,3 +87,43 @@ def sqlite_ro(path: str):
 def fmt_ms(ms: int) -> str:
     import datetime
     return datetime.datetime.fromtimestamp(ms / 1000).isoformat(timespec="seconds")
+
+
+# ------------------------------------------------------------ 会话标题 ----
+_CONTEXT_PREFIXES = ("# AGENTS.md", "<INSTRUCTIONS>", "<environment_context>",
+                     "<system-reminder>", "Caveat:", "<command-", "<local-command",
+                     "<recommended_plugins", "<user_instructions",
+                     "## Referenced ChatGPT conversation",
+                     "The following is the Codex agent history")
+
+
+def _content_text(content) -> str:
+    """消息 content：纯字符串或块列表（claude text / codex input_text）。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(b.get("text", "")) for b in content
+                        if isinstance(b, dict) and b.get("type") in ("text", "input_text"))
+    return ""
+
+
+def user_text(obj) -> str:
+    """从 JSONL 行提取首个真实用户消息（跳过 AGENTS.md/环境上下文等注入）。
+
+    覆盖 claude(type=user)、pi(type=message role=user)、codex(response_item
+    role=user)。无匹配返回 ""。
+    """
+    text = ""
+    kind = obj.get("type") if isinstance(obj, dict) else None
+    if kind in ("user", "message"):
+        msg = obj.get("message") or {}
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            text = _content_text(msg.get("content"))
+    elif kind == "response_item":
+        payload = obj.get("payload") or {}
+        if isinstance(payload, dict) and payload.get("role") == "user":
+            text = _content_text(payload.get("content"))
+    text = " ".join((text or "").split())
+    if not text or text.startswith(_CONTEXT_PREFIXES):
+        return ""
+    return text[:120]

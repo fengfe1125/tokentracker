@@ -119,7 +119,11 @@
           <p id="sessSub">—</p>
           <p class="time-quality">* 表示按观测时间估算或未分配；悬停查看，详情保留会话全部历史。</p>
         </div>
-        <div class="filter-chips" id="toolFilter"></div>
+        <div class="filter-side">
+          <div class="filter-chips" id="toolFilter"></div>
+          <input class="sess-search" id="sessSearch" type="search"
+                 placeholder="搜索会话（标题/项目/模型）…" spellcheck="false" autocomplete="off">
+        </div>
       </div>
       <div class="card table-card">
         <table>
@@ -239,6 +243,20 @@
             <span>用量数据库、配额缓存与设置文件</span>
           </div>
           <button class="mini-btn" id="openDataDir">~/.tokentracker</button>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <div class="card-head">
+          <h2>关于</h2>
+          <span class="hint">版本与更新</span>
+        </div>
+        <div class="set-row">
+          <div class="set-info">
+            <b>TokenTracker</b>
+            <span id="aboutVersion">当前版本 —</span>
+          </div>
+          <a class="mini-btn" id="updateBtn" style="display:none" href="#" target="_blank" rel="noopener">有新版本 →</a>
         </div>
       </div>
     </section>

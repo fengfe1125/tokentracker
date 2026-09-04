@@ -210,7 +210,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 rows = db.sessions(conn, q.get("range", ["all"])[0],
                                    q.get("tool", [None])[0] or None,
-                                   int(q.get("limit", ["300"])[0]))
+                                   int(q.get("limit", ["300"])[0]),
+                                   (q.get("q", [""])[0] or "").strip()[:100] or None)
             finally:
                 conn.close()
             self._send(200, {"rows": rows})
@@ -233,6 +234,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, self.server.scan_service.snapshot())
         elif p == "/api/settings":
             self._send(200, _settings_payload())
+        elif p == "/api/version":
+            from . import __version__, updatecheck
+            info = updatecheck.read_cache()
+            self._send(200, {"version": __version__,
+                             "update": info if updatecheck.update_available(info) else None})
         elif p == "/api/resume":
             self._send(200, resume.info(q.get("tool", [""])[0],
                                         q.get("session_id", [""])[0],

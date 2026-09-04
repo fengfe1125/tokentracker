@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS migration_history (
     version INTEGER NOT NULL, migrated_at INTEGER NOT NULL, event_id INTEGER,
     original_json TEXT NOT NULL, note TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS session_meta (
+    tool TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
+    updated_at INTEGER NOT NULL, PRIMARY KEY(tool, session_id)
+);
 """
 
 
@@ -64,7 +68,7 @@ def _upgrade(conn, path):
             conn.backup(backup)
     conn.execute("BEGIN IMMEDIATE")
     try:
-        if legacy:
+        if legacy and version < 1:
             columns = {
                 "time_quality": "TEXT NOT NULL DEFAULT 'exact'", "interval_start": "INTEGER",
                 "cost_source": "TEXT NOT NULL DEFAULT 'estimate'",
@@ -76,7 +80,7 @@ def _upgrade(conn, path):
         for statement in SCHEMA.split(";"):
             if statement.strip():
                 conn.execute(statement)
-        if legacy:
+        if legacy and version < 1:
             from .pricing import cost_for, load_prices
             prices = load_prices()
             for row in conn.execute("SELECT * FROM usage_events WHERE tool IN ('codex','opencode','hermes')").fetchall():
@@ -394,9 +398,28 @@ def session_detail(conn, tool, session_id):
     return {"models": model_rows, **total, "observation_intervals": intervals}
 
 
-def sessions(conn, range_key="all", tool=None, limit=300):
+def set_session_title(conn, tool: str, session_id: str, title: str):
+    """记录会话标题（首个 user 消息等）。只在内容变化时更新，幂等。"""
+    title = " ".join((title or "").split())[:120]
+    if not title or not session_id:
+        return
+    conn.execute("""INSERT INTO session_meta VALUES (?,?,?,?)
+        ON CONFLICT(tool, session_id) DO UPDATE SET title=excluded.title,
+        updated_at=excluded.updated_at WHERE session_meta.title != excluded.title""",
+        (tool, session_id, title, int(time.time() * 1000)))
+
+
+def sessions(conn, range_key="all", tool=None, limit=300, q=None):
     where, args = _filter(range_key, tool)
-    return [dict(r) for r in conn.execute(f"""SELECT tool,session_id,MAX(project) AS project,
+    base = f"""SELECT tool,session_id,MAX(project) AS project,
         datetime(MAX(CASE WHEN time_quality!='unallocated' THEN ts END)/1000,'unixepoch','localtime') AS last_seen,
         MAX(CASE WHEN time_quality!='unallocated' THEN ts END) AS ts,MAX(model) AS model,{_AGG}
-        FROM usage_events WHERE {where} GROUP BY tool,session_id ORDER BY ts DESC LIMIT ?""", [*args, limit])]
+        FROM usage_events WHERE {where} GROUP BY tool,session_id ORDER BY ts DESC"""
+    sql = (f"SELECT s.*, m.title FROM ({base}) s LEFT JOIN session_meta m "
+           f"ON m.tool=s.tool AND m.session_id=s.session_id")
+    if q:
+        sql += (" WHERE (m.title LIKE ? OR s.project LIKE ? OR s.session_id LIKE ? "
+                "OR s.model LIKE ?)")
+        args = [*args, *([f"%{q}%"] * 4)]
+    sql += " ORDER BY s.ts DESC LIMIT ?"
+    return [dict(r) for r in conn.execute(sql, [*args, limit])]

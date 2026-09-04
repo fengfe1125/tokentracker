@@ -78,6 +78,7 @@ function animateNum(el, to, fmtFn, dur = 700) {
 const state = { range: "week", tool: null, chart: null, logScale: false,
                 scanning: false, detected: null, sessRows: [],
                 unitYi: false,
+                searchQ: "",
                 sort: { key: "ts", dir: -1 },
                 quotaPrev: {}, statPrev: {}, inFlight: 0, forceQuotaAfterScan: false };
 
@@ -135,7 +136,8 @@ async function loadModels() {
 }
 async function loadSessions() {
   const tool = state.tool ? "&tool=" + encodeURIComponent(state.tool) : "";
-  const d = await jget("/api/sessions?range=" + state.range + "&limit=300" + tool);
+  const q = state.searchQ ? "&q=" + encodeURIComponent(state.searchQ) : "";
+  const d = await jget("/api/sessions?range=" + state.range + "&limit=300" + tool + q);
   state.sessRows = d.rows || [];
   renderSessions();
 }
@@ -478,7 +480,7 @@ function renderSessions() {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };
     return `<tr data-i="${i}" style="--i:${Math.min(i, 14)}" title="点击查看会话详情">
       <td><span class="tool-cell"><span class="dot" style="background:${meta.color}"></span>${esc(meta.name)}</span></td>
-      <td class="proj" title="${esc(r.project || r.session_id || "")}">${esc(r.project || (r.session_id || "—").slice(0, 26))}</td>
+      <td class="proj" title="${esc([r.project, r.session_id].filter(Boolean).join(" · "))}">${esc((r.title || "").trim() || r.project || (r.session_id || "—").slice(0, 26))}</td>
       <td class="model-cell" title="${esc(r.model || "")}">${esc(r.model || "—")}</td>
       <td class="when" title="${esc(qualityLabel(r))}">${relTime(r.last_seen)}${qualityLabel(r) ? " *" : ""}</td>
       <td class="num">${fmtT(tokensOf(r))}</td>
@@ -751,6 +753,17 @@ async function loadSettings() {
     $("#setLogin").checked = !!s.launch_at_login;
   } catch (e) { /* 服务未就绪时忽略 */ }
   const bridge = api(), loginInput = $("#setLogin"), hint = $("#loginHint");
+  try {
+    const v = await (await fetch("/api/version")).json();
+    const el = $("#aboutVersion");
+    if (el) el.textContent = "当前版本 v" + (v.version || "?");
+    const btn = $("#updateBtn");
+    if (btn && v.update) {
+      btn.style.display = "";
+      btn.textContent = "有新版本 " + v.update.latest + " →";
+      btn.href = v.update.url;
+    }
+  } catch (e) { /* 忽略 */ }
   if (!bridge || typeof bridge.launch_at_login_supported !== "function") {
     loginInput.disabled = true;
     hint.textContent = "开机自启仅桌面 App 支持";
@@ -808,6 +821,17 @@ function switchView(name) {
   if (name === "settings") loadSettings();
 }
 document.querySelectorAll(".nav-item").forEach(b => b.onclick = () => switchView(b.dataset.view));
+
+$("#sessSearch").oninput = (() => {
+  let timer = 0;
+  return e => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      state.searchQ = e.target.value.trim();
+      loadSessions();
+    }, 300);
+  };
+})();
 
 /* 时间范围 chips：滑动选中块 */
 function moveRangeInk() {

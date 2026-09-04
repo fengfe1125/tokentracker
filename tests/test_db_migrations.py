@@ -130,3 +130,39 @@ class DatabaseAccountingTest(unittest.TestCase):
             self.assertEqual(db.daily(conn, "day"), [])
             self.assertEqual(db.time_summary(conn, "day", bucket="hour")["unallocated"]["tokens"], 1110)
         self.assertEqual(db.stats(conn)[1]["tokens"], 1110)
+
+class SessionMetaTest(unittest.TestCase):
+    def test_title_upsert_trim_and_change_only(self):
+        import tempfile, os
+        from tokentracker import db
+        with tempfile.TemporaryDirectory() as d:
+            conn = db.connect(os.path.join(d, "usage.db"))
+            db.put_event(conn, "claude", "k1", session_id="s1", ts=1, input=1)
+            db.set_session_title(conn, "claude", "s1", "  多行\n标题   空白  ")
+            row = conn.execute("SELECT title FROM session_meta WHERE tool='claude' AND session_id='s1'").fetchone()
+            self.assertEqual(row["title"], "多行 标题 空白")
+            db.set_session_title(conn, "claude", "s1", "多行 标题 空白")   # 幂等
+            db.set_session_title(conn, "claude", "s1", "")               # 空标题忽略
+            db.set_session_title(conn, "claude", "s1", "新标题")
+            row = conn.execute("SELECT title FROM session_meta WHERE tool='claude' AND session_id='s1'").fetchone()
+            self.assertEqual(row["title"], "新标题")
+            conn.close()
+
+    def test_sessions_title_join_and_q_filter(self):
+        import tempfile, os
+        from tokentracker import db
+        with tempfile.TemporaryDirectory() as d:
+            conn = db.connect(os.path.join(d, "usage.db"))
+            db.put_event(conn, "claude", "k1", session_id="s1", project="/p/a", ts=1700000000000, input=1)
+            db.put_event(conn, "claude", "k2", session_id="s2", project="/p/b", ts=1700000000001, input=1)
+            db.set_session_title(conn, "claude", "s1", "修复配额显示")
+            all_rows = db.sessions(conn, "all")
+            self.assertEqual(all_rows[0]["title"] if all_rows[0]["session_id"] == "s1" else all_rows[1]["title"], "修复配额显示")
+            hit = db.sessions(conn, "all", q="配额")
+            self.assertEqual(len(hit), 1)
+            self.assertEqual(hit[0]["session_id"], "s1")
+            hit2 = db.sessions(conn, "all", q="/p/b")
+            self.assertEqual(len(hit2), 1)
+            self.assertIsNone(hit2[0]["title"])
+            self.assertEqual(db.sessions(conn, "all", q="不存在的关键词"), [])
+            conn.close()

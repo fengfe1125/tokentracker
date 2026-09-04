@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 
 from .. import db, pricing
-from ._util import changed, expand, iter_jsonl, sqlite_ro, stat_key
+from ._util import changed, expand, iter_jsonl, sqlite_ro, stat_key, user_text
 
 NAME = "codex"
 DETAIL = "~/.codex/logs_2.sqlite 或 ~/.codex/sessions/"
@@ -207,9 +207,14 @@ def _rollout_events(path):
     model = turn = ""
     previous = None
     fallback_seen = set()
+    title = None
     for lineno, obj in iter_jsonl(path):
         if not isinstance(obj, dict):
             continue
+        if title is None:
+            text = user_text(obj)
+            if text:
+                title = text
         payload = obj.get("payload")
         payload = payload if isinstance(payload, dict) else {}
         kind = obj.get("type")
@@ -273,6 +278,8 @@ def _rollout_events(path):
         yield {"key": f"legacy|{path}|{lineno}", "sid": sid, "turn": event_turn,
                "model": model, "ts": ts, "counts": counts, "project": project,
                "quality": quality}
+    if title:
+        yield {"key": None, "title": title, "sid": sid, "project": project}
 
 
 def _replace_sqlite_scope(conn, prices, event, previous_jsonl):
@@ -314,6 +321,9 @@ def _scan_legacy(conn, prices, cursor, full) -> tuple[int, int, int]:
                 continue
             files += 1
             for event in _rollout_events(path):
+                if not event["key"]:   # 会话标题事件：首个真实用户消息
+                    db.set_session_title(conn, NAME, event["sid"], event["title"])
+                    continue
                 # Only a validated, nonempty payload authorizes replacement.
                 previous_jsonl = _jsonl_counts(conn, event["sid"], event["turn"])
                 a, u = _put(conn, prices, event["key"], event["sid"], event["turn"],

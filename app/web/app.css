@@ -589,3 +589,14 @@ th.act, td.act { width: 36px; text-align: center; }
 /* 范围日期提示（本周=最近 7 天滚动，月初可见本周>本月） */
 .range-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .range-hint { font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* 会话搜索 */
+.sess-search {
+  font: inherit; font-size: 12px; color: var(--ink);
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); width: 200px; outline: none;
+  transition: border-color .15s, width .2s var(--ease-out);
+}
+.sess-search:focus { border-color: var(--accent); width: 240px; }
+.sess-search::placeholder { color: var(--ink-3); }
+.filter-side { display: flex; align-items: center; gap: 10px; }

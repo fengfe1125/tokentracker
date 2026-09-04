@@ -339,3 +339,36 @@ class CodexScannerTest(ScannerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TitleExtractionTest(unittest.TestCase):
+    """会话标题：各工具 user 消息提取 + 上下文注入过滤。"""
+
+    def test_claude_user_text(self):
+        from tokentracker.scanners import _util
+        obj = {"type": "user", "message": {"role": "user",
+               "content": [{"type": "text", "text": "帮我看看 这个   问题"}]}}
+        self.assertEqual(_util.user_text(obj), "帮我看看 这个 问题")
+        # 字符串 content
+        obj2 = {"type": "user", "message": {"role": "user", "content": "直接字符串"}}
+        self.assertEqual(_util.user_text(obj2), "直接字符串")
+
+    def test_context_injection_filtered(self):
+        from tokentracker.scanners import _util
+        for bad in ("# AGENTS.md instructions for /x", "<environment_context>...</environment_context>",
+                    "<system-reminder>x</system-reminder>", "Caveat: ..."):
+            obj = {"type": "response_item", "payload": {"role": "user",
+                   "content": [{"type": "input_text", "text": bad}]}}
+            self.assertEqual(_util.user_text(obj), "", bad)
+
+    def test_codex_response_item(self):
+        from tokentracker.scanners import _util
+        obj = {"type": "response_item", "payload": {"type": "message", "role": "user",
+               "content": [{"type": "input_text", "text": "修复登录 bug"}]}}
+        self.assertEqual(_util.user_text(obj), "修复登录 bug")
+
+    def test_assistant_and_nonuser_ignored(self):
+        from tokentracker.scanners import _util
+        self.assertEqual(_util.user_text({"type": "assistant", "message": {"role": "assistant", "content": "x"}}), "")
+        self.assertEqual(_util.user_text({"type": "summary", "summary": "x"}), "")
+        self.assertEqual(_util.user_text({}), "")
