@@ -285,13 +285,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "unknown api"})
 
     def _stats(self, q: dict):
+        range_key = q.get("range", ["all"])[0]
         conn = db.connect()
         try:
-            rows, total = db.stats(conn, q.get("range", ["all"])[0],
+            rows, total = db.stats(conn, range_key,
                                    q.get("tool", [None])[0] or None)
         finally:
             conn.close()
-        return {"rows": rows, "total": total}
+        return {"rows": rows, "total": total,
+                "bounds": list(db._range_bounds(range_key))}
 
 
 def serve(port: int = 8765, *, auto_scan=False, initial_scan=False, scan_interval=60) -> str:

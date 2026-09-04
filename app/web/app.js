@@ -94,8 +94,25 @@ async function jget(url) {
   return r.json();
 }
 
+/* 范围提示：本周=最近 7 天滚动，与自然月不互含（月初会 "本周 > 本月"），
+   把实际日期区间写出来消除歧义；会话表沿用同一范围。 */
+const RANGE_LABEL = { day: "今天", week: "本周（最近 7 天）", month: "本月", all: "全部" };
+function updateRangeHint(bounds) {
+  const hint = $("#rangeHint");
+  if (!hint) return;
+  if (!bounds || state.range === "all") {
+    state.rangeHintText = "全部历史";
+  } else {
+    const f = t => { const d = new Date(t); return (d.getMonth() + 1) + "/" + d.getDate(); };
+    const span = state.range === "day" ? f(bounds[0]) : f(bounds[0]) + " – " + f(Date.now());
+    state.rangeHintText = RANGE_LABEL[state.range] + " · " + span;
+  }
+  hint.textContent = state.rangeHintText;
+}
+
 async function loadStats() {
   const d = await jget("/api/stats?range=" + state.range);
+  updateRangeHint(d.bounds);
   renderStatCards(d.rows, d.total);
   renderSideTools(d.rows);
 }
@@ -454,7 +471,8 @@ function sortedRows() {
 function renderSessions() {
   const rows = sortedRows();
   const sub = $("#sessSub");
-  sub.textContent = (state.tool && TOOL[state.tool] ? TOOL[state.tool].name + " · " : "全部工具 · ") + rows.length + " 条会话";
+  sub.textContent = (state.tool && TOOL[state.tool] ? TOOL[state.tool].name + " · " : "全部工具 · ") + rows.length + " 条会话" +
+    (state.rangeHintText ? " · " + state.rangeHintText : "");
   $("#sessEmpty").style.display = rows.length ? "none" : "";
   $("#sessBody").innerHTML = rows.map((r, i) => {
     const meta = TOOL[r.tool] || { name: r.tool, color: "#aaa" };

@@ -78,6 +78,14 @@ async function main() {
   desktop.context.fetch = async () => ({ok: true, json: async () => ({settings: {unit_yi: true}})});
   await desktop.run('loadDisplayPrefs()');
   assert.equal(desktop.run('state.unitYi'), true, 'boot 时 unit_yi 必须进入 state');
+  // 范围提示：本周=最近 7 天滚动，hint 应写出实际区间消除「本周>本月」疑惑
+  desktop.context.fetch = async () => ({ok: true, json: async () => ({
+    rows: [], total: {}, bounds: [1757000000000, 1757600000000]})});
+  desktop.run('state.range = "week"');
+  await desktop.run('loadStats()');
+  assert.ok(desktop.element('#rangeHint').textContent.includes('本周'), 'range hint 应标注本周');
+  assert.ok(desktop.element('#rangeHint').textContent.includes('–'), 'range hint 应含起止日期');
+  assert.equal(desktop.run('state.rangeHintText'), desktop.element('#rangeHint').textContent);
   desktop.context.fetch = async () => ({ok: true, json: async () => ({})});
   desktop.run('drawTrend([{tool: "claude", d: "2026-08-01", ...row, tool: "claude"}]);');
   assert.equal(desktop.run('state.chart.data.datasets[0].data[0]'), 10);

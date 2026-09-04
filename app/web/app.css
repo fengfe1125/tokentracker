@@ -585,3 +585,7 @@ th.act, td.act { width: 36px; text-align: center; }
 .d-open-btn:disabled { opacity: .5; cursor: not-allowed; }
 .d-open-btn:disabled:hover { border-color: var(--line); color: var(--ink-2); background: var(--bg); transform: none; }
 .d-open-btn.primary:disabled:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+/* 范围日期提示（本周=最近 7 天滚动，月初可见本周>本月） */
+.range-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.range-hint { font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }

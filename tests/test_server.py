@@ -331,3 +331,12 @@ if __name__ == "__main__":
             bad.do_POST()
             self.assertEqual(bad._send.call_args.args[0], 400)
             self.assertTrue(server.prefs.load_prefs()["unit_yi"])
+
+    def test_stats_includes_range_bounds(self):
+        handler = self.handler("/api/stats?range=week")
+        with patch.object(server.db, "stats", return_value=([], {"tokens": 1})):
+            handler.do_GET()
+        code, payload = handler._send.call_args.args
+        self.assertEqual(code, 200)
+        lo, hi = payload["bounds"]
+        self.assertEqual((hi - lo) // 86400000, 7)   # 本周 = 最近 7 天滚动
