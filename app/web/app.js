@@ -698,6 +698,15 @@ async function pollScan() {
 }
 
 /* ─────────── 设置 ─────────── */
+/* 显示偏好（如「亿」单位）在启动时就要加载 —— 否则只有进过设置页后
+   概览/会话才会用亿显示（曾因此表现为「开关有时不生效」）。 */
+async function loadDisplayPrefs() {
+  try {
+    const d = await (await fetch("/api/settings")).json();
+    state.unitYi = !!((d.settings || {}).unit_yi);
+  } catch (e) { /* 服务未就绪时用默认 */ }
+}
+
 async function loadSettings() {
   try {
     const r = await fetch("/api/settings");
@@ -906,6 +915,7 @@ function showSkeletons() {
 (async function boot() {
   showSkeletons();
   await loadDetect();
+  await loadDisplayPrefs();
   buildFilterChips();
   await refreshAll();
   moveRangeInk();

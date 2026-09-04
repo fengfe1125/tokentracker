@@ -74,6 +74,11 @@ async function main() {
   assert.equal(desktop.run('state.unitYi = true; fmtT(550000000)'), '5.50亿');
   assert.equal(desktop.run('fmtT(99999999)'), '100.00M');
   assert.equal(desktop.run('state.unitYi = false; fmtT(550000000)'), '550.00M');
+  // 启动时加载显示偏好：不进设置页也生效（曾因只在 loadSettings 里读而失效）
+  desktop.context.fetch = async () => ({ok: true, json: async () => ({settings: {unit_yi: true}})});
+  await desktop.run('loadDisplayPrefs()');
+  assert.equal(desktop.run('state.unitYi'), true, 'boot 时 unit_yi 必须进入 state');
+  desktop.context.fetch = async () => ({ok: true, json: async () => ({})});
   desktop.run('drawTrend([{tool: "claude", d: "2026-08-01", ...row, tool: "claude"}]);');
   assert.equal(desktop.run('state.chart.data.datasets[0].data[0]'), 10);
   assert.ok(desktop.element('#sessBody').innerHTML.includes('10'), 'session total is shown');
