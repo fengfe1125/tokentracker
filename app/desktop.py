@@ -79,12 +79,18 @@ class Api:
     def open_settings(self):
         """唤出主面板并切到设置视图（状态栏菜单「设置…」）。"""
         self.show_main()
-        if self.main:
-            try:
-                self.main.evaluate_js(
-                    "typeof switchView==='function'&&switchView('settings')")
-            except Exception:
-                pass
+
+        def _eval():
+            if self.main:
+                try:
+                    self.main.evaluate_js(
+                        "typeof switchView==='function'&&switchView('settings')")
+                except Exception:
+                    pass
+
+        # evaluate_js 在 macOS 上会派发到主线程并同步等待结果；
+        # 菜单动作本身就在主线程，直接调用会死锁（主线程等主线程）。
+        threading.Thread(target=_eval, daemon=True).start()
 
     def launch_at_login_supported(self) -> bool:
         return loginitem.supported()
