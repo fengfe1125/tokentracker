@@ -55,7 +55,7 @@ def quota_marker(window: dict) -> str:
 
 def fmt_tokens(n, yi: bool = False) -> str:
     n = float(n or 0)
-    if yi and n >= 1e8:
+    if yi and n >= 1e6:            # 亿模式：≥1M 都用亿（0.03亿 = 3M）
         return f"{n / 1e8:.2f}亿"
     if n >= 1e9:
         return f"{n / 1e9:.2f}B"

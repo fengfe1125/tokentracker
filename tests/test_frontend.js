@@ -72,7 +72,8 @@ async function main() {
   // 「亿」单位开关：≥1e8 换单位，关闭时保持 K/M/B
   assert.equal(desktop.run('fmtT(550000000)'), '550.00M');
   assert.equal(desktop.run('state.unitYi = true; fmtT(550000000)'), '5.50亿');
-  assert.equal(desktop.run('fmtT(99999999)'), '100.00M');
+  assert.equal(desktop.run('fmtT(55000000)'), '0.55亿');   // 0.几亿
+  assert.equal(desktop.run('fmtT(999999)'), '1000.0K');    // 不足 1M 保持原样
   assert.equal(desktop.run('state.unitYi = false; fmtT(550000000)'), '550.00M');
   // 启动时加载显示偏好：不进设置页也生效（曾因只在 loadSettings 里读而失效）
   desktop.context.fetch = async () => ({ok: true, json: async () => ({settings: {unit_yi: true}})});

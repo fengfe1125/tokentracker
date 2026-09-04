@@ -387,8 +387,10 @@ class UnitYiTest(unittest.TestCase):
 
     def test_fmt_tokens_yi(self):
         self.assertEqual(menubar_fmt.fmt_tokens(5.5e8, yi=True), "5.50亿")
+        self.assertEqual(menubar_fmt.fmt_tokens(55_000_000, yi=True), "0.55亿")   # 0.几亿
         self.assertEqual(menubar_fmt.fmt_tokens(1e8, yi=True), "1.00亿")
-        self.assertEqual(menubar_fmt.fmt_tokens(99_999_999, yi=True), "100.00M")
+        self.assertEqual(menubar_fmt.fmt_tokens(999_999, yi=True), "1000.0K")  # 不足 1M 保持 K
+        self.assertEqual(menubar_fmt.fmt_tokens(99_999_999, yi=True), "1.00亿")
         self.assertEqual(menubar_fmt.fmt_tokens(5.5e8), "550.00M")   # 关闭时保持原样
 
     def test_title_segments_yi(self):

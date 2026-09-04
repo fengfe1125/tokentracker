@@ -19,7 +19,7 @@ const TOOL_ORDER = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"
 
 const $ = (s, el = document) => el.querySelector(s);
 const fmtT = n => { n = +n || 0;
-  if (state.unitYi && n >= 1e8) return (n / 1e8).toFixed(2) + "亿";
+  if (state.unitYi && n >= 1e6) return (n / 1e8).toFixed(2) + "亿";   // 亿模式：≥1M 都用亿（0.03亿）
   if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
   if (n >= 1e4) return (n / 1e3).toFixed(1) + "K";
@@ -956,6 +956,11 @@ function showSkeletons() {
 /* ─────────── 启动 ─────────── */
 (async function boot() {
   showSkeletons();
+  try {
+    const v = await (await fetch("/api/version")).json();
+    const el = $("#brandVer");
+    if (el) el.textContent = "v" + (v.version || "?");
+  } catch (e) { /* 版本号不挡启动 */ }
   await loadDetect();
   await loadDisplayPrefs();
   buildFilterChips();
