@@ -1,0 +1,443 @@
+{
+  "format_version": 1,
+  "events": [
+    {
+      "tool": "claude",
+      "src_key": "s-claude-1|msg_1",
+      "session_id": "s-claude-1",
+      "project": "webapp",
+      "ts": 1787619600000,
+      "model": "claude-sonnet-4-5",
+      "input": 1200,
+      "output": 300,
+      "cache_read": 4000,
+      "cache_write": 800,
+      "cost": 0.0099,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "claude",
+      "src_key": "s-claude-1|msg_2",
+      "session_id": "s-claude-1",
+      "project": "webapp",
+      "ts": 1787623200000,
+      "model": "claude-sonnet-4-5",
+      "input": 900,
+      "output": 150,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 0.00495,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "codex",
+      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|3",
+      "session_id": "codex-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787619600000,
+      "model": "gpt-5.6-luna",
+      "input": 3500,
+      "output": 200,
+      "cache_read": 1000,
+      "cache_write": 500,
+      "cost": 0.0106,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "codex_jsonl",
+      "source_scope": "turn-1"
+    },
+    {
+      "tool": "codex",
+      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|4",
+      "session_id": "codex-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "gpt-5.6-luna",
+      "input": 3000,
+      "output": 250,
+      "cache_read": 1000,
+      "cache_write": 0,
+      "cost": 0.0092,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "codex_jsonl",
+      "source_scope": "turn-1"
+    },
+    {
+      "tool": "codex",
+      "src_key": "logs2|1",
+      "session_id": "thread-sqlite-1",
+      "project": "",
+      "ts": 1787619600000,
+      "model": "gpt-5",
+      "input": 2300,
+      "output": 120,
+      "cache_read": 600,
+      "cache_write": 100,
+      "cost": 0.004275,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "codex_sqlite",
+      "source_scope": "turn-9"
+    },
+    {
+      "tool": "dsh",
+      "src_key": "dsh-sess-1|0|0",
+      "session_id": "dsh-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787619600000,
+      "model": "deepseek-v4-pro",
+      "input": 7000,
+      "output": 350,
+      "cache_read": 2000,
+      "cache_write": 0,
+      "cost": 0.005357,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "dsh",
+      "src_key": "dsh-sess-1|0|1",
+      "session_id": "dsh-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "deepseek-v4-pro",
+      "input": 4000,
+      "output": 200,
+      "cache_read": 500,
+      "cache_write": 100,
+      "cost": 0.003113,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "dsh",
+      "src_key": "dsh-sess-1|top|99",
+      "session_id": "dsh-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "deepseek-v4-pro",
+      "input": 100,
+      "output": 10,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 8.6e-05,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "hermes",
+      "src_key": "aggregate|15b22367047cb7379cca6ffb1f6103166e7a8c92be66d6da7be1c360ba1b9d9e|0",
+      "session_id": "hermes-sess-2",
+      "project": "临时任务",
+      "ts": 1787626800000,
+      "model": "unpriced-model-x",
+      "input": 4000,
+      "output": 120,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 0.0092,
+      "time_quality": "unallocated",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "aggregate_snapshot",
+      "source_scope": "/private/tmp/tt_diff_corpus/hermes/state.db"
+    },
+    {
+      "tool": "hermes",
+      "src_key": "aggregate|bab79034de38df6695e18a771ac73bd59b34d6dbdfc424fd029b2ec297580297|0",
+      "session_id": "hermes-sess-1",
+      "project": "每日巡检",
+      "ts": 1787626800000,
+      "model": "claude-sonnet-4-5",
+      "input": 15000,
+      "output": 600,
+      "cache_read": 3000,
+      "cache_write": 0,
+      "cost": 0.052,
+      "time_quality": "unallocated",
+      "interval_start": null,
+      "cost_source": "native",
+      "source_kind": "aggregate_snapshot",
+      "source_scope": "/private/tmp/tt_diff_corpus/hermes/state.db"
+    },
+    {
+      "tool": "kimi",
+      "src_key": "kimi-1|step|3",
+      "session_id": "kimi-1",
+      "project": "/repo/api",
+      "ts": 1787619600000,
+      "model": "kimi-k3",
+      "input": 5000,
+      "output": 220,
+      "cache_read": 1500,
+      "cache_write": 300,
+      "cost": 0.00388,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "kimi",
+      "src_key": "kimi-1|step|4",
+      "session_id": "kimi-1",
+      "project": "/repo/api",
+      "ts": 1787623200000,
+      "model": "kimi-k3",
+      "input": 3000,
+      "output": 130,
+      "cache_read": 900,
+      "cache_write": 0,
+      "cost": 0.002215,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "opencode",
+      "src_key": "aggregate|3a4b48a5b7fdfda2d989f9221144181bf45d4f5b268a329802a2bdc7ed96245d|0",
+      "session_id": "oc-sess-2",
+      "project": "/repo/api",
+      "ts": 1787626800000,
+      "model": "gpt-5",
+      "input": 9000,
+      "output": 300,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 0.014,
+      "time_quality": "unallocated",
+      "interval_start": null,
+      "cost_source": "native",
+      "source_kind": "aggregate_snapshot",
+      "source_scope": "/private/tmp/tt_diff_corpus/opencode/opencode.db"
+    },
+    {
+      "tool": "opencode",
+      "src_key": "aggregate|8f2e8d415223d8f99ddf58cb360f2c279ffb5da49bc02d0ee2fb34d694a7669e|0",
+      "session_id": "oc-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787626800000,
+      "model": "gpt-5.6-luna",
+      "input": 20000,
+      "output": 800,
+      "cache_read": 5000,
+      "cache_write": 1000,
+      "cost": 0.0315,
+      "time_quality": "unallocated",
+      "interval_start": null,
+      "cost_source": "native",
+      "source_kind": "aggregate_snapshot",
+      "source_scope": "/private/tmp/tt_diff_corpus/opencode/opencode.db"
+    },
+    {
+      "tool": "pi",
+      "src_key": "pi-sess-1.jsonl|m2",
+      "session_id": "pi-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787619600000,
+      "model": "claude-sonnet-4-5",
+      "input": 6000,
+      "output": 260,
+      "cache_read": 1800,
+      "cache_write": 200,
+      "cost": 0.021,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    },
+    {
+      "tool": "pi",
+      "src_key": "pi-sess-1.jsonl|m3",
+      "session_id": "pi-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "unpriced-model-x",
+      "input": 1500,
+      "output": 60,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 0.0036,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "",
+      "source_scope": ""
+    }
+  ],
+  "session_meta": [
+    {
+      "tool": "claude",
+      "session_id": "s-claude-1",
+      "title": "帮我修一下登录页样式"
+    },
+    {
+      "tool": "hermes",
+      "session_id": "hermes-sess-1",
+      "title": "每日巡检"
+    },
+    {
+      "tool": "hermes",
+      "session_id": "hermes-sess-2",
+      "title": "临时任务"
+    },
+    {
+      "tool": "kimi",
+      "session_id": "kimi-1",
+      "title": "把导出按钮挪到右上角"
+    },
+    {
+      "tool": "opencode",
+      "session_id": "oc-sess-1",
+      "title": "重构侧边栏"
+    },
+    {
+      "tool": "opencode",
+      "session_id": "oc-sess-2",
+      "title": "修测试"
+    },
+    {
+      "tool": "pi",
+      "session_id": "pi-sess-1",
+      "title": "帮我加一个深色模式"
+    }
+  ],
+  "scan_results": {
+    "claude": {
+      "added": 2,
+      "updated": 0,
+      "files": 1
+    },
+    "codex": {
+      "added": 3,
+      "updated": 0,
+      "files": 2
+    },
+    "opencode": {
+      "added": 2,
+      "updated": 2,
+      "files": 1,
+      "counter_resets": 0
+    },
+    "dsh": {
+      "added": 3,
+      "updated": 0,
+      "files": 1
+    },
+    "hermes": {
+      "added": 2,
+      "updated": 2,
+      "files": 1,
+      "counter_resets": 0
+    },
+    "kimi": {
+      "added": 2,
+      "updated": 0,
+      "files": 1
+    },
+    "pi": {
+      "added": 2,
+      "updated": 0,
+      "files": 1
+    }
+  },
+  "snapshots": [
+    {
+      "tool": "hermes",
+      "source_scope": "/private/tmp/tt_diff_corpus/hermes/state.db",
+      "identity": "[\"hermes-sess-1\", \"claude-sonnet-4-5\", \"anthropic\", \"https://api.anthropic.com\", \"sub\", \"chat\"]",
+      "observed_at": 1787626800000,
+      "revision": 0,
+      "values": {
+        "input": 15000,
+        "output": 600,
+        "cache_read": 3000,
+        "cache_write": 0,
+        "native_cost": 0.052,
+        "native_source": "native",
+        "accounted_cost": 0.052,
+        "cost_offset": 0,
+        "legacy_key": "hermes-sess-1|claude-sonnet-4-5|anthropic|https://api.anthropic.com|sub|chat"
+      }
+    },
+    {
+      "tool": "hermes",
+      "source_scope": "/private/tmp/tt_diff_corpus/hermes/state.db",
+      "identity": "[\"hermes-sess-2\", \"unpriced-model-x\", \"local\", \"http://localhost:11434\", \"api\", \"chat\"]",
+      "observed_at": 1787626800000,
+      "revision": 0,
+      "values": {
+        "input": 4000,
+        "output": 120,
+        "cache_read": 0,
+        "cache_write": 0,
+        "native_cost": null,
+        "native_source": null,
+        "accounted_cost": 0.0092,
+        "cost_offset": 0,
+        "legacy_key": "hermes-sess-2|unpriced-model-x|local|http://localhost:11434|api|chat"
+      }
+    },
+    {
+      "tool": "opencode",
+      "source_scope": "/private/tmp/tt_diff_corpus/opencode/opencode.db",
+      "identity": "oc-sess-1",
+      "observed_at": 1787626800000,
+      "revision": 0,
+      "values": {
+        "input": 20000,
+        "output": 800,
+        "cache_read": 5000,
+        "cache_write": 1000,
+        "native_cost": 0.0315,
+        "native_source": "native",
+        "accounted_cost": 0.0315,
+        "cost_offset": 0,
+        "legacy_key": "oc-sess-1"
+      }
+    },
+    {
+      "tool": "opencode",
+      "source_scope": "/private/tmp/tt_diff_corpus/opencode/opencode.db",
+      "identity": "oc-sess-2",
+      "observed_at": 1787626800000,
+      "revision": 0,
+      "values": {
+        "input": 9000,
+        "output": 300,
+        "cache_read": 0,
+        "cache_write": 0,
+        "native_cost": 0.014,
+        "native_source": "native",
+        "accounted_cost": 0.014,
+        "cost_offset": 0,
+        "legacy_key": "oc-sess-2"
+      }
+    }
+  ]
+}

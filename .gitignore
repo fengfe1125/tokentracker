@@ -16,3 +16,9 @@ dist/
 build/
 .cache/
 assets/TokenTracker.iconset/
+
+# Swift
+swift/.build/
+
+# 差分语料（生成物，可重复生成）
+tests/differential/corpus/
