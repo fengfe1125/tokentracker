@@ -14,6 +14,15 @@
 > **屏幕顶部系统状态栏常驻**（⚡ 实时今日用量，点开菜单看成本/配额、立即扫描、唤出主面板）
 > + 无边框白色简洁主面板，关闭只隐藏不退出，状态栏随时唤回。
 
+> **当前主力是 SwiftUI 原生版**（`swift/`）：`./scripts/build_swift_app.sh` →
+> `dist/TokenTracker.app`（与旧版同 bundle id `com.tokentracker.desktop`，
+> 覆盖安装到 /Applications 即可）；发行打包 `./scripts/release_swift.sh`
+> （签名 + DMG，公证说明见脚本）。重构全过程见
+> [迁移计划](docs/swiftui-migration-plan.md)。
+> Python 版（`app/` + PyInstaller）进入维护模式，仅 CLI（`./tt`）继续共用；
+> 两者共用 `~/.tokentracker/`（usage.db / settings.json / 配额缓存），
+> **不要同时常驻**。
+
 ```bash
 ./scripts/build_app.sh              # 一键打包 → dist/TokenTracker.app（自包含，双击即用）
 open dist/TokenTracker.app
@@ -89,6 +98,9 @@ cd tokentracker
 ```
 
 对 `dsh` 之外其他工具也可以用 `python3 -m tokentracker ...`。
+
+SwiftUI 版另有原生 CLI：`swift build -c release --package-path swift` 后用
+`.build/release/tt-swift detect|scan|stats|quotas`（与 `./tt` 同库同数字）。
 
 ## 成本估算
 
