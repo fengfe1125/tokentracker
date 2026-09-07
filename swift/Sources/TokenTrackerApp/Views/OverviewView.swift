@@ -143,13 +143,25 @@ struct OverviewView: View {
                     .frame(height: 240)
             } else {
                 Chart(chartPoints) { point in
-                    BarMark(
-                        x: .value("日期", point.day),
-                        y: .value("Tokens", logScale ? max(point.tokens, 1) : point.tokens)
-                    )
-                    .foregroundStyle(by: .value("工具", toolDisplayName(point.tool)))
+                    if logScale {
+                        // 对数轴下柱条不能从 0 起始（log(0) 会崩），用 yStart/yEnd 区间柱
+                        // 对齐网页端 Chart.js 的 y.min = 1
+                        BarMark(
+                            x: .value("日期", point.day),
+                            yStart: .value("最小", 1.0),
+                            yEnd: .value("Tokens", max(point.tokens, 1))
+                        )
+                        .foregroundStyle(by: .value("工具", toolDisplayName(point.tool)))
+                    } else {
+                        BarMark(
+                            x: .value("日期", point.day),
+                            y: .value("Tokens", point.tokens)
+                        )
+                        .foregroundStyle(by: .value("工具", toolDisplayName(point.tool)))
+                    }
                 }
                 .chartYScale(type: logScale ? .log : .linear)
+                .chartYAxis { AxisMarks(position: .leading) }
                 .chartForegroundStyleScale(domain: ScannerRegistry.all.map(toolDisplayName),
                                            range: ScannerRegistry.all.map { toolColor($0) })
                 .chartLegend(.hidden)

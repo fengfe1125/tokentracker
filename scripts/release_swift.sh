@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-VERSION="0.2.1"
+VERSION="0.2.2"
 
 "$ROOT/scripts/build_swift_app.sh"
 

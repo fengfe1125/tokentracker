@@ -20,6 +20,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
             let hosting = NSHostingController(rootView: RootView(state: appState))
             let window = NSWindow(contentViewController: hosting)
@@ -35,6 +36,17 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         if window?.isVisible == false { window?.center() }
         window?.makeKeyAndOrderFront(nil)
+        log2("MainWindowController.show: done, visible=\(window?.isVisible == true)")
+    }
+
+    private func log2(_ message: String) {
+        let path = NSHomeDirectory() + "/.tokentracker/app.log"
+        let line = "\(Date()) \(message)\n"
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
+        }
     }
 
     func hide() {

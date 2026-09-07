@@ -485,8 +485,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // ------------------------------------------------------------ 动作 ----
 
-    @objc private func openMain(_: Any?) { onOpenMain?() }
-    @objc private func openSettings(_: Any?) { onOpenSettings?() }
+    @objc private func openMain(_: Any?) {
+        log("菜单动作：打开主面板")
+        onOpenMain?()
+    }
+    @objc private func openSettings(_: Any?) {
+        log("菜单动作：设置")
+        onOpenSettings?()
+    }
 
     @objc private func rescan(_: Any?) {
         appState.requestScan()
