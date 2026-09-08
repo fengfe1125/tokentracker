@@ -1,7 +1,9 @@
 # Agent 工具与 Skill 使用统计可行性调研
 
-> 日期：2026-09-08  
-> 范围：TokenTracker 已支持的 Claude Code、Kimi Code、Codex、DSH、Pi、opencode、Hermes Agent。  
+> 日期：2026-09-08
+>
+> 范围：TokenTracker 已支持的 Claude Code、Kimi Code、Codex、DSH、Pi、opencode、Hermes Agent。
+>
 > 方法：检查现有扫描器、只抽样本机日志的事件类型/字段名（不读取或保存提示词正文），并核对官方文档和原始 GitHub 仓库。
 
 ## 结论
@@ -160,20 +162,20 @@ CREATE TABLE agent_activity_events (
 
 ## 可复用的标准与官方能力
 
-- **OpenTelemetry GenAI semantic conventions**  
-  https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md  
+- **OpenTelemetry GenAI semantic conventions**
+  https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md
   已定义 `execute_tool {gen_ai.tool.name}`、`gen_ai.tool.call.id`、tool type 和 error；arguments/result 为 opt-in 且被标为可能敏感。当前状态是 Development，内部 schema 应保留版本/适配层。
-- **Claude Code hooks**  
-  https://code.claude.com/docs/en/hooks  
+- **Claude Code hooks**
+  https://code.claude.com/docs/en/hooks
   `PreToolUse`、`PostToolUse`、`PostToolUseFailure` 提供 `session_id`、`tool_name`、`tool_input`、`tool_response`、`tool_use_id` 和可选 `duration_ms`。这是 Claude 实时采集的权威备选，但安装 hook 会改动 agent 配置，不应作为默认 MVP。
-- **Agent Skills specification**  
-  https://agentskills.io/specification  
+- **Agent Skills specification**
+  https://agentskills.io/specification
   定义了 `SKILL.md` 与三层渐进加载，但没有定义统一的运行时调用事件。因此 TokenTracker 需要每个客户端的 skill adapter。
-- **OpenAI Responses/Codex 相关官方 schema**  
-  https://developers.openai.com/api/reference/cli/resources/beta/subresources/responses  
+- **OpenAI Responses/Codex 相关官方 schema**
+  https://developers.openai.com/api/reference/cli/resources/beta/subresources/responses
   官方 schema 明确包含 custom/function/MCP/shell/apply-patch 等 tool-call item，也有 local/inline skill 定义；但“skill 被提供给环境”不等于“skill 在某会话被采用”。本地 rollout 仍要以实际 fixture 锁定。
-- **MCP Inspector**  
-  https://github.com/modelcontextprotocol/inspector  
+- **MCP Inspector**
+  https://github.com/modelcontextprotocol/inspector
   适合验证单个 MCP server 的 `tools/list` / `tools/call`，不是多 agent 历史统计产品。
 
 ## 风险与验收线
