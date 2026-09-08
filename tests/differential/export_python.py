@@ -20,6 +20,7 @@ TOKENTRACKER_PRICES 指向本目录的稳定价格表（不随仓库根 prices.j
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import tempfile
@@ -27,6 +28,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 CORPUS = "/tmp/tt_diff_corpus"
+CANONICAL_CORPUS = "/private/tmp/tt_diff_corpus"
 EXPECTED = os.path.join(HERE, "expected_python.json")
 FIXED_NOW = 1787626800.0  # 2026-08-25T03:00:00Z，语料时间戳之后
 
@@ -35,6 +37,21 @@ sys.path.insert(0, ROOT)
 
 def round6(value):
     return round(value, 6) if isinstance(value, float) else value
+
+
+def canonical_corpus_path(value: str) -> str:
+    """Normalize realpath-only fixture paths across macOS and Linux.
+
+    macOS resolves /tmp to /private/tmp while Linux keeps /tmp. Production
+    source identities intentionally use real paths; only the differential
+    export rewrites fixture paths to one stable representation.
+    """
+    real_corpus = os.path.realpath(CORPUS)
+    if value == real_corpus:
+        return CANONICAL_CORPUS
+    if value.startswith(real_corpus + os.sep):
+        return CANONICAL_CORPUS + value[len(real_corpus):]
+    return value
 
 
 def export() -> dict:
@@ -88,6 +105,29 @@ def export() -> dict:
             row = dict(r)
             values = json.loads(row.pop("values_json"))
             snapshots.append({**row, "values": {k: round6(v) for k, v in values.items()}})
+
+        # Aggregate src_key digests include source_scope. Normalize the fixture
+        # realpath before comparing the committed baseline so Linux and macOS
+        # exercise identical data without changing production identity rules.
+        digest_map = {}
+        for snapshot in snapshots:
+            scope = snapshot["source_scope"]
+            canonical_scope = canonical_corpus_path(scope)
+            if canonical_scope != scope:
+                old = hashlib.sha256(json.dumps([scope, snapshot["identity"]]).encode()).hexdigest()
+                new = hashlib.sha256(
+                    json.dumps([canonical_scope, snapshot["identity"]]).encode()
+                ).hexdigest()
+                digest_map[old] = new
+                snapshot["source_scope"] = canonical_scope
+        for event in events:
+            event["source_scope"] = canonical_corpus_path(event["source_scope"])
+            if event["src_key"].startswith("aggregate|"):
+                parts = event["src_key"].split("|", 2)
+                parts[1] = digest_map.get(parts[1], parts[1])
+                event["src_key"] = "|".join(parts)
+        for event in activities:
+            event["src_key"] = canonical_corpus_path(event["src_key"])
     finally:
         conn.close()
         tmp.cleanup()
