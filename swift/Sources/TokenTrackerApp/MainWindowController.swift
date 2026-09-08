@@ -25,8 +25,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             let hosting = NSHostingController(rootView: RootView(state: appState))
             let window = NSWindow(contentViewController: hosting)
             window.title = "TokenTracker"
-            window.setContentSize(NSSize(width: 1180, height: 780))
-            window.minSize = NSSize(width: 900, height: 560)
+            window.setContentSize(NSSize(width: 960, height: 640))
+            window.minSize = NSSize(width: 820, height: 520)
             window.styleMask.formUnion([.miniaturizable, .resizable])
             window.isReleasedWhenClosed = false     // 关闭只隐藏
             window.delegate = self

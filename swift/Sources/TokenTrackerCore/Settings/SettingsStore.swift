@@ -19,6 +19,7 @@ public struct SettingsStore {
         "launch_at_login": false,       // 开机自动启动（SMAppService）
         "terminal_app": "auto",         // 继续会话用哪个终端
         "unit_yi": false,               // 大数以「亿」显示
+        "scan_interval": 60,            // 自动扫描/刷新节奏（秒）
     ]
 
     public let path: String
@@ -65,6 +66,8 @@ public struct SettingsStore {
             return (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
         case "terminal_app":
             return (value as? String).map { terminalApps.contains($0) } ?? false
+        case "scan_interval":
+            return [30, 60, 300, 600].contains((value as? NSNumber)?.intValue ?? 0)
         default:
             return false
         }

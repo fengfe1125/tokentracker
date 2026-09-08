@@ -86,18 +86,41 @@ def make_codex(base):
         {"timestamp": ISO2, "type": "event_msg",
          "payload": {"type": "task_complete", "turn_id": "turn-1"}},
     ])
-    # logs_2.sqlite：独立 thread（不被 JSONL 覆盖），turn 遥测 body
+    # 子代理 rollout：自身 meta 在前、重放的父会话 meta 在后；用量必须记在
+    # 子会话名下，其 SQLite 遥测（同 turn）被 JSONL 覆盖去重。
+    write_jsonl(os.path.join(root, "sessions", "2026", "08", "25", "rollout-2.jsonl"), [
+        {"type": "session_meta", "timestamp": ISO1,
+         "payload": {"id": "codex-sess-2", "cwd": "/repo/webapp",
+                     "forked_from_id": "codex-sess-1"}},
+        {"type": "session_meta", "timestamp": ISO1,
+         "payload": {"id": "codex-sess-1", "cwd": "/repo/webapp"}},
+        {"type": "turn_context", "timestamp": ISO1,
+         "payload": {"model": "gpt-5.6-luna", "turn_id": "turn-2"}},
+        {"timestamp": ISO2, "type": "event_msg", "payload": {
+            "type": "token_count", "turn_id": "turn-2",
+            "info": {"total_token_usage": {"input_tokens": 1200, "cached_input_tokens": 300,
+                                           "cache_write_input_tokens": 0, "output_tokens": 90},
+                     "last_token_usage": {"input_tokens": 1200, "cached_input_tokens": 300,
+                                          "cache_write_input_tokens": 0, "output_tokens": 90}}}},
+    ])
+    # logs_2.sqlite：独立 thread（不被 JSONL 覆盖）+ 子代理同 turn 遥测（被覆盖），turn 遥测 body
     body = ('codex.turn.token_usage.input_tokens=3000 '
             'codex.turn.token_usage.cached_input_tokens=600 '
             'codex.turn.token_usage.cache_write_input_tokens=100 '
             'codex.turn.token_usage.output_tokens=120 '
             'model=gpt-5 thread.id=thread-sqlite-1 turn.id=turn-9')
+    body_child = ('codex.turn.token_usage.input_tokens=1200 '
+                  'codex.turn.token_usage.cached_input_tokens=300 '
+                  'codex.turn.token_usage.cache_write_input_tokens=0 '
+                  'codex.turn.token_usage.output_tokens=90 '
+                  'model=gpt-5.6-luna thread.id=codex-sess-2 turn.id=turn-2')
     db_file = os.path.join(root, "logs_2.sqlite")
     os.makedirs(root, exist_ok=True)
     conn = sqlite3.connect(db_file)
     try:
         conn.execute("CREATE TABLE logs(id INTEGER PRIMARY KEY, ts INTEGER, ts_nanos INTEGER, feedback_log_body TEXT)")
         conn.execute("INSERT INTO logs VALUES (1, ?, 0, ?)", (T1 // 1000, body))
+        conn.execute("INSERT INTO logs VALUES (2, ?, 0, ?)", (T2 // 1000, body_child))
         conn.commit()
     finally:
         conn.close()

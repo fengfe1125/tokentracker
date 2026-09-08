@@ -184,6 +184,25 @@ class CodexScannerTest(ScannerCase):
         self.assertEqual(len(self.rows()), 1)
         self.assertEqual(self.rows()[0]["source_scope"], "turn-b")
 
+    def test_replayed_parent_session_meta_does_not_steal_attribution(self):
+        # 子代理 rollout：自身 meta 在前，重放的父会话 meta 在后；
+        # 用量必须记在子会话名下，同 turn 的 SQLite 遥测被 JSONL 覆盖去重。
+        path = self.sessions / "child.jsonl"
+        write_jsonl(path, [
+            {"type": "session_meta", "timestamp": TS,
+             "payload": {"id": "child", "cwd": "/fixture", "forked_from_id": "parent"}},
+            {"type": "session_meta", "timestamp": TS, "payload": {"id": "parent", "cwd": "/fixture"}},
+            {"type": "turn_context", "timestamp": TS, "payload": {"model": "test-model"}},
+            token_event(usage(), "turn-child"),
+        ])
+        self.log(1, sid="child", turn="turn-child")
+        self.scan()
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session_id"], "child")
+        self.assertEqual(rows[0]["source_kind"], "codex_jsonl")
+        self.assertEqual(rows[0]["input"], 80)
+
     def test_per_usage_fallback_and_iso_timestamp(self):
         path = self.sessions / "fallback.jsonl"
         write_jsonl(path, [{"usage": usage(100, 10, 20, 5), "model": "test-model", "session_id": "s", "timestamp": TS}])

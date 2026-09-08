@@ -81,7 +81,8 @@ public final class ScanScheduler: @unchecked Sendable {
     public typealias ThreadFactory = (@Sendable @escaping () -> Void) -> ScanThreadHandle
 
     private let scan: ScanBlock
-    private let interval: Double
+    /// 自动扫描间隔（秒）；setInterval 可在运行中热改，下一个等待周期生效
+    private var intervalValue: Double
     private let clock: () -> Double
     private let waitImpl: (Double) -> Bool   // true = 收到停止信号（对齐 Event.wait）
     private let threadFactory: ThreadFactory
@@ -109,7 +110,7 @@ public final class ScanScheduler: @unchecked Sendable {
                 wait: ((Double) -> Bool)? = nil,
                 threadFactory: ThreadFactory? = nil) {
         self.scan = scan
-        self.interval = interval
+        self.intervalValue = interval
         let flag = stopFlag
         let lockRef = lock
         let stopCheck: @Sendable () -> Bool = {
@@ -133,6 +134,21 @@ public final class ScanScheduler: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return status
+    }
+
+    /// 当前自动扫描间隔（秒）。
+    public var intervalSeconds: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return intervalValue
+    }
+
+    /// 运行中热改间隔：autoLoop 每轮等待前读最新值。
+    public func setInterval(_ seconds: Double) {
+        guard seconds > 0 else { return }
+        lock.lock()
+        intervalValue = seconds
+        lock.unlock()
     }
 
     /// 请求一次扫描；运行中/已停止返回 false。
@@ -198,7 +214,7 @@ public final class ScanScheduler: @unchecked Sendable {
 
     private func autoLoop() {
         request(source: "automatic")
-        while !waitImpl(interval) {
+        while !waitImpl(intervalSeconds) {
             if isStopped { break }
             request(source: "automatic")
         }

@@ -38,7 +38,7 @@ struct RootView: View {
                 }
             }
             .listStyle(.sidebar)
-            .frame(minWidth: 200)
+            .frame(minWidth: 180)
         } detail: {
             switch state.selection {
             case .overview:
@@ -51,7 +51,7 @@ struct RootView: View {
                 SettingsPanelView(state: state)
             }
         }
-        .frame(minWidth: 900, minHeight: 560)
+        .frame(minWidth: 820, minHeight: 520)
         // 快捷键：⌘1/⌘2 切视图 · ⌘R 扫描（⌘, 设置走系统 Settings 场景，⌘W 关闭面板）
         .background {
             VStack {

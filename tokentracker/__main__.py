@@ -1,9 +1,8 @@
-"""CLI 入口：python3 -m tokentracker <scan|stats|detect|serve>"""
+"""CLI 入口：python3 -m tokentracker <scan|stats|detect|quotas>"""
 from __future__ import annotations
 
 import argparse
 import sys
-import webbrowser
 
 from . import db, pricing
 from .scanners import detect_all, run_all
@@ -113,13 +112,6 @@ def cmd_quotas(args) -> int:
     return 0
 
 
-def cmd_serve(args) -> int:
-    from .server import serve_blocking
-    serve_blocking(port=args.port, on_ready=webbrowser.open if args.open else None,
-                   auto_scan=args.auto_scan, initial_scan=args.scan)
-    return 0
-
-
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="tokentracker", description="多 AI 工具 Token 用量统计")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -137,15 +129,9 @@ def main(argv=None) -> int:
 
     pq = sub.add_parser("quotas", help="查看订阅配额进度（官方数据优先，本地估算兜底）")
 
-    psrv = sub.add_parser("serve", help="启动本地仪表盘")
-    psrv.add_argument("--port", type=int, default=8765)
-    psrv.add_argument("--open", action="store_true", help="自动打开浏览器")
-    psrv.add_argument("--scan", action="store_true", help="启动时扫描一次")
-    psrv.add_argument("--auto-scan", action="store_true", help="启动时扫描，并每 60 秒增量扫描（默认关闭）")
-
     args = p.parse_args(argv)
     return {"detect": cmd_detect, "scan": cmd_scan, "stats": cmd_stats,
-            "quotas": cmd_quotas, "serve": cmd_serve}[args.cmd](args)
+            "quotas": cmd_quotas}[args.cmd](args)
 
 
 if __name__ == "__main__":

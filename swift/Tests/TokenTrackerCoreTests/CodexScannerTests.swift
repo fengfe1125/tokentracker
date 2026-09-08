@@ -113,6 +113,27 @@ final class CodexScannerPortTests: XCTestCase {
         XCTAssertEqual(rows[0].string("source_scope"), "turn-b")
     }
 
+    func testReplayedParentSessionMetaDoesNotStealAttribution() throws {
+        // 子代理 rollout：自身 meta 在前，重放的父会话 meta 在后；
+        // 用量必须记在子会话名下，同 turn 的 SQLite 遥测被 JSONL 覆盖去重。
+        let path = (sessionsDir as NSString).appendingPathComponent("child.jsonl")
+        writeJSONL(path, [
+            ["type": "session_meta", "timestamp": fixtureTS,
+             "payload": ["id": "child", "cwd": "/fixture", "forked_from_id": "parent"]],
+            ["type": "session_meta", "timestamp": fixtureTS,
+             "payload": ["id": "parent", "cwd": "/fixture"]],
+            ["type": "turn_context", "timestamp": fixtureTS, "payload": ["model": "test-model"]],
+            tokenEvent(fixtureUsage(), turn: "turn-child"),
+        ])
+        try log(1, sid: "child", turn: "turn-child")
+        _ = try scan()
+        let rows = try rows()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].string("session_id"), "child")
+        XCTAssertEqual(rows[0].string("source_kind"), "codex_jsonl")
+        XCTAssertEqual(rows[0].int("input"), 80)
+    }
+
     func testPerUsageFallbackAndISOTimestamp() throws {
         let path = (sessionsDir as NSString).appendingPathComponent("fallback.jsonl")
         writeJSONL(path, [["usage": fixtureUsage(100, 10, 20, 5), "model": "test-model",

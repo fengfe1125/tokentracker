@@ -6,37 +6,34 @@ on:
   pull_request:
 
 jobs:
-  smoke:
+  python-core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: 冒烟测试（核心库：计价/入库/聚合/配额/扫描器/HTTP 路由）
+      - name: 安装差分语料依赖
+        run: sudo apt-get update && sudo apt-get install -y zstd
+      - name: Python CLI、扫描核心与差分基线
         run: python -m unittest discover -s tests -v
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: 前端语法与渲染回归（无外部依赖）
-        run: |
-          node --check app/web/app.js
-          node tests/test_frontend.js
 
-  build-app:
+  swift:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: 打包 macOS App（PyInstaller）
-        run: ./scripts/build_app.sh
+      - name: 安装差分语料依赖
+        run: brew install zstd
+      - name: Swift Core 与 App 测试
+        run: swift test --package-path swift
+      - name: 构建 SwiftUI App
+        run: ./scripts/build_swift_app.sh
       - name: 校验产物
         run: |
           test -x dist/TokenTracker.app/Contents/MacOS/TokenTracker
           codesign --verify --deep --strict dist/TokenTracker.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)" = "com.tokentracker.desktop"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' dist/TokenTracker.app/Contents/Info.plist)" = "true"
           cmp assets/icon.icns dist/TokenTracker.app/Contents/Resources/icon.icns
-          git diff --exit-code -- assets app/web/brand.svg
-          /usr/libexec/PlistBuddy -c "Print :LSUIElement" dist/TokenTracker.app/Contents/Info.plist | grep -q true
-          echo "dist/TokenTracker.app OK"
+          python3 scripts/check_icon.py
+          git diff --exit-code -- assets

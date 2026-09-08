@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # SwiftUI 版打包 → dist/TokenTracker.app
-# 与 Python 版同名同 bundle id（Tahoe 的状态栏授权、登录项都跟 bundle id 走，
-# 同名才算真正「覆盖安装」）。回退 Python 版用 scripts/build_app.sh。
+# 保持既有 bundle id（Tahoe 的状态栏授权、登录项都跟 bundle id 走）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"

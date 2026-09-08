@@ -103,8 +103,7 @@ def check_icns(data):
 
 
 def check_assets(root=ROOT):
-    for path in (root / "assets/icon.svg", root / "app/web/brand.svg"):
-        check_svg(path.read_bytes())
+    check_svg((root / "assets/icon.svg").read_bytes())
     width, height, rows = png_rows((root / "assets/icon_1024.png").read_bytes())
     if (width, height) != (1024, 1024):
         raise ValueError("App PNG must be 1024 × 1024")

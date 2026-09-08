@@ -75,6 +75,24 @@
     },
     {
       "tool": "codex",
+      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-2.jsonl|4",
+      "session_id": "codex-sess-2",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "gpt-5.6-luna",
+      "input": 900,
+      "output": 90,
+      "cache_read": 300,
+      "cache_write": 0,
+      "cost": 0.00294,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "codex_jsonl",
+      "source_scope": "turn-2"
+    },
+    {
+      "tool": "codex",
       "src_key": "logs2|1",
       "session_id": "thread-sqlite-1",
       "project": "",
@@ -334,9 +352,9 @@
       "files": 1
     },
     "codex": {
-      "added": 3,
+      "added": 4,
       "updated": 0,
-      "files": 2
+      "files": 3
     },
     "opencode": {
       "added": 2,

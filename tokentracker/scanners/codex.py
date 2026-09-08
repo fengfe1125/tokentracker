@@ -16,7 +16,7 @@ from ._util import changed, expand, iter_jsonl, sqlite_ro, stat_key, user_text
 
 NAME = "codex"
 DETAIL = "~/.codex/logs_2.sqlite 或 ~/.codex/sessions/"
-_VERSION = 2
+_VERSION = 4
 _JSONL = "codex_jsonl"
 _SQLITE = "codex_sqlite"
 _FIELDS = re.compile(
@@ -205,6 +205,7 @@ def _rollout_events(path):
     sid = os.path.basename(path)[:-6]
     project = os.path.dirname(path)
     model = turn = ""
+    sid_from_meta = False
     previous = None
     fallback_seen = set()
     title = None
@@ -219,7 +220,13 @@ def _rollout_events(path):
         payload = payload if isinstance(payload, dict) else {}
         kind = obj.get("type")
         if kind == "session_meta":
-            sid = str(payload.get("id") or sid)
+            # A subagent/fork rollout replays the parent session_meta: only the
+            # first (own) meta may set the sid, otherwise the child's usage is
+            # attributed to the parent and the child's SQLite telemetry is
+            # counted again because JSONL coverage is looked up under the child.
+            if not sid_from_meta and payload.get("id"):
+                sid = str(payload.get("id"))
+                sid_from_meta = True
             project = str(payload.get("cwd") or project)
             continue
         if kind == "turn_context":
@@ -343,8 +350,10 @@ def scan(conn, prices, full: bool = False) -> dict:
     # if the caller catches scanner errors and continues with another tool.
     conn.execute("SAVEPOINT codex_scan")
     try:
-        a1, u1, f1 = _scan_sqlite(conn, prices, cursor, full)
+        # JSONL 先扫（主源），SQLite 后扫补缺：同一趟内去重查询就能看到
+        # 最新的 JSONL 归因，归因变更无需等下一次全量扫描才收敛。
         a2, u2, f2 = _scan_legacy(conn, prices, cursor, full)
+        a1, u1, f1 = _scan_sqlite(conn, prices, cursor, full)
         ambiguous = conn.execute(
             "SELECT old.id FROM usage_events old WHERE old.tool=? AND old.source_kind='' "
             "AND old.src_key LIKE 'logs2|%' AND EXISTS "

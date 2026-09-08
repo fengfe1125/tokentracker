@@ -12,7 +12,7 @@ import Foundation
 public struct CodexScanner: ScannerAdapter {
     public let name = "codex"
     public let detail = "~/.codex/logs_2.sqlite 或 ~/.codex/sessions/"
-    static let parserVersion = 2
+    static let parserVersion = 4
     static let kindJSONL = "codex_jsonl"
     static let kindSQLite = "codex_sqlite"
 
@@ -280,6 +280,7 @@ public struct CodexScanner: ScannerAdapter {
         var sid = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         var project = (path as NSString).deletingLastPathComponent
         var model = "", turn = ""
+        var sidFromMeta = false
         var previous: (Int64, Int64, Int64, Int64)?
         struct FallbackKey: Hashable {
             let turn: String
@@ -305,8 +306,13 @@ public struct CodexScanner: ScannerAdapter {
             let payload = obj["payload"] as? [String: Any] ?? [:]
             let kind = obj["type"] as? String
             if kind == "session_meta" {
-                // Python `payload.get("id") or sid`：空串也回退
-                if let id = payload["id"] as? String, !id.isEmpty { sid = id }
+                // 子代理/fork 的 rollout 会重放父会话的 session_meta：只有首条（自身）
+                // 有权决定 sid，否则子会话用量记到父会话头上，且子会话的 SQLite
+                // 遥测因找不到 JSONL 覆盖而把同一用量再算一遍。空串也回退。
+                if !sidFromMeta, let id = payload["id"] as? String, !id.isEmpty {
+                    sid = id
+                    sidFromMeta = true
+                }
                 if let cwd = payload["cwd"] as? String, !cwd.isEmpty { project = cwd }
                 continue
             }
@@ -459,8 +465,10 @@ public struct CodexScanner: ScannerAdapter {
         // 数据源删除、插入、游标移动一起回滚（即使调用方捕获后继续其他工具）。
         _ = try store.conn.execute("SAVEPOINT codex_scan")
         do {
-            let (a1, u1, f1) = try scanSQLite(store, prices, cursor: &cursor, full: effectiveFull)
+            // JSONL 先扫（主源），SQLite 后扫补缺：同一趟内去重查询就能看到
+            // 最新的 JSONL 归因，归因变更无需等下一次全量扫描才收敛。
             let (a2, u2, f2) = try scanLegacy(store, prices, cursor: &cursor, full: effectiveFull)
+            let (a1, u1, f1) = try scanSQLite(store, prices, cursor: &cursor, full: effectiveFull)
             let ambiguous = try store.conn.query(
                 "SELECT old.id FROM usage_events old WHERE old.tool=? AND old.source_kind='' "
                     + "AND old.src_key LIKE 'logs2|%' AND EXISTS "

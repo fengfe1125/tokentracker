@@ -2,19 +2,16 @@
 //  OverviewView.swift
 //  TokenTrackerApp
 //
-//  概览：4 统计卡 / 每日趋势图（Swift Charts，线性/对数切换）/
-//  订阅配额卡 / 模型榜。数据对齐网页端 app.js。
+//  概览：cc-switch 风格使用统计 —— 总览大卡（真实消耗 Tokens / 总请求数 /
+//  总成本）/ 2×2 输入输出明细卡 / 缓存命中率进度条 / 使用趋势平滑折线
+//  （成本虚线走右侧轴）/ 订阅配额卡 / 模型榜。数据对齐 UsageStore.stats/daily。
 //
 
-import Charts
 import SwiftUI
 import TokenTrackerCore
 
 struct OverviewView: View {
     @ObservedObject var state: AppState
-    /// nil = 未手动切换（按极值比自动选）；对齐网页端 localStorage tt.yscale
-    @AppStorage("tt.yscale") private var yScaleManual: String = ""
-    @State private var logScale = false
 
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
@@ -30,6 +27,19 @@ struct OverviewView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 260)
+                Menu {
+                    Picker("刷新间隔", selection: intervalSelection) {
+                        Text("30s").tag(30)
+                        Text("1分钟").tag(60)
+                        Text("5分钟").tag(300)
+                        Text("10分钟").tag(600)
+                    }
+                } label: {
+                    Label(intervalLabel, systemImage: "arrow.clockwise")
+                        .font(.callout)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 Button {
                     state.requestScan()
                 } label: {
@@ -40,20 +50,18 @@ struct OverviewView: View {
                 .disabled(state.scanning)
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    statCards
-                    chartCard
+                VStack(alignment: .leading, spacing: 16) {
+                    summaryCard
+                    detailGrid
+                    hitRateCard
+                    trendCard
                     quotaSection
                     modelSection
                 }
-                .padding(24)
+                .padding(20)
             }
         }
         .navigationTitle("用量概览")
-        .onAppear { applyAutoScale() }
-        .onChange(of: state.dailyRows) { _, _ in
-            if yScaleManual.isEmpty { applyAutoScale() }
-        }
     }
 
     private var updatedText: String? {
@@ -62,34 +70,104 @@ struct OverviewView: View {
         }
     }
 
-    // ------------------------------------------------------------ 统计卡 ----
+    /// 刷新间隔下拉（cc-switch 式）：读写设置键 scan_interval
+    private var intervalSelection: Binding<Int> {
+        Binding(get: { state.scanIntervalSeconds },
+                set: { state.updateSetting(key: "scan_interval", value: $0) })
+    }
 
-    private var statCards: some View {
+    private var intervalLabel: String {
+        switch state.scanIntervalSeconds {
+        case 30: return "30s"
+        case 300: return "5m"
+        case 600: return "10m"
+        default: return "1m"
+        }
+    }
+
+    // -------------------------------------------------------- 总览大卡 ----
+
+    private var summaryCard: some View {
         let total = state.statTotal
-        let cards: [(title: String, value: String, sub: String, warn: Bool)] = [
-            ("Token 总量", UIFormat.tokens(total.tokens, yi: yi),
-             "输入 \(UIFormat.tokens(total.input, yi: yi)) · 输出 \(UIFormat.tokens(total.output, yi: yi)) · 缓存读写均计入", false),
-            ("成本估算", UIFormat.cost(total.cost),
-             total.unpriced > 0 ? "⚠ \(total.unpriced) 条未计价" : "按 prices.json 计价", total.unpriced > 0),
-            ("会话数", "\(total.sessions)",
-             "\(state.statRows.count) 个工具当前有数据", false),
-            ("缓存读取", UIFormat.tokens(total.cacheRead, yi: yi),
-             "写入 \(UIFormat.tokens(total.cacheWrite, yi: yi))", false),
-        ]
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4),
-                         spacing: 12) {
-            ForEach(cards, id: \.title) { card in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(card.title)
+        return HStack(alignment: .center, spacing: 16) {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 44, height: 44)
+                .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("真实消耗 Tokens")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // cc-switch 风格：完整千分位大数字 + 万换算副标签
+                    Text(total.tokens, format: .number)
+                        .font(.system(size: 30, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                    Text(UIFormat.wan(total.tokens))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(card.value)
-                        .font(.system(size: 26, weight: .semibold, design: .rounded))
+                }
+            }
+            Spacer()
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("总请求数")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(total.events)")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                    Text(card.sub)
-                        .font(.caption2)
-                        .foregroundStyle(card.warn ? Color.orange : Color.secondary)
-                        .lineLimit(2)
+                        .foregroundStyle(.blue)
+                }
+                .frame(minWidth: 72, alignment: .leading)
+                Divider()
+                    .frame(height: 36)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("总成本")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(UIFormat.costPrecise(total.cost))
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.green)
+                }
+                .padding(.leading, 14)
+                .frame(minWidth: 88, alignment: .leading)
+            }
+            .padding(12)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .padding(16)
+        .modifier(CardBackground())
+    }
+
+    // -------------------------------------------------------- 明细卡 ----
+
+    private var detailGrid: some View {
+        let t = state.statTotal
+        let cards: [(title: String, value: String, icon: String, tint: Color)] = [
+            ("新增输入", UIFormat.tokens(t.input, yi: yi), "arrow.down.to.line", .blue),
+            ("Output", UIFormat.tokens(t.output, yi: yi), "arrow.up.to.line", .purple),
+            ("创建", UIFormat.tokens(t.cacheWrite, yi: yi), "internaldrive", .secondary),
+            ("命中", UIFormat.tokens(t.cacheRead, yi: yi), "sparkles", .indigo),
+        ]
+        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
+                                   GridItem(.flexible(), spacing: 12)],
+                         spacing: 12) {
+            ForEach(cards, id: \.title) { card in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: card.icon)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(card.tint == .secondary ? Color.secondary : card.tint)
+                        Text(card.title)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(card.value)
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,79 +178,112 @@ struct OverviewView: View {
         }
     }
 
-    // ------------------------------------------------------------ 趋势图 ----
+    // ---------------------------------------------------- 缓存命中率 ----
 
-    private struct DailyPoint: Identifiable {
-        var id: String { "\(day)|\(tool)" }
-        let day: String
-        let tool: String
-        let tokens: Double
+    private var hitRate: Double? {
+        let t = state.statTotal
+        guard t.tokens > 0 else { return nil }
+        return Double(t.cacheRead) / Double(t.tokens) * 100
     }
 
-    private var chartPoints: [DailyPoint] {
-        state.dailyRows.map {
-            DailyPoint(day: $0.day, tool: $0.tool, tokens: Double($0.stats.tokens))
+    private var hitRateCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("缓存命中率")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(UIFormat.percent(hitRate))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.green)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.green.opacity(0.15))
+                    Capsule()
+                        .fill(Color.green)
+                        .frame(width: geo.size.width * min(1, (hitRate ?? 0) / 100))
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(16)
+        .modifier(CardBackground())
+    }
+
+    // ------------------------------------------------------ 使用趋势 ----
+
+    /// 每个时间桶跨工具聚合后的用量点（dailyRows 是 分桶×工具 粒度）
+    private var trendPoints: [TrendPoint] {
+        var order: [String] = []
+        var acc: [String: (i: Double, o: Double, cr: Double, cw: Double, c: Double)] = [:]
+        for row in state.dailyRows {
+            if acc[row.day] == nil {
+                order.append(row.day)
+                acc[row.day] = (0, 0, 0, 0, 0)
+            }
+            let a = acc[row.day]!
+            acc[row.day] = (a.i + Double(row.stats.input),
+                            a.o + Double(row.stats.output),
+                            a.cr + Double(row.stats.cacheRead),
+                            a.cw + Double(row.stats.cacheWrite),
+                            a.c + row.stats.cost)
+        }
+        return order.map {
+            TrendPoint(id: $0, day: $0,
+                       input: acc[$0]!.i, output: acc[$0]!.o,
+                       cacheRead: acc[$0]!.cr, cacheWrite: acc[$0]!.cw,
+                       cost: acc[$0]!.c)
         }
     }
 
-    /// 极值比悬殊（>30 倍）时自动用对数；手动切换后不再自动。
-    private func applyAutoScale() {
-        let values = chartPoints.map(\.tokens).filter { $0 > 0 }.sorted(by: >)
-        logScale = values.count > 1 && values[0] / values[values.count - 1] > 30
-    }
-
-    private var chartCard: some View {
+    private var trendCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("每日趋势")
+                Text("使用趋势")
                     .font(.headline)
                 Spacer()
-                Button("Y 轴 · \(logScale ? "对数" : "线性")") {
-                    logScale.toggle()
-                    yScaleManual = logScale ? "log" : "linear"
-                }
-                .font(.caption)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
+                Text(rangeLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            if chartPoints.isEmpty {
-                ContentUnavailableView("暂无数据", systemImage: "chart.bar",
+            if trendPoints.isEmpty {
+                ContentUnavailableView("暂无数据", systemImage: "chart.xyaxis.line",
                                        description: Text("点右上角「扫描」"))
-                    .frame(height: 240)
+                    .frame(height: 220)
             } else {
-                Chart(chartPoints) { point in
-                    if logScale {
-                        // 对数轴下柱条不能从 0 起始（log(0) 会崩），用 yStart/yEnd 区间柱
-                        // 对齐网页端 Chart.js 的 y.min = 1
-                        BarMark(
-                            x: .value("日期", point.day),
-                            yStart: .value("最小", 1.0),
-                            yEnd: .value("Tokens", max(point.tokens, 1))
-                        )
-                        .foregroundStyle(by: .value("工具", toolDisplayName(point.tool)))
-                    } else {
-                        BarMark(
-                            x: .value("日期", point.day),
-                            y: .value("Tokens", point.tokens)
-                        )
-                        .foregroundStyle(by: .value("工具", toolDisplayName(point.tool)))
-                    }
-                }
-                .chartYScale(type: logScale ? .log : .linear)
-                .chartYAxis { AxisMarks(position: .leading) }
-                .chartForegroundStyleScale(domain: ScannerRegistry.all.map(toolDisplayName),
-                                           range: ScannerRegistry.all.map { toolColor($0) })
-                .chartLegend(.hidden)
-                .frame(height: 240)
+                HandDrawnTrendChart(points: trendPoints,
+                                    isHourly: state.range == "day")
+                trendLegend
             }
         }
         .padding(16)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .modifier(CardBackground())
     }
 
-    // ------------------------------------------------------------ 配额 ----
+    private var rangeLabel: String {
+        ["day": "今天", "week": "本周", "month": "本月", "all": "全部"][state.range] ?? state.range
+    }
+
+    private var trendLegend: some View {
+        let items: [(name: String, color: Color)] = [
+            ("成本", .red), ("缓存创建", .orange), ("缓存命中", .purple),
+            ("输入", .blue), ("输出", .green),
+        ]
+        return HStack(spacing: 14) {
+            ForEach(items, id: \.name) { item in
+                HStack(spacing: 4) {
+                    Circle().fill(item.color).frame(width: 7, height: 7)
+                    Text(item.name)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // ---------------------------------------------------------- 配额 ----
 
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -183,7 +294,8 @@ struct OverviewView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
+                                    GridItem(.flexible(), spacing: 12)],
                           spacing: 12) {
                     ForEach(state.quotaEntries, id: \.id) { entry in
                         QuotaCard(entry: entry)
@@ -193,7 +305,7 @@ struct OverviewView: View {
         }
     }
 
-    // ------------------------------------------------------------ 模型榜 ----
+    // -------------------------------------------------------- 模型榜 ----
 
     private var modelSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -233,6 +345,16 @@ struct OverviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
+    }
+}
+
+/// 卡片统一背景：白底 + 圆角 + 轻阴影
+private struct CardBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(.background)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
     }
 }
 

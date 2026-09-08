@@ -25,7 +25,7 @@ final class DifferentialExportTests: XCTestCase {
         XCTAssertEqual(export.formatVersion, TokenTrackerCore.differentialFormatVersion)
         XCTAssertEqual(Set(export.scanResults.keys),
                        ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"])
-        XCTAssertEqual(export.events.count, 16)
+        XCTAssertEqual(export.events.count, 17)
         XCTAssertEqual(export.sessionMeta.count, 7)
         XCTAssertEqual(export.snapshots.count, 4)
     }

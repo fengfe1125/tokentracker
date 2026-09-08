@@ -1,204 +1,122 @@
 # TokenTracker
 
 统计本机 **Claude Code · Kimi Code · Codex · DSH · Pi · opencode · Hermes Agent**
-七个 AI 编程工具的 Token 用量与成本。用量日志在本机读取和保存；官方配额查询、登录刷新会访问对应服务，不上传用量日志。
+七个 AI 编程工具的 Token 用量、成本与订阅配额。
 
-## 桌面 App（macOS 状态栏常驻 · 白色简洁 UI）
+用量日志只在本机读取和保存。官方配额查询及登录刷新会访问对应服务，
+不会上传本地用量日志。
 
-<img src="assets/icon_1024.png" width="128" height="128" alt="TokenTracker：暖橙色开口圆环与折线">
+## macOS App
 
-图标源稿：[Figma · TokenTracker App Icon](https://www.figma.com/design/HFAWys8F1N3MDP3HXZvGIB?node-id=2-2)。
-应用使用浅色圆角底板；页面使用同一透明线条符号。构建直接使用仓库资产，不访问 Figma、不重绘图标。
-更新流程和验收见[图标说明](docs/icon-design.md)。
+<img src="assets/icon_1024.png" width="128" height="128" alt="TokenTracker App 图标">
 
-> **屏幕顶部系统状态栏常驻**（⚡ 实时今日用量，点开菜单看成本/配额、立即扫描、唤出主面板）
-> + 无边框白色简洁主面板，关闭只隐藏不退出，状态栏随时唤回。
+当前桌面实现是 `swift/` 下的原生 SwiftUI App，支持：
 
-> **当前主力是 SwiftUI 原生版**（`swift/`）：`./scripts/build_swift_app.sh` →
-> `dist/TokenTracker.app`（与旧版同 bundle id `com.tokentracker.desktop`，
-> 覆盖安装到 /Applications 即可）；发行打包 `./scripts/release_swift.sh`
-> （签名 + DMG，公证说明见脚本）。重构全过程见
-> [迁移计划](docs/swiftui-migration-plan.md)。
-> Python 版（`app/` + PyInstaller）进入维护模式，仅 CLI（`./tt`）继续共用；
-> 两者共用 `~/.tokentracker/`（usage.db / settings.json / 配额缓存），
-> **不要同时常驻**。
+- 状态栏实时显示今日用量与订阅配额；
+- 概览、趋势、模型排行、会话列表和独立会话详情窗口；
+- 自动扫描、手动刷新、开机启动和应用内更新；
+- 从会话详情在 Terminal、iTerm2、WezTerm 或 Ghostty 中继续会话；
+- macOS 14 Sonoma 及以上版本。
+
+构建与运行：
 
 ```bash
-./scripts/build_app.sh              # 一键打包 → dist/TokenTracker.app（自包含，双击即用）
+./scripts/build_swift_app.sh
 open dist/TokenTracker.app
 ```
 
-开发模式（无需打包）：
+发行包：
 
 ```bash
-.venv/bin/pip install pywebview    # 首次
-.venv/bin/python app/desktop.py    # 状态栏图标 + 主面板
+./scripts/release_swift.sh
 ```
 
-- 状态栏：标题实时显示今日 tokens + 选中平台最紧的配额窗口。默认以一枚 14pt 的
-  **彩色配额圆**（AppKit 矢量绘制、明暗模式自适应、retina 清晰）代替闪电：
-  填充角 = 已用百分比，颜色按紧急度（绿 <50% / 琥珀 50–80% / 红 ≥80%，≥80% 轻微呼吸），
-  无配额数据或「仅今日用量」时为灰色空心圆；标题文字相应精简为 `87.92M · C`
-  （精确百分比点开菜单即得）。关掉「圆环显示配额」则回到 `⚡ 87.92M · C 56%`
-  （分段着色：⚡ 品牌橙、配额按紧急度绿/琥珀/红）。官方数据过期显示 `~`、
-  本地估算显示 `≈`；扫描中显示旋转指示，数值刷新有短暂高亮，
-  系统「减少动态效果」开启时全部降级为静态。菜单含今日统计、各订阅配额最紧窗口
-  （工具色圆点 + 紧急度着色）、「状态栏显示」二级菜单（radio + 圆点图标 + 当前标题预览，
-  选择记住在 `~/.tokentracker/settings.json`）、「打开主面板」「设置…」「立即扫描」「退出」。
-  无 Dock 图标（主面板打开时临时出现）。
-  **macOS 26 (Tahoe)**：系统对第三方状态栏图标有 StatusKit 门控，首次需在
-  「系统设置 → 菜单栏」中允许 TokenTracker；App 内置自愈（周期重排 + 隐藏检测重建）
-  并避免触发 Tahoe 的 attributedTitle 重复赋值消失缺陷（配额圆同样按整数百分点缓存，
-  变化才重绘）。
-- 设置界面：主面板侧边栏「设置」（或状态栏菜单「设置…」、快捷键 ⌘,）：
-  - **标题显示**：状态栏标题追加哪个平台的最紧配额窗口（等同状态栏二级菜单，双向同步）；
-  - **圆环显示配额**（默认开）：闪电换成彩色配额圆，标题省掉百分比数字；关掉回到 ⚡ + 数字；
-  - **紧凑标题**：更短的状态栏文字（`87.92M·C`，关掉圆环时为 `⚡12.30M·C45%`）——刘海屏 / 菜单栏图标多时可防止被挤出屏幕；
-  - **开机自动启动**：登录 macOS 后自动打开（写入 LaunchAgent，仅打包后的 .app 支持）；
-  - **终端 App**：「继续会话」用哪个终端打开（自动检测 / Terminal / iTerm2 / WezTerm / Ghostty）；
-  - **本地数据目录**：一键在 Finder 打开 `~/.tokentracker`。
-  所有设置保存在 `~/.tokentracker/settings.json`，状态栏 5 秒内自动生效，也可通过
-  `GET/POST /api/settings` 读写（仅接受白名单内的键）。
-- 主面板：概览（4 统计卡 / 每日趋势图 / 订阅配额 / 模型榜）+ 会话记录两个视图；
-  侧栏展示 7 个工具的数据源状态与今日量，点击工具直达其会话列表；
-  会话表可点表头排序、点行展开详情抽屉（按模型分解，可一键在 Finder 打开项目目录）；
-  快捷键 ⌘1/⌘2 切视图、⌘, 设置、⌘R 扫描、⌘W 关闭面板；「扫描日志」按钮可随时增量扫描。
-  红点关闭仅隐藏面板，真正退出走状态栏菜单。
-- 继续会话：会话行 ▶ 或详情抽屉「▶ 继续会话」在终端里直接恢复该会话（自动 cd 到
-  原项目目录；目录已移动时可改选目录）。支持 Claude Code / Codex / Kimi / opencode / Pi /
-  Hermes（DSH 无 CLI，按钮禁用）。终端偏好（Terminal / iTerm2 / WezTerm / Ghostty）在设置里选；
-  终端打开失败自动把命令复制到剪贴板；浏览器模式（tt serve）下按钮降级为复制命令。
-  命令可用性也可查 `GET /api/resume?tool=&session_id=&project=`。
-- 自动扫描：App 启动时扫描一次，此后由 Python 服务每 60 秒调度增量扫描；隐藏主面板仍继续。定时与手动扫描共用锁，运行时跳过重复请求；退出 App 停止调度。
+脚本默认使用本地 ad-hoc 签名。Developer ID 签名与公证要求见脚本说明。
 
-## 数据来源（自动探测）
+### macOS 26 状态栏权限
 
-| 工具 | 数据位置 | 说明 |
-|---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | 会话 JSONL 的 `usage` 字段 |
-| Codex | `~/.codex/logs_2.sqlite` / `~/.codex/sessions/` | 标准 rollout JSONL 优先；SQLite 按会话/turn 补缺，不将两套来源直接相加 |
-| opencode | `~/.local/share/opencode/opencode.db` | `session` 表自带 token/cost 聚合 |
-| DSH | `~/.dsh/sessions/**/session.jsonl.zstd` | zstd 压缩事件流（需要系统 `zstd` 命令） |
-| Hermes Agent | `~/.hermes/state.db`（`session_model_usage` 表） | 含官方估算/实际成本 |
-| Kimi Code | `~/.kimi-code/server/events/session_*.jsonl` | `turn.step.completed` 每步增量 |
-| Pi | `~/.pi/agent/sessions/**/*.jsonl` | `message.usage` + 官方 cost |
+首次使用可能需要在“系统设置 → 菜单栏”中允许 TokenTracker。
+App 会避免 Tahoe 的重复标题赋值问题，并带有状态栏重排和重建自愈逻辑。
+排障记录见[状态栏说明](docs/menubar-visibility-plan.md)。
 
-## 快速开始
+## 命令行工具
+
+过渡期继续保留 Python CLI：
 
 ```bash
-cd tokentracker
-./tt detect            # 查看各工具数据源是否被识别
-./tt scan              # 扫描日志入库（增量，可重复执行）
-./tt stats             # 终端表格统计
+./tt detect
+./tt scan
+./tt scan --tool codex
+./tt scan --full
+./tt scan --reset --tool opencode
+./tt stats
 ./tt stats --range week
-./tt serve --open      # 启动本地仪表盘（默认 http://127.0.0.1:8765，被占用时自动顺延）
-./tt serve --scan      # 仅启动时扫描一次
-./tt serve --auto-scan # 启动时扫描，此后每 60 秒扫描；默认不启用
-./tt scan && ./tt serve --open
+./tt stats --tool claude
+./tt quotas
 ```
 
-对 `dsh` 之外其他工具也可以用 `python3 -m tokentracker ...`。
-
-SwiftUI 版另有原生 CLI：`swift build -c release --package-path swift` 后用
-`.build/release/tt-swift detect|scan|stats|quotas`（与 `./tt` 同库同数字）。
-
-## 成本估算
-
-- 总 Token = **非缓存输入 + 输出 + 缓存读取 + 缓存写入**；已包含在输出中的推理 Token 不重复计入。
-- 价格表：`prices.json`（本项目根目录），单位 **美元 / 百万 token**，可自行增删改。
-- 匹配规则：模型名先精确、再子串（不区分大小写），最后回退 `default`。
-- 未匹配到价格的模型：只统计 token、不计费（仪表盘显示 `—`）。
-- opencode / Hermes 自带官方成本时优先采用自带值。
-- 另可用 `TOKENTRACKER_PRICES=/path/prices.json` 指定价格表。
-
-历史总量保留，但无法确定时间的部分会标注“未分配到时间”，不强行算进今天。累计快照的后续差量标注“按观测时间估算”；观察区间跨越日期/小时边界时，不强行放入单一分桶。见[指标口径](docs/metrics.md)和[迁移说明](docs/migrations.md)。
-
-## 增量扫描
-
-- JSONL：保存读取前的 inode、纳秒 mtime 和 size；读取期间发生变化则下轮重扫，按消息/事件身份去重。
-- Codex：识别 `session_meta`、`turn_context`、`event_msg/token_count`、ISO 时间与累计差量；重复通知不重复入库。同 turn 优先 JSONL，SQLite 只补其缺少的差额；没有可靠 turn 身份则按整个会话选择 JSONL。
-- opencode / Hermes：持久化每个来源的累计快照。首次存量为未分配历史，后续仅记录差量和观察区间；计数器下降则报告重置、更新基线，不生成负 Token。
-- `stats`、普通 `serve` 不会启动后台扫描。`scan --full` 重读源文件但保留历史与快照；`scan --reset` 是显式清空操作，会丢失已积累的时间信息，**不要用它迁移或日常刷新**。
-
-## 环境变量
-
-| 变量 | 作用 |
-|---|---|
-| `TOKENTRACKER_DB` | 汇总库位置（默认 `~/.tokentracker/usage.db`） |
-| `TOKENTRACKER_PRICES` | 价格表位置 |
-| `CLAUDE_PROJECTS_DIR` / `CODEX_LOGS_DB` / `CODEX_SESSIONS_DIR` / `OPENCODE_DB` / `DSH_SESSIONS_DIR` / `HERMES_HOME` / `KIMI_CODE_HOME` / `PI_HOME` | 各工具数据源覆盖 |
-
-## 订阅配额进度条（固定窗口）
-
-顶部配额卡片固定显示 **5 小时 / 周 (7天) / 月度** 三个窗口的进度，**不随页面时间范围变化**。数据两级来源：
-
-1. **官方**（凭据有效时）：显示官方百分比与重置倒计时，徽标同时标注走的那条路（`官方 · 桌面采样 / API / wham / RPC`）；凭据失效自动降级并在卡片标注原因。
-   - **Claude** 三级回退链：① 桌面 App 采样文件（`~/Library/Application Support/Claude/plan-usage-history.json`，桌面 App 每 ~5 分钟自采，无需凭据，<30min 有效；不受 Claude Code 2.1.x 清空钥匙串的官方 bug 影响）→ ② `api.anthropic.com/api/oauth/usage`（凭据遍历钥匙串 / `~/.claude/.credentials.json` / 本地快照 `~/.tokentracker/claude_cred_backup.json`，跳过被清空的空壳条目逐个尝试；手写刷新失败再委托官方 CLI `claude auth login` 环境变量刷新）→ ③ 提示重新登录。见到有效凭据自动快照，官方存储再被清空也能自行复活。
-   - **Kimi**：只读 `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json` 中的现有凭据，查询 `api.kimi.com/coding/v1/usages`。access_token 只有 ~15 分钟寿命且 Kimi Code 仅活跃时才刷新，故**过期时 TokenTracker 自刷新**：`POST auth.kimi.com/api/oauth/token`（public client 的 refresh_token 授权），结果原子写回凭据文件——refresh_token 每次刷新轮换，kimi-code 刷新时从磁盘重读，写回才不会把它登出。flock 串行化多进程刷新；遇并发轮换（旧 refresh_token 一用即废）重读磁盘兜底；仅过期才刷新，平常零写；不启动登录流程。
-   - **Codex**：主路 `chatgpt.com/backend-api/wham/usage`（复用 `~/.codex/auth.json`，401 自动刷新并原子写回），`codex app-server` RPC 兑底。
-2. **本地估算**：从汇总库统计能归入该窗口的用量（token 或估算成本），对比 `quotas.json` 的上限；未分配历史和跨窗口观察区间另行提示，不算入窗口百分比。
-
-成功缓存 120 秒，普通失败退避 120 秒，429 遵守 `Retry-After`（手动刷新也不绕过）。官方旧结果最多保留 24 小时，并明确标记过期。窗口 `source` 表示来源、`stale` 表示过期，说明文案不参与状态判断。升级不会修改用户的配额上限。
-
-Kimi 凭据文件更新后，下次配额轮询会重新读取，不必等完普通失败退避；仍不会绕过429限流。空凭据或401只表示当前读取的访问令牌不可用，不会直接要求重新登录。若凭据里没有 refresh_token（或刷新被拒），TokenTracker 不会自行维持登录态，卡片提示 `kimi login` 重新登录。
-
-内置条目（`quotas.json` 可改）：
-
-| 卡片 | 窗口 | 数据 |
-|---|---|---|
-| Claude Code | 5h / 7d | **官方**：桌面 App 采样文件 → `api.anthropic.com/api/oauth/usage` 回退链（见上） |
-| Kimi | 5h / 7d / 月度 | **官方**：只读 Kimi Code 凭据 → `api.kimi.com/coding/v1/usages`（请求次数配额）；token 过期自刷新并原子写回（refresh_token 轮换，kimi-code 从磁盘重读不受影响）；月度窗口本地测算 |
-| **OpenCode Go** | 5h / 7d / 月度 | **官方** `opencode.ai/zen/go/v1/usage`（Key 自动发现：`~/.local/share/opencode/auth.json` 或 `OPENCODE_GO_API_KEY`；实现参考 DSH cost-meter 插件 queryGoQuota） |
-| Codex | 5h / 7d | **官方**：`chatgpt.com/backend-api/wham/usage`（CodexBar/headroom 同款），`codex app-server` RPC 兑底 |
-| opencode | 月度=$60 | GO 月度等值；用量=opencode 本地成本 |
+Swift Package 同时提供原生 CLI：
 
 ```bash
-./tt quotas   # 终端查看全部窗口
+swift build -c release --package-path swift
+swift/.build/release/tt-swift detect
+swift/.build/release/tt-swift scan --full
+swift/.build/release/tt-swift stats --range week
+swift/.build/release/tt-swift quotas
 ```
 
-官方抓取实现参考：[CodexBar docs/claude.md](https://github.com/steipete/CodexBar/blob/main/docs/claude.md)、[CodexBar docs/codex.md](https://github.com/steipete/CodexBar/blob/main/docs/codex.md)、[zach-source/ccswitch](https://github.com/zach-source/ccswitch)（CLI 委托刷新 + 凭据快照思路）、[headroom](https://github.com/chopratejas/headroom)（wham/usage 端点）、[OpenCode Go 文档](https://opencode.ai/docs/go/)。
+两个 CLI 读写同一个 `~/.tokentracker/usage.db`。Python CLI 暂时保留用于完整参数兼容
+和 Swift 差分测试；浏览器仪表盘已经退役。
 
-## 每日趋势图 Y 轴
+## 数据来源
 
-数据里有极端大值的天会把其他日期压扁——点图右上角 **「Y 轴」** 按钮在线性/对数刻度间切换；存在明显极端值时默认自动切到对数。
+| 工具 | 默认位置 | 统计来源 |
+|---|---|---|
+| Claude Code | `~/.claude/projects/**/*.jsonl` | assistant usage |
+| Codex | `~/.codex/sessions/**/*.jsonl`、`~/.codex/logs_*.sqlite` | token_count 与 turn 遥测 |
+| Kimi Code | `~/.kimi-code/server/events/session_*.jsonl` | turn.step.completed |
+| DSH | `~/.dsh/sessions/**/session.jsonl.zstd` | usage 事件 |
+| Pi | `~/.pi/agent/sessions/**/*.jsonl` | message usage |
+| opencode | `~/.local/share/opencode/opencode.db` | 会话累计量 |
+| Hermes Agent | `~/.hermes/**/*.db` | session_model_usage |
 
-## 目录结构
+可以通过环境变量覆盖数据源路径，完整列表以各扫描器和 `ScanRoots` 为准。
 
+## 数据与口径
+
+- 数据库：`~/.tokentracker/usage.db`
+- 设置：`~/.tokentracker/settings.json`
+- 官方配额缓存：`~/.tokentracker/official_cache.json`
+- 价格表：仓库根目录 `prices.json`
+- 本地配额配置：仓库根目录 `quotas.json`
+
+Token、成本、观察区间和未分配历史的计算规则见[指标口径](docs/metrics.md)，
+数据库兼容与恢复方式见[迁移说明](docs/migrations.md)。
+
+## 项目结构
+
+```text
+swift/
+  Sources/TokenTrackerCore/       扫描、存储、计价、配额、恢复与更新
+  Sources/TokenTrackerApp/        SwiftUI/AppKit macOS App
+  Sources/tt-swift/               原生 CLI
+  Tests/TokenTrackerCoreTests/    Swift 测试
+tokentracker/                      过渡期 Python CLI 与差分 oracle
+tests/differential/               跨实现固定语料与基线
+assets/                            App 图标源文件与 ICNS
+scripts/                           Swift 构建、发布和图标验证
 ```
-tokentracker/
-├── tt                        # 启动器
-├── prices.json               # 可编辑价格表
-├── web/index.html            # 单页仪表盘（Chart.js 已内置离线）
-├── app/                      # 桌面 App（pywebview 玻璃风主面板 + 状态栏常驻）
-│   ├── desktop.py            # 入口：主面板 + NSStatusItem 状态栏
-│   ├── menubar.py            # 状态栏：今日用量标题 + 下拉菜单
-│   └── web/                  # 主界面 index.html / app.css / app.js
-├── scripts/
-│   ├── build_app.sh          # 一键打包 → dist/TokenTracker.app
-│   ├── build_icon.sh         # 显式将已确认 PNG 转为 ICNS（macOS）
-│   └── check_icon.py         # 离线校验 SVG / PNG / ICNS
-└── tokentracker/
-    ├── __main__.py           # CLI: scan / stats / detect / serve
-    ├── db.py                 # SQLite 汇总库 + 查询
-    ├── pricing.py            # 成本估算
-    ├── server.py             # 本地 HTTP 服务（含 /app/* GUI 静态路由）
-    └── scanners/             # 7 个工具的适配器
-```
 
-## 测试与升级验收
+SwiftUI 重构过程和模块映射见[迁移记录](docs/swiftui-migration-plan.md)，
+图标来源与离线验证见[图标说明](docs/icon-design.md)。
+
+## 测试
 
 ```bash
 python3 -m unittest discover -s tests -v
-node --check app/web/app.js
-node tests/test_frontend.js
-python3 tests/browser_fixture.py  # 可选：仅虚构用量/配额的浏览器验收页面，Ctrl-C结束
+swift test --package-path swift
+python3 scripts/check_icon.py
 ```
 
-见[逐项验收记录](docs/audit-acceptance.md)、[指标口径](docs/metrics.md)、[迁移说明](docs/migrations.md)。
-
-## 参考项目
-
-- [tokscale](https://github.com/junhoyeo/tokscale) — 多客户端用量统计（数据位置表）
-- [ccusage](https://github.com/ccusage/ccusage) — Claude Code 解析权威实现
-- [tokentelemetry](https://github.com/VasiHemanth/tokentelemetry) — Hermes + Claude + Codex 仪表盘
-- [claude-usage](https://github.com/joshhu/claude-usage) — Claude Dashboard 形态
+Swift 差分测试会使用 `tests/differential/expected_python.json` 作为冻结基线；
+首次生成虚构语料需要系统安装 `zstd`。

@@ -20,6 +20,22 @@ enum UIFormat {
             : String(format: "$%.2f", v)
     }
 
+    /// 精确成本：$%.4f；≥1000 仍走 $%.2fK
+    static func costPrecise(_ v: Double) -> String {
+        v >= 1000
+            ? String(format: "$%.2fK", v / 1000)
+            : String(format: "$%.4f", v)
+    }
+
+    /// cc-switch 风格的「万」换算：≥1万 → "x.xx 万"，否则原样数字
+    static func wan(_ n: Int64) -> String {
+        let v = Double(n)
+        if v >= 10_000 {
+            return String(format: "≈ %.2f 万", v / 10_000)
+        }
+        return "≈ \(n)"
+    }
+
     /// "2026-08-25 14:00" 本地时间
     static func dateTime(ms: Int64?) -> String {
         guard let ms, ms > 0 else { return "—" }

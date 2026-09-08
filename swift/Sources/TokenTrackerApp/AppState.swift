@@ -43,16 +43,28 @@ final class AppState: ObservableObject {
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
     @Published var updatedAt: Date?
 
+    // Codex 多账号切换（设置页管理区）
+    @Published var codexAccounts: [CodexAccount] = []
+    @Published var activeCodexAccountID: String?
+    @Published var accountOpMessage: String?            // 操作结果 / 错误提示
+
     // 设置（effective = 默认值 + 校验后的已存值）
     @Published var settings: [String: Any] = [:]
 
     /// 会话列表查询上限（顶栏计数要据此区分「共 N 个」和「最近 N 个」）
     nonisolated static let sessionLimit = 300
 
+    /// 自动扫描/刷新节奏（秒）；设置键 scan_interval，默认 60
+    var scanIntervalSeconds: Int {
+        (settings["scan_interval"] as? NSNumber)?.intValue ?? 60
+    }
+
     let readStore: UsageStore
     let settingsStore: SettingsStore
     let scanRoots: ScanRoots
     let priceTable: PriceTable
+    /// Codex 多账号切换：快照当前登录 + 一键原子替换 auth.json
+    let accountSwitcher: CodexAccountSwitcher
     /// 官方配额抓取（注入缝：测试可换成假实现；nil = 仅本地估算）
     var officialQuotaService: OfficialQuotaService?
     private(set) var scheduler: ScanScheduler!
@@ -89,9 +101,11 @@ final class AppState: ObservableObject {
         }
         settingsStore = SettingsStore()
         scanRoots = ScanRoots()
+        accountSwitcher = CodexAccountSwitcher()
         self.officialQuotaService = officialQuotaService
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
+        reloadCodexAccounts()
     }
 
     /// 启动调度：启动扫一次 + 每 60s 增量（写库用独立连接）。
@@ -108,7 +122,7 @@ final class AppState: ObservableObject {
                 let repriced = try writeStore.reprice(prices)
                 return (results, repriced)
             },
-            interval: 60)
+            interval: Double(scanIntervalSeconds))
         scheduler.onFinish = { [weak self] in
             DispatchQueue.main.async { self?.refreshData() }
         }
@@ -157,6 +171,7 @@ final class AppState: ObservableObject {
         if fp != settingsFingerprint {
             settingsFingerprint = fp
             settings = effective
+            scheduler?.setInterval(Double(scanIntervalSeconds))
         }
     }
 
@@ -164,6 +179,7 @@ final class AppState: ObservableObject {
         if settingsStore.set(key: key, value: value) {
             settings = settingsStore.effective()
             settingsFingerprint = Self.fingerprint(settings)
+            scheduler?.setInterval(Double(scanIntervalSeconds))
         }
     }
 
@@ -175,6 +191,7 @@ final class AppState: ObservableObject {
     // ------------------------------------------------------------ 数据 ----
 
     func refreshData() {
+        reloadCodexAccounts()   // 账号列表与 active 跟随轮询热反映
         let store = readStore
         let range = range
         let search = sessionSearch
@@ -254,6 +271,80 @@ final class AppState: ObservableObject {
             queryQueue.async {
                 cont.resume(returning: try? store.sessionDetail(tool: tool, sessionID: sessionID))
             }
+        }
+    }
+
+    // ------------------------------------------------------ Codex 账号 ----
+    //  切换涉及文件读写（回采 + 原子替换 auth.json），一律走 queryQueue，
+    //  回主线程发布结果。日志/提示只带 account_id 与结果，绝不打印 token。
+
+    /// 读账号库 + 当前 active（走查询队列，不占主线程）。
+    func reloadCodexAccounts() {
+        let switcher = accountSwitcher
+        queryQueue.async { [weak self] in
+            let accounts = switcher.store.load()
+            let active = switcher.activeAccountID()
+            DispatchQueue.main.async {
+                self?.codexAccounts = accounts
+                self?.activeCodexAccountID = active
+            }
+        }
+    }
+
+    /// 保存当前 Codex 登录为一份账号快照（name 留空则用 email/id 兜底）。
+    func captureCurrentCodexAccount(name: String) {
+        let switcher = accountSwitcher
+        queryQueue.async { [weak self] in
+            do {
+                let account = try switcher.captureCurrent(name: name)
+                let accounts = switcher.store.load()
+                let active = switcher.activeAccountID()
+                let message = "已保存账号「\(account.name)」"
+                DispatchQueue.main.async {
+                    self?.codexAccounts = accounts
+                    self?.activeCodexAccountID = active
+                    self?.accountOpMessage = message
+                }
+            } catch {
+                let message = "保存失败：\(error)"
+                DispatchQueue.main.async { self?.accountOpMessage = message }
+            }
+        }
+    }
+
+    /// 切换账号：后台执行「回采当前 → 原子写目标」，回主线程发布结果。
+    func switchCodexAccount(id: String) {
+        let switcher = accountSwitcher
+        queryQueue.async { [weak self] in
+            do {
+                try switcher.switchTo(id)
+                let accounts = switcher.store.load()
+                let active = switcher.activeAccountID()
+                DispatchQueue.main.async {
+                    self?.codexAccounts = accounts
+                    self?.activeCodexAccountID = active
+                    self?.accountOpMessage = "已切换，请重启 Codex 生效"
+                }
+            } catch {
+                let message = "切换失败：\(error)"
+                DispatchQueue.main.async { self?.accountOpMessage = message }
+            }
+        }
+    }
+
+    func removeCodexAccount(id: String) {
+        let switcher = accountSwitcher
+        queryQueue.async { [weak self] in
+            let accounts = switcher.store.remove(id)
+            DispatchQueue.main.async { self?.codexAccounts = accounts }
+        }
+    }
+
+    func renameCodexAccount(id: String, name: String) {
+        let switcher = accountSwitcher
+        queryQueue.async { [weak self] in
+            let accounts = switcher.store.rename(id, name: name)
+            DispatchQueue.main.async { self?.codexAccounts = accounts }
         }
     }
 }
