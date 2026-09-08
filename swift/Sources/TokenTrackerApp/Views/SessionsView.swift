@@ -145,6 +145,19 @@ struct SessionsView: View {
                     .truncationMode(.head)
             }
             .width(min: 90, ideal: 150)
+            TableColumn("活动", value: \SessionRowModel.activityExact) { row in
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(row.activityExact) 次")
+                        .font(.callout.monospacedDigit())
+                    if row.activityDerived > 0 || row.skills > 0 {
+                        Text(activitySubtitle(row))
+                            .font(.caption2)
+                            .foregroundStyle(row.activityDerived > 0 ? .orange : .secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .width(min: 76, ideal: 92)
             TableColumn("Tokens", value: \SessionRowModel.tokens) { row in
                 Text(UIFormat.tokens(row.tokens, yi: yi))
                     .font(.callout.monospacedDigit())
@@ -236,7 +249,16 @@ struct SessionRowModel: Identifiable {
     }
 
     var sortTs: Int64 { row.ts ?? 0 }
+    var activityExact: Int64 { row.activityExact }
+    var activityDerived: Int64 { row.activityDerived }
+    var skills: Int64 { row.skills }
     var tokens: Int64 { row.stats.tokens }
     var cost: Double { row.stats.cost }
 }
 
+private func activitySubtitle(_ row: SessionRowModel) -> String {
+    var parts: [String] = []
+    if row.activityDerived > 0 { parts.append("推断 \(row.activityDerived)") }
+    if row.skills > 0 { parts.append("Skill \(row.skills)") }
+    return parts.joined(separator: " · ")
+}

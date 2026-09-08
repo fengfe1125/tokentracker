@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
@@ -48,6 +48,31 @@ CREATE TABLE IF NOT EXISTS session_meta (
     tool TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
     updated_at INTEGER NOT NULL, PRIMARY KEY(tool, session_id)
 );
+CREATE TABLE IF NOT EXISTS agent_activity_events (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL DEFAULT '',
+    raw_name TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    namespace TEXT NOT NULL DEFAULT '',
+    call_id TEXT NOT NULL DEFAULT '',
+    parent_call_id TEXT NOT NULL DEFAULT '',
+    started_at INTEGER,
+    ended_at INTEGER,
+    duration_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    source_kind TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'exact',
+    skill_name TEXT NOT NULL DEFAULT '',
+    skill_confidence TEXT NOT NULL DEFAULT '',
+    src_key TEXT NOT NULL,
+    UNIQUE(agent, src_key)
+);
+CREATE INDEX IF NOT EXISTS idx_activity_agent_time ON agent_activity_events(agent, started_at);
+CREATE INDEX IF NOT EXISTS idx_activity_session ON agent_activity_events(agent, session_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_activity_tool ON agent_activity_events(canonical_name, started_at);
+CREATE INDEX IF NOT EXISTS idx_activity_skill ON agent_activity_events(skill_name, started_at);
 """
 
 
@@ -66,6 +91,8 @@ def _upgrade(conn, path):
         backup_path = f"{path}.v{version}.backup-{time.time_ns()}.db"
         with closing(sqlite3.connect(backup_path)) as backup:
             conn.backup(backup)
+    if version < 3:
+        _validate_residual_activity_table(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
         if legacy and version < 1:
@@ -101,6 +128,35 @@ def _upgrade(conn, path):
     except BaseException:
         conn.rollback()
         raise
+
+
+def _validate_residual_activity_table(conn):
+    """Accept a complete v3 activity table left behind by an older rollback."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_activity_events'"
+    ).fetchone()
+    if not exists:
+        return
+    expected = {
+        "id", "agent", "session_id", "turn_id", "raw_name", "canonical_name",
+        "namespace", "call_id", "parent_call_id", "started_at", "ended_at",
+        "duration_ms", "status", "source_kind", "confidence", "skill_name",
+        "skill_confidence", "src_key",
+    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_activity_events)")}
+    if columns != expected:
+        raise RuntimeError("Existing agent_activity_events schema is incompatible")
+    has_identity = False
+    for index in conn.execute("PRAGMA index_list(agent_activity_events)"):
+        if not index[2]:
+            continue
+        escaped = index[1].replace('"', '""')
+        names = [row[2] for row in conn.execute(f'PRAGMA index_info("{escaped}")')]
+        if names == ["agent", "src_key"]:
+            has_identity = True
+            break
+    if not has_identity:
+        raise RuntimeError("Existing agent_activity_events lacks UNIQUE(agent,src_key)")
 
 
 def connect(db_path: str | None = None) -> sqlite3.Connection:
@@ -142,6 +198,91 @@ def put_event(conn, tool: str, src_key: str, *, session_id: str = "", project: s
         "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tool, src_key, session_id, project, ts, model, input, output, cache_read, cache_write, cost,
          time_quality, interval_start, cost_source, source_kind, source_scope)).rowcount
+
+
+_ACTIVITY_STATUSES = {"success", "error", "denied", "unknown"}
+_ACTIVITY_CONFIDENCE = {"exact", "derived"}
+
+
+def put_activity_event(conn, agent: str, src_key: str, *, session_id: str = "",
+                       turn_id: str = "", raw_name: str, canonical_name: str | None = None,
+                       namespace: str = "", call_id: str = "", parent_call_id: str = "",
+                       started_at: int | None = None, ended_at: int | None = None,
+                       duration_ms: int | None = None, status: str = "unknown",
+                       source_kind: str = "", confidence: str = "exact",
+                       skill_name: str = "", skill_confidence: str = "") -> dict:
+    """Insert one metadata-only tool invocation, or enrich its result fields."""
+    if status not in _ACTIVITY_STATUSES:
+        raise ValueError(f"Unknown activity status: {status}")
+    if confidence not in _ACTIVITY_CONFIDENCE:
+        raise ValueError(f"Unknown activity confidence: {confidence}")
+    if skill_confidence and skill_confidence not in _ACTIVITY_CONFIDENCE:
+        raise ValueError(f"Unknown skill confidence: {skill_confidence}")
+    if not agent or not src_key or not raw_name:
+        raise ValueError("agent, src_key and raw_name are required")
+    canonical_name = canonical_name or canonical_tool_name(raw_name)
+    before = conn.execute(
+        "SELECT id,status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+        (agent, src_key)).fetchone()
+    conn.execute("""
+        INSERT INTO agent_activity_events (
+            agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,parent_call_id,
+            started_at,ended_at,duration_ms,status,source_kind,confidence,
+            skill_name,skill_confidence,src_key
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(agent,src_key) DO UPDATE SET
+            session_id=CASE WHEN excluded.session_id!='' THEN excluded.session_id ELSE session_id END,
+            turn_id=CASE WHEN excluded.turn_id!='' THEN excluded.turn_id ELSE turn_id END,
+            ended_at=COALESCE(excluded.ended_at,ended_at),
+            duration_ms=COALESCE(excluded.duration_ms,duration_ms),
+            status=CASE WHEN excluded.status!='unknown' THEN excluded.status ELSE status END,
+            skill_name=CASE WHEN excluded.skill_name!='' THEN excluded.skill_name ELSE skill_name END,
+            skill_confidence=CASE WHEN excluded.skill_confidence!='' THEN excluded.skill_confidence ELSE skill_confidence END
+        """, (agent, session_id, turn_id, raw_name, canonical_name, namespace, call_id,
+              parent_call_id, started_at, ended_at, duration_ms, status, source_kind,
+              confidence, skill_name, skill_confidence, src_key))
+    after = conn.execute(
+        "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+        (agent, src_key)).fetchone()
+    return {"added": 0 if before else 1,
+            "updated": 1 if before and tuple(before)[1:] != tuple(after) else 0}
+
+
+def complete_activity_event(conn, agent: str, call_id: str, *, status="success",
+                            ended_at=None, duration_ms=None) -> int:
+    if not call_id or status not in _ACTIVITY_STATUSES:
+        return 0
+    row = conn.execute(
+        "SELECT id,started_at,status,ended_at,duration_ms FROM agent_activity_events "
+        "WHERE agent=? AND call_id=? ORDER BY id DESC LIMIT 1", (agent, str(call_id))).fetchone()
+    if not row:
+        return 0
+    if duration_ms is None and ended_at is not None and row["started_at"] is not None:
+        duration_ms = max(0, int(ended_at) - int(row["started_at"]))
+    conn.execute("UPDATE agent_activity_events SET status=?,ended_at=COALESCE(?,ended_at),"
+                 "duration_ms=COALESCE(?,duration_ms) WHERE id=?",
+                 (status, ended_at, duration_ms, row["id"]))
+    effective_ended = ended_at if ended_at is not None else row["ended_at"]
+    effective_duration = duration_ms if duration_ms is not None else row["duration_ms"]
+    return int((row["status"], row["ended_at"], row["duration_ms"]) !=
+               (status, effective_ended, effective_duration))
+
+
+def canonical_tool_name(raw_name: str) -> str:
+    raw = (raw_name or "").strip()
+    low = raw.lower()
+    exact = {
+        "bash": "shell", "shell": "shell", "execute_command": "shell", "exec_command": "shell",
+        "read": "file.read", "read_file": "file.read", "write": "file.write",
+        "write_file": "file.write", "edit": "file.edit", "apply_patch": "file.edit",
+        "glob": "file.search", "grep": "file.search", "search": "web.search",
+        "web_search": "web.search", "skill": "skill.activate", "skill_view": "skill.activate",
+    }
+    if low in exact:
+        return exact[low]
+    if low.startswith("mcp__"):
+        return "mcp." + low[len("mcp__"):].replace("__", ".")
+    return low.replace(" ", "_") or "unknown"
 
 
 def set_scan_cursor(conn, tool: str, cursor: dict):
@@ -395,7 +536,11 @@ def session_detail(conn, tool, session_id):
     model_rows = [dict(r) for r in conn.execute(f"SELECT model,{_AGG},{times} FROM usage_events WHERE {where} GROUP BY model ORDER BY tokens DESC", args)]
     total = dict(conn.execute(f"SELECT COALESCE(MAX(NULLIF(project,'')),'') AS project,{_AGG},{times} FROM usage_events WHERE {where}", args).fetchone())
     intervals = [dict(r) for r in conn.execute("SELECT interval_start,ts,tokens FROM (SELECT interval_start,ts," + TOKENS + " AS tokens FROM usage_events WHERE tool=? AND session_id=? AND time_quality='observed') ORDER BY ts", args)]
-    return {"models": model_rows, **total, "observation_intervals": intervals}
+    activity = activity_timeline(conn, agent=tool, session_id=session_id, limit=500)
+    activity_summary_rows = activity_summary(conn, "all", agent=tool, group="tool", session_id=session_id)
+    return {"models": model_rows, **total, "observation_intervals": intervals,
+            "activity": activity["rows"],
+            "activity_summary": activity_summary_rows}
 
 
 def set_session_title(conn, tool: str, session_id: str, title: str):
@@ -422,4 +567,117 @@ def sessions(conn, range_key="all", tool=None, limit=300, q=None):
                 "OR s.model LIKE ?)")
         args = [*args, *([f"%{q}%"] * 4)]
     sql += " ORDER BY s.ts DESC LIMIT ?"
-    return [dict(r) for r in conn.execute(sql, [*args, limit])]
+    rows = [dict(r) for r in conn.execute(sql, [*args, limit])]
+    if not rows:
+        return rows
+    keys = {(r["tool"], r["session_id"]) for r in rows}
+    lo, hi = _range_bounds(range_key)
+    activity_where = "COALESCE(started_at,ended_at,0)>=? AND COALESCE(started_at,ended_at,0)<?"
+    activity_args = [lo, hi]
+    if range_key == "all":
+        activity_where = "1=1"
+        activity_args = []
+    for a in conn.execute(f"""
+        SELECT agent,session_id,
+          SUM(CASE WHEN confidence='exact' THEN 1 ELSE 0 END) AS activity_exact,
+          SUM(CASE WHEN confidence='derived' THEN 1 ELSE 0 END) AS activity_derived,
+          COUNT(DISTINCT CASE WHEN skill_name!='' THEN skill_name END) AS skills
+        FROM agent_activity_events WHERE {activity_where}
+        GROUP BY agent,session_id
+        """, activity_args):
+        key = (a["agent"], a["session_id"])
+        if key in keys:
+            row = next(r for r in rows if (r["tool"], r["session_id"]) == key)
+            row.update(activity_exact=a["activity_exact"], activity_derived=a["activity_derived"],
+                       skills=a["skills"])
+    for row in rows:
+        row.setdefault("activity_exact", 0)
+        row.setdefault("activity_derived", 0)
+        row.setdefault("skills", 0)
+    return rows
+
+
+def _activity_filter(range_key="all", agent=None, confidence="all", session_id=None,
+                     *, skill=False):
+    if range_key not in ("day", "week", "month", "all"):
+        raise ValueError("invalid range")
+    if confidence not in ("exact", "derived", "all"):
+        raise ValueError("invalid confidence")
+    where, args = [], []
+    if range_key != "all":
+        lo, hi = _range_bounds(range_key)
+        where.append("COALESCE(started_at,ended_at,0)>=? AND COALESCE(started_at,ended_at,0)<?")
+        args.extend((lo, hi))
+    if agent:
+        where.append("agent=?")
+        args.append(agent)
+    if session_id is not None:
+        where.append("session_id=?")
+        args.append(session_id)
+    if confidence != "all":
+        where.append(("skill_confidence" if skill else "confidence") + "=?")
+        args.append(confidence)
+    if skill:
+        where.append("skill_name!=''")
+    return " AND ".join(where) or "1=1", args
+
+
+def activity_summary(conn, range_key="all", agent=None, group="tool", confidence="all",
+                     session_id=None):
+    if group not in ("agent", "tool", "skill"):
+        raise ValueError("invalid group")
+    skill = group == "skill"
+    where, args = _activity_filter(range_key, agent, confidence, session_id, skill=skill)
+    # A single Agent keeps its native spelling. Cross-Agent totals use the
+    # canonical name so aliases such as Bash/shell are not split.
+    name = {"agent": "agent", "tool": "raw_name" if agent else "canonical_name",
+            "skill": "skill_name"}[group]
+    evidence = "skill_confidence" if skill else "confidence"
+    sql = f"""
+        SELECT {name} AS name,COUNT(*) AS calls,
+          COUNT(DISTINCT session_id) AS sessions,
+          SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+          SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
+          SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
+          SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown,
+          SUM(CASE WHEN {evidence}='exact' THEN 1 ELSE 0 END) AS exact,
+          SUM(CASE WHEN {evidence}='derived' THEN 1 ELSE 0 END) AS derived,
+          MAX(COALESCE(ended_at,started_at,0)) AS last_used
+        FROM agent_activity_events WHERE {where}
+        GROUP BY {name} ORDER BY calls DESC,name
+    """
+    return [dict(r) for r in conn.execute(sql, args)]
+
+
+def activity_timeline(conn, *, range_key="all", agent=None, session_id=None, confidence="all",
+                      limit=200, before=None, before_id=None):
+    where, args = _activity_filter(range_key, agent, confidence, session_id)
+    if before is not None:
+        if before_id is None:
+            where += " AND COALESCE(started_at,ended_at,0)<?"
+            args.append(int(before))
+        else:
+            where += (" AND (COALESCE(started_at,ended_at,0)<? OR "
+                      "(COALESCE(started_at,ended_at,0)=? AND id<?))")
+            args.extend((int(before), int(before), int(before_id)))
+    limit = max(1, min(int(limit), 1000))
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT * FROM agent_activity_events WHERE {where} "
+        "ORDER BY COALESCE(started_at,ended_at,0) DESC,id DESC LIMIT ?", [*args, limit])]
+    next_before = next_before_id = None
+    if len(rows) == limit:
+        next_before = rows[-1]["started_at"] or rows[-1]["ended_at"] or 0
+        next_before_id = rows[-1]["id"]
+    return {"rows": rows, "next_before": next_before, "next_before_id": next_before_id}
+
+
+def activity_capabilities():
+    return {
+        "claude": {"tools": "exact", "skills": "exact"},
+        "kimi": {"tools": "exact", "skills": "exact"},
+        "dsh": {"tools": "exact", "skills": "exact"},
+        "opencode": {"tools": "exact", "skills": "exact"},
+        "hermes": {"tools": "exact", "skills": "exact"},
+        "pi": {"tools": "exact", "skills": "unknown"},
+        "codex": {"tools": "exact+derived", "skills": "derived"},
+    }

@@ -1,0 +1,126 @@
+import XCTest
+@testable import TokenTrackerCore
+
+final class ActivityTests: XCTestCase {
+    func testRecordActivityIsIdempotentAndResultEnrichesCall() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+
+        let first = try store.recordActivity(
+            agent: "claude", srcKey: "fixture:1", rawName: "Skill",
+            sessionID: "session-1", callID: "call-1", startedAt: 100,
+            sourceKind: "tool_use", arguments: ["skill": "research"])
+        let duplicate = try store.recordActivity(
+            agent: "claude", srcKey: "fixture:1", rawName: "Skill",
+            sessionID: "session-1", callID: "call-1", startedAt: 100,
+            sourceKind: "tool_use", arguments: ["skill": "research"])
+        let updated = try store.completeActivity(
+            agent: "claude", callID: "call-1", status: "success", endedAt: 145)
+
+        XCTAssertEqual(first.added, 1)
+        XCTAssertEqual(duplicate.added, 0)
+        XCTAssertEqual(duplicate.updated, 0)
+        XCTAssertEqual(updated, 1)
+        let rows = try store.activityTimeline(sessionID: "session-1")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].skillName, "research")
+        XCTAssertEqual(rows[0].skillConfidence, "exact")
+        XCTAssertEqual(rows[0].status, "success")
+        XCTAssertEqual(rows[0].durationMs, 45)
+    }
+
+    func testExactAndDerivedStaySeparateInSummary() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        _ = try store.recordActivity(
+            agent: "codex", srcKey: "outer", rawName: "exec",
+            sessionID: "s", callID: "outer", startedAt: 10,
+            status: "success", sourceKind: "function_call", confidence: "exact")
+        _ = try store.recordActivity(
+            agent: "codex", srcKey: "inner", rawName: "read_mcp_resource",
+            sessionID: "s", parentCallID: "outer", startedAt: 11,
+            status: "unknown", sourceKind: "exec_inner", confidence: "derived")
+
+        XCTAssertEqual(try store.activitySummary(group: "agent", confidence: "exact").first?.calls, 1)
+        XCTAssertEqual(try store.activitySummary(group: "agent", confidence: "derived").first?.calls, 1)
+        let combined = try XCTUnwrap(store.activitySummary(group: "agent", confidence: "all").first)
+        XCTAssertEqual(combined.exact, 1)
+        XCTAssertEqual(combined.derived, 1)
+    }
+
+    func testCrossAgentToolSummaryUsesCanonicalNames() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        _ = try store.recordActivity(agent: "claude", srcKey: "one", rawName: "Bash")
+        _ = try store.recordActivity(agent: "codex", srcKey: "two", rawName: "shell")
+
+        let combined = try XCTUnwrap(store.activitySummary(group: "tool").first)
+        XCTAssertEqual(combined.name, "shell")
+        XCTAssertEqual(combined.calls, 2)
+        XCTAssertEqual(try store.activitySummary(
+            agent: "claude", group: "tool").first?.name, "Bash")
+    }
+
+    func testNormalizationAndConservativeCodexInference() {
+        XCTAssertEqual(ActivityNormalizer.canonicalToolName("apply_patch"), "file.edit")
+        XCTAssertEqual(ActivityNormalizer.canonicalToolName("mcp__server__lookup"), "mcp.server.lookup")
+        XCTAssertEqual(ActivityNormalizer.inferredCodexTools(
+            "await tools.read_mcp_resource({}); tools[name]({}); tools.map(x => x)"),
+            ["read_mcp_resource"])
+        XCTAssertEqual(activityCapabilities["pi"]?["skills"], "unknown")
+    }
+
+    func testSkillPathIsDerivedOnlyWhenExplicitlyAllowed() {
+        let path = "open /tmp/skills/openai-docs/SKILL.md now"
+        XCTAssertEqual(ActivityNormalizer.skill(
+            rawName: "exec", arguments: path, allowPath: false).name, "")
+        let inferred = ActivityNormalizer.skill(
+            rawName: "exec", arguments: path, allowPath: true)
+        XCTAssertEqual(inferred.name, "openai-docs")
+        XCTAssertEqual(inferred.confidence, "derived")
+    }
+
+    func testTimelineHonorsRange() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        _ = try store.recordActivity(
+            agent: "kimi", srcKey: "today", rawName: "Read", startedAt: store.nowMs())
+        _ = try store.recordActivity(
+            agent: "kimi", srcKey: "old", rawName: "Read", startedAt: 1)
+        XCTAssertEqual(try store.activityTimeline(rangeKey: "day").count, 1)
+        XCTAssertEqual(try store.activityTimeline(rangeKey: "all").count, 2)
+    }
+
+    func testV2MarkerPreservesCompatibleResidualActivityRows() throws {
+        let temp = try TempDir()
+        do {
+            let store = try temp.store()
+            _ = try store.recordActivity(
+                agent: "codex", srcKey: "kept", rawName: "exec", status: "success")
+            _ = try store.conn.execute("PRAGMA user_version=2")
+            try store.conn.commit()
+        }
+
+        let reopened = try temp.store()
+        XCTAssertEqual(try reopened.conn.scalarInt("PRAGMA user_version"), 3)
+        XCTAssertEqual(try reopened.activityTimeline().map(\.srcKey), ["kept"])
+    }
+
+    func testV2MarkerRejectsMalformedResidualActivityTable() throws {
+        let temp = try TempDir()
+        do {
+            let store = try temp.store()
+            _ = try store.conn.execute("DROP TABLE agent_activity_events")
+            _ = try store.conn.execute(
+                "CREATE TABLE agent_activity_events(id INTEGER PRIMARY KEY,agent TEXT)")
+            _ = try store.conn.execute("PRAGMA user_version=2")
+            try store.conn.commit()
+        }
+
+        XCTAssertThrowsError(try temp.store()) { error in
+            XCTAssertTrue(String(describing: error).contains("schema is incompatible"))
+        }
+        let raw = try SQLiteConnection(path: temp.path("usage.db"))
+        XCTAssertEqual(try raw.scalarInt("PRAGMA user_version"), 2)
+    }
+}

@@ -1,5 +1,5 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "events": [
     {
       "tool": "claude",
@@ -39,7 +39,7 @@
     },
     {
       "tool": "codex",
-      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|3",
+      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|5",
       "session_id": "codex-sess-1",
       "project": "/repo/webapp",
       "ts": 1787619600000,
@@ -57,7 +57,7 @@
     },
     {
       "tool": "codex",
-      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|4",
+      "src_key": "legacy|/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|6",
       "session_id": "codex-sess-1",
       "project": "/repo/webapp",
       "ts": 1787623200000,
@@ -308,6 +308,160 @@
       "source_scope": ""
     }
   ],
+  "activities": [
+    {
+      "agent": "claude",
+      "session_id": "s-claude-1",
+      "turn_id": "",
+      "raw_name": "Skill",
+      "canonical_name": "skill.activate",
+      "namespace": "built-in",
+      "call_id": "claude-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600000,
+      "duration_ms": 0,
+      "status": "success",
+      "source_kind": "claude_jsonl",
+      "confidence": "exact",
+      "skill_name": "research",
+      "skill_confidence": "exact",
+      "src_key": "s-claude-1|tool|claude-call-1"
+    },
+    {
+      "agent": "codex",
+      "session_id": "codex-sess-1",
+      "turn_id": "turn-1",
+      "raw_name": "exec",
+      "canonical_name": "exec",
+      "namespace": "built-in",
+      "call_id": "codex-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600000,
+      "duration_ms": 0,
+      "status": "success",
+      "source_kind": "codex_rollout",
+      "confidence": "exact",
+      "skill_name": "research",
+      "skill_confidence": "derived",
+      "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|response|codex-tool-1"
+    },
+    {
+      "agent": "codex",
+      "session_id": "codex-sess-1",
+      "turn_id": "turn-1",
+      "raw_name": "read_file",
+      "canonical_name": "file.read",
+      "namespace": "built-in",
+      "call_id": "",
+      "parent_call_id": "codex-call-1",
+      "started_at": 1787619600000,
+      "ended_at": null,
+      "duration_ms": null,
+      "status": "unknown",
+      "source_kind": "codex_exec_payload",
+      "confidence": "derived",
+      "skill_name": "",
+      "skill_confidence": "",
+      "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|response|codex-tool-1|inner|0"
+    },
+    {
+      "agent": "dsh",
+      "session_id": "dsh-sess-1",
+      "turn_id": "",
+      "raw_name": "bash",
+      "canonical_name": "shell",
+      "namespace": "built-in",
+      "call_id": "dsh-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600010,
+      "duration_ms": 10,
+      "status": "success",
+      "source_kind": "dsh_zstd",
+      "confidence": "exact",
+      "skill_name": "",
+      "skill_confidence": "",
+      "src_key": "dsh-sess-1|tool|dsh-call-1"
+    },
+    {
+      "agent": "hermes",
+      "session_id": "hermes-sess-1",
+      "turn_id": "",
+      "raw_name": "skill_view",
+      "canonical_name": "skill.activate",
+      "namespace": "built-in",
+      "call_id": "hermes-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600015,
+      "duration_ms": 15,
+      "status": "success",
+      "source_kind": "hermes_messages",
+      "confidence": "exact",
+      "skill_name": "research",
+      "skill_confidence": "exact",
+      "src_key": "/private/tmp/tt_diff_corpus/hermes/state.db|message|1|hermes-call-1"
+    },
+    {
+      "agent": "kimi",
+      "session_id": "kimi-1",
+      "turn_id": "",
+      "raw_name": "Skill",
+      "canonical_name": "skill.activate",
+      "namespace": "built-in",
+      "call_id": "kimi-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600000,
+      "duration_ms": 0,
+      "status": "success",
+      "source_kind": "kimi_journal",
+      "confidence": "exact",
+      "skill_name": "prototype",
+      "skill_confidence": "exact",
+      "src_key": "kimi-1|tool|kimi-call-1"
+    },
+    {
+      "agent": "opencode",
+      "session_id": "oc-sess-1",
+      "turn_id": "",
+      "raw_name": "skill",
+      "canonical_name": "skill.activate",
+      "namespace": "built-in",
+      "call_id": "oc-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600020,
+      "duration_ms": null,
+      "status": "success",
+      "source_kind": "opencode_part",
+      "confidence": "exact",
+      "skill_name": "prototype",
+      "skill_confidence": "exact",
+      "src_key": "/private/tmp/tt_diff_corpus/opencode/opencode.db|part|part-1"
+    },
+    {
+      "agent": "pi",
+      "session_id": "pi-sess-1",
+      "turn_id": "",
+      "raw_name": "read",
+      "canonical_name": "file.read",
+      "namespace": "built-in",
+      "call_id": "pi-call-1",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": 1787619600000,
+      "duration_ms": 0,
+      "status": "success",
+      "source_kind": "pi_jsonl",
+      "confidence": "exact",
+      "skill_name": "",
+      "skill_confidence": "",
+      "src_key": "/private/tmp/tt_diff_corpus/pi/sessions/webapp/pi-sess-1.jsonl|tool|pi-call-1"
+    }
+  ],
   "session_meta": [
     {
       "tool": "claude",
@@ -349,39 +503,53 @@
     "claude": {
       "added": 2,
       "updated": 0,
-      "files": 1
+      "files": 1,
+      "activity_added": 1,
+      "activity_updated": 1
     },
     "codex": {
       "added": 4,
       "updated": 0,
-      "files": 3
+      "files": 3,
+      "activity_added": 2,
+      "activity_updated": 1
     },
     "opencode": {
       "added": 2,
       "updated": 2,
       "files": 1,
-      "counter_resets": 0
+      "counter_resets": 0,
+      "activity_added": 1,
+      "activity_updated": 0
     },
     "dsh": {
       "added": 3,
       "updated": 0,
-      "files": 1
+      "files": 1,
+      "activity_added": 1,
+      "activity_updated": 1
     },
     "hermes": {
       "added": 2,
       "updated": 2,
       "files": 1,
-      "counter_resets": 0
+      "counter_resets": 0,
+      "activity_added": 1,
+      "activity_updated": 1
     },
     "kimi": {
       "added": 2,
       "updated": 0,
-      "files": 1
+      "files": 1,
+      "activity_added": 1,
+      "activity_updated": 1
     },
     "pi": {
       "added": 2,
       "updated": 0,
-      "files": 1
+      "files": 1,
+      "activity_added": 1,
+      "activity_updated": 1
     }
   },
   "snapshots": [

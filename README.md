@@ -13,8 +13,10 @@
 当前桌面实现是 `swift/` 下的原生 SwiftUI App，支持：
 
 - 状态栏实时显示今日用量与订阅配额；
-- 概览、趋势、模型排行、会话列表和独立会话详情窗口；
+- 概览、手绘趋势、模型排行、会话列表和独立会话详情窗口；
+- Agent 工具与 Skill 活动总览、榜单、时间线和 Agent × 工具矩阵；
 - 自动扫描、手动刷新、开机启动和应用内更新；
+- Codex 多账号本地保存与切换；
 - 从会话详情在 Terminal、iTerm2、WezTerm 或 Ghostty 中继续会话；
 - macOS 14 Sonoma 及以上版本。
 
@@ -52,6 +54,7 @@ App 会避免 Tahoe 的重复标题赋值问题，并带有状态栏重排和重
 ./tt stats
 ./tt stats --range week
 ./tt stats --tool claude
+./tt activity --range week --group tool --confidence exact
 ./tt quotas
 ```
 
@@ -62,6 +65,7 @@ swift build -c release --package-path swift
 swift/.build/release/tt-swift detect
 swift/.build/release/tt-swift scan --full
 swift/.build/release/tt-swift stats --range week
+swift/.build/release/tt-swift activity --range week --group tool --confidence exact
 swift/.build/release/tt-swift quotas
 ```
 
@@ -92,6 +96,9 @@ swift/.build/release/tt-swift quotas
 
 Token、成本、观察区间和未分配历史的计算规则见[指标口径](docs/metrics.md)，
 数据库兼容与恢复方式见[迁移说明](docs/migrations.md)。
+
+Agent Activity 只保存工具名、会话、时间、状态和证据等级等元数据；不会保存
+工具参数、命令、提示词或输出正文。确认数据与保守推断始终分开统计。
 
 ## 项目结构
 

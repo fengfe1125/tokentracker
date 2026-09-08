@@ -10,7 +10,7 @@ Swift 实现复用既有用户数据格式和 bundle ID；Python 暂时只保留
 ```text
 TokenTrackerCore
   Scanners      七个工具适配器与增量扫描
-  Store         SQLite schema v2、迁移、聚合和查询
+  Store         SQLite schema v3、迁移、用量与 Agent Activity 查询
   Pricing       价格表与成本计算
   Quotas        本地窗口和官方配额合并
   Billing       Claude、Kimi、Codex、OpenCode Go

@@ -52,16 +52,49 @@ public struct ExpectedSessionMeta: Codable, Equatable, Sendable {
     }
 }
 
+public struct ExpectedActivity: Codable, Equatable, Sendable {
+    public var agent: String
+    public var sessionID: String
+    public var turnID: String
+    public var rawName: String
+    public var canonicalName: String
+    public var namespace: String
+    public var callID: String
+    public var parentCallID: String
+    public var startedAt: Int64?
+    public var endedAt: Int64?
+    public var durationMs: Int64?
+    public var status: String
+    public var sourceKind: String
+    public var confidence: String
+    public var skillName: String
+    public var skillConfidence: String
+    public var srcKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case agent, namespace, status, confidence
+        case sessionID = "session_id", turnID = "turn_id", rawName = "raw_name"
+        case canonicalName = "canonical_name", callID = "call_id"
+        case parentCallID = "parent_call_id", startedAt = "started_at", endedAt = "ended_at"
+        case durationMs = "duration_ms", sourceKind = "source_kind", skillName = "skill_name"
+        case skillConfidence = "skill_confidence", srcKey = "src_key"
+    }
+}
+
 public struct ScanResultCounts: Codable, Equatable, Sendable {
     public var added: Int
     public var updated: Int
     public var files: Int
     public var counterResets: Int?
+    public var activityAdded: Int
+    public var activityUpdated: Int
     public var warning: String?
     public var skipped: String?
 
     enum CodingKeys: String, CodingKey {
         case added, updated, files, warning, skipped
+        case activityAdded = "activity_added"
+        case activityUpdated = "activity_updated"
         case counterResets = "counter_resets"
     }
 }
@@ -107,12 +140,13 @@ public struct ExpectedSnapshot: Codable, Equatable, Sendable {
 public struct ExpectedExport: Codable, Equatable, Sendable {
     public var formatVersion: Int
     public var events: [ExpectedEvent]
+    public var activities: [ExpectedActivity]
     public var sessionMeta: [ExpectedSessionMeta]
     public var scanResults: [String: ScanResultCounts]
     public var snapshots: [ExpectedSnapshot]
 
     enum CodingKeys: String, CodingKey {
-        case events, snapshots
+        case events, activities, snapshots
         case formatVersion = "format_version"
         case sessionMeta = "session_meta"
         case scanResults = "scan_results"

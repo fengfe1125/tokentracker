@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from .. import db, pricing
+from .. import activity, db, pricing
 from ._util import changed, expand, iter_zstd_jsonl, stat_key
 
 NAME = "dsh"
@@ -39,7 +39,8 @@ def _replace_old_fallback(conn, old_key, key, sid, project, ts, model, counts):
 def scan(conn, prices, full: bool = False) -> dict:
     base = root()
     cursor = db.get_scan_cursor(conn, NAME)
-    added = updated = files = 0
+    effective_full = full or activity.needs_backfill(cursor)
+    added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         # 一级子目录是 workspace slug，二级是 session id
         rel = os.path.relpath(dirpath, base)
@@ -48,7 +49,7 @@ def scan(conn, prices, full: bool = False) -> dict:
             if not name.endswith(".jsonl.zstd"):
                 continue
             path = os.path.join(dirpath, name)
-            if not full and not changed(cursor, path):
+            if not effective_full and not changed(cursor, path):
                 continue
             try:
                 snapshot = stat_key(path)
@@ -73,6 +74,31 @@ def scan(conn, prices, full: bool = False) -> dict:
                     m = (cfg.get("config") or {}).get("model") or ""
                     if m:
                         model = m
+                elif t == "tool/call":
+                    data = obj.get("data") or {}
+                    raw_name = data.get("name") or data.get("tool")
+                    call_id = data.get("callId") or data.get("id")
+                    sid = session_id or fallback_id
+                    if raw_name:
+                        change = activity.put(
+                            conn, NAME, f"{sid}|tool|{call_id or lineno}",
+                            raw_name=str(raw_name), session_id=sid,
+                            turn_id=str(data.get("turn") or ""), call_id=str(call_id or ""),
+                            started_at=int(obj.get("time") or data.get("time") or 0) or None,
+                            source_kind="dsh_zstd",
+                            arguments=data.get("arguments") or data.get("args") or data.get("input"))
+                        activity_added += change["added"]
+                        activity_updated += change["updated"]
+                elif t == "tool/result":
+                    data = obj.get("data") or {}
+                    call_id = data.get("callId") or data.get("id")
+                    status = activity.status_from(data.get("status") or data.get("error"))
+                    if status == "unknown":
+                        status = "error" if data.get("error") else "success"
+                    activity_updated += db.complete_activity_event(
+                        conn, NAME, str(call_id or ""), status=status,
+                        ended_at=int(obj.get("time") or data.get("time") or 0) or None,
+                        duration_ms=data.get("durationMs"))
                 elif t == "assistant/chunk":
                     data = obj.get("data") or {}
                     chunk = data.get("chunk") or {}
@@ -116,5 +142,7 @@ def scan(conn, prices, full: bool = False) -> dict:
                             conn, old_key, key, sid, project, int(obj.get("time") or 0),
                             model, (inp, outp, 0, 0))
             cursor[path] = snapshot
+    activity.mark_current(cursor)
     db.set_scan_cursor(conn, NAME, cursor)
-    return {"added": added, "updated": updated, "files": files}
+    return {"added": added, "updated": updated, "files": files,
+            "activity_added": activity_added, "activity_updated": activity_updated}

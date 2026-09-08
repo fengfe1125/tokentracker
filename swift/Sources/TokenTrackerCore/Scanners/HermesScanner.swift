@@ -62,6 +62,43 @@ public struct HermesScanner: ScannerAdapter {
          row.int("cache_read_tokens"), row.int("cache_write_tokens"))
     }
 
+    private func scanActivity(_ store: UsageStore, path: String) throws -> (Int, Int) {
+        let src = try sqliteRO(path)
+        let tables = Set(try src.query("SELECT name FROM sqlite_master WHERE type='table'")
+            .map { $0.string("name") })
+        guard tables.contains("messages") else { return (0, 0) }
+        var added = 0, updated = 0
+        for row in try src.query("SELECT id,session_id,role,tool_call_id,tool_calls,tool_name,"
+                                 + "effect_disposition,timestamp FROM messages ORDER BY id") {
+            let rawTS = row.double("timestamp")
+            let ts = Int64(rawTS > 0 && rawTS < 1e12 ? rawTS * 1000 : rawTS)
+            if row.string("role") == "assistant", let callsText = row.stringOrNil("tool_calls"),
+               let data = callsText.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data) {
+                let calls = (parsed as? [[String: Any]]) ?? ((parsed as? [String: Any]).map { [$0] } ?? [])
+                for (index, call) in calls.enumerated() {
+                    let fn = call["function"] as? [String: Any] ?? call
+                    let rawName = jsonOrString(fn["name"], call["name"])
+                    let callID = jsonOrString(call["call_id"], call["id"], call["tool_call_id"])
+                    guard !rawName.isEmpty else { continue }
+                    let change = try store.recordActivity(
+                        agent: name,
+                        srcKey: "\(realPath(path))|message|\(row.int("id"))|\(callID.isEmpty ? String(index) : callID)",
+                        rawName: rawName, sessionID: row.string("session_id"), callID: callID,
+                        startedAt: ts == 0 ? nil : ts, sourceKind: "hermes_messages",
+                        arguments: fn["arguments"])
+                    added += change.added; updated += change.updated
+                }
+            } else if row.string("role") == "tool", let callID = row.stringOrNil("tool_call_id") {
+                var status = ActivityNormalizer.status(row["effect_disposition"])
+                if status == "unknown" { status = "success" }
+                updated += try store.completeActivity(agent: name, callID: callID,
+                    status: status, endedAt: ts == 0 ? nil : ts)
+            }
+        }
+        return (added, updated)
+    }
+
     /// 旧全局键的归属仲裁：先精确匹配，再单候选/单调延续；有歧义的下降
     /// 无法证明是哪个来源重置，保留旧行。
     private func legacyOwners(_ store: UsageStore, sources: [(String, [Row])]) throws -> [String: String?] {
@@ -154,11 +191,16 @@ public struct HermesScanner: ScannerAdapter {
             outcome.added += a
             outcome.updated += u
             outcome.counterResets += r
+            let (aa, au) = try scanActivity(store, path: path)
+            outcome.activityAdded += aa
+            outcome.activityUpdated += au
         }
         let unresolved = try store.conn.scalarInt(
             "SELECT COUNT(*) FROM usage_events WHERE tool=? AND source_scope='' AND time_quality='unallocated'",
             [name])
-        try store.setScanCursor(tool: name, cursor: ["mode": "snapshots"])
+        var cursor: [String: Any] = ["mode": "snapshots"]
+        markActivityCurrent(&cursor)
+        try store.setScanCursor(tool: name, cursor: cursor)
         if unresolved > 0 {
             outcome.warning = "保留 \(unresolved) 条无法映射 profile 的未分配历史，可能与现存来源重叠"
         }

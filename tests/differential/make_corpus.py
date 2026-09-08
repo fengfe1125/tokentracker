@@ -47,9 +47,14 @@ def make_claude(base):
          "message": {"role": "user", "content": "帮我修一下登录页样式"}},
         {"type": "assistant", "timestamp": ISO1,
          "message": {"id": "msg_1", "model": "claude-sonnet-4-5", "role": "assistant",
+                     "content": [{"type": "tool_use", "id": "claude-call-1", "name": "Skill",
+                                  "input": {"skill": "research"}}],
                      "usage": {"input_tokens": 1200, "output_tokens": 300,
                                "cache_read_input_tokens": 4000,
                                "cache_creation_input_tokens": 800}}},
+        {"type": "user", "timestamp": ISO1,
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "claude-call-1", "content": "fixture"}]}},
         {"type": "assistant", "timestamp": ISO2,
          "message": {"id": "msg_2", "model": "claude-sonnet-4-5", "role": "assistant",
                      "usage": {"input_tokens": 900, "output_tokens": 150,
@@ -71,6 +76,12 @@ def make_codex(base):
          "payload": {"id": "codex-sess-1", "cwd": "/repo/webapp"}},
         {"type": "turn_context", "timestamp": ISO1,
          "payload": {"model": "gpt-5.6-luna", "turn_id": "turn-1"}},
+        {"type": "response_item", "timestamp": ISO1, "payload": {
+            "type": "custom_tool_call", "id": "codex-tool-1", "call_id": "codex-call-1",
+            "name": "exec", "input": "await tools.read_file({path:'/skills/research/SKILL.md'});"}},
+        {"type": "response_item", "timestamp": ISO1, "payload": {
+            "type": "custom_tool_call_output", "id": "codex-out-1",
+            "call_id": "codex-call-1", "output": {"ok": True}}},
         {"timestamp": ISO1, "type": "event_msg", "payload": {
             "type": "token_count", "turn_id": "turn-1",
             "info": {"total_token_usage": {"input_tokens": 5000, "cached_input_tokens": 1000,
@@ -143,6 +154,12 @@ def make_opencode(base):
         conn.execute("INSERT INTO session VALUES "
                      "('oc-sess-2','/repo/api','修测试','{\"id\":\"gpt-5\"}',"
                      "9000,300,0,0,0,0.014,1,1)")
+        conn.execute("CREATE TABLE part(id TEXT PRIMARY KEY,message_id TEXT,session_id TEXT,"
+                     "time_created INT,time_updated INT,data TEXT)")
+        conn.execute("INSERT INTO part VALUES ('part-1','m-1','oc-sess-1',?,?,?)", (
+            T1, T1 + 20, json.dumps({"type": "tool", "tool": "skill", "callID": "oc-call-1",
+                "state": {"status": "completed", "input": {"name": "prototype"},
+                          "time": {"start": T1, "end": T1 + 20}}})))
         conn.commit()
     finally:
         conn.close()
@@ -155,6 +172,12 @@ def make_dsh(base):
         {"type": "session", "id": "dsh-sess-1", "cwd": "/repo/webapp", "time": T1},
         {"type": "request/header", "time": T1,
          "data": {"header": {"config": {"model": "deepseek-v4-pro"}}}},
+        {"type": "tool/call", "time": T1, "data": {
+            "turn": 0, "name": "bash", "callId": "dsh-call-1", "args": {"command": "fixture"}}},
+        {"type": "tool/call/delta", "time": T1, "data": {
+            "turn": 0, "name": "bash", "callId": "dsh-call-1"}},
+        {"type": "tool/result", "time": T1 + 10, "data": {
+            "callId": "dsh-call-1", "status": "completed"}},
         {"type": "assistant/chunk", "time": T1, "data": {"turn": 0, "step": 0,
             "chunk": {"type": "usage", "usage": {
                 "inputTokens": 7000, "outputTokens": 350,
@@ -197,6 +220,14 @@ def make_hermes(base):
         conn.execute("INSERT INTO session_model_usage VALUES "
                      "('hermes-sess-2','unpriced-model-x',4000,120,0,0,0,"
                      "0,0,1,1,1,'local','http://localhost:11434','api','chat')")
+        conn.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,"
+                     "tool_call_id TEXT,tool_calls TEXT,tool_name TEXT,effect_disposition TEXT,timestamp REAL)")
+        calls = [{"id": "hermes-call-1", "function": {"name": "skill_view",
+                  "arguments": json.dumps({"name": "research"})}}]
+        conn.execute("INSERT INTO messages VALUES (1,'hermes-sess-1','assistant',NULL,?,NULL,NULL,?)",
+                     (json.dumps(calls), T1 / 1000))
+        conn.execute("INSERT INTO messages VALUES (2,'hermes-sess-1','tool','hermes-call-1',NULL,"
+                     "'skill_view','success',?)", ((T1 + 15) / 1000,))
         conn.commit()
     finally:
         conn.close()
@@ -211,6 +242,11 @@ def make_kimi(base):
             "timestamp": ISO1, "payload": {"session": {"metadata": {"cwd": "/repo/api"}}}}},
         {"kind": "event", "seq": 2, "envelope": {"type": "turn.started",
             "timestamp": ISO1, "payload": {"prompt": "把导出按钮挪到右上角"}}},
+        {"kind": "event", "seq": 20, "envelope": {"type": "tool.call.started",
+            "timestamp": ISO1, "payload": {"toolCallId": "kimi-call-1", "name": "Skill",
+                                               "args": {"skill": "prototype"}}}},
+        {"kind": "event", "seq": 21, "envelope": {"type": "tool.result",
+            "timestamp": ISO1, "payload": {"toolCallId": "kimi-call-1", "status": "completed"}}},
         {"kind": "event", "seq": 3, "envelope": {"type": "turn.step.completed",
             "timestamp": ISO1, "payload": {"model": {"id": "kimi-k3"},
                 "usage": {"inputOther": 5000, "output": 220,
@@ -231,9 +267,14 @@ def make_pi(base):
          "message": {"role": "user", "content": "帮我加一个深色模式"}},
         {"type": "message", "id": "m2", "timestamp": ISO1,
          "message": {"role": "assistant", "model": "claude-sonnet-4-5",
+                     "content": [{"type": "toolCall", "id": "pi-call-1", "name": "read",
+                                  "arguments": {"path": "fixture"}}],
                      "usage": {"input": 6000, "output": 260, "cacheRead": 1800,
                                "cacheWrite": 200,
                                "cost": {"input": 0.01, "output": 0.002, "total": 0.021}}}},
+        {"type": "message", "id": "m2-result", "timestamp": ISO1,
+         "message": {"role": "tool", "content": [
+             {"type": "toolResult", "toolCallId": "pi-call-1", "content": "fixture"}]}},
         {"type": "message", "id": "m3", "timestamp": ISO2,
          "message": {"role": "assistant", "model": "unpriced-model-x",
                      "usage": {"input": 1500, "output": 60, "cacheRead": 0,

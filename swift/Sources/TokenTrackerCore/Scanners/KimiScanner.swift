@@ -69,6 +69,32 @@ public struct KimiScanner: ScannerAdapter {
                 let kind = obj["kind"] as? String
                 let envelope = obj["envelope"] as? [String: Any] ?? [:]
                 let payload = envelope["payload"] as? [String: Any] ?? [:]
+                let eventType = envelope["type"] as? String ?? ""
+                let activityTS = parseTS(jsonOrAny(envelope["timestamp"], obj["time"]))
+                if kind == "event" && eventType == "tool.call.started" {
+                    let call = payload["toolCall"] as? [String: Any] ?? payload
+                    let rawName = jsonOrString(call["name"], call["toolName"], call["tool"])
+                    let callID = jsonOrString(call["id"], call["toolCallId"], payload["toolCallId"])
+                    if !rawName.isEmpty {
+                        let change = try store.recordActivity(
+                            agent: name, srcKey: "\(sessionID)|tool|\(callID.isEmpty ? String(describing: obj["seq"] ?? "") : callID)",
+                            rawName: rawName, sessionID: sessionID,
+                            turnID: payload["turnId"] as? String ?? "", callID: callID,
+                            startedAt: activityTS == 0 ? nil : activityTS,
+                            sourceKind: "kimi_journal",
+                            arguments: jsonOrAny(call["args"], call["arguments"], call["input"]))
+                        outcome.activityAdded += change.added
+                        outcome.activityUpdated += change.updated
+                    }
+                } else if kind == "event" && eventType == "tool.result" {
+                    let callID = jsonOrString(payload["toolCallId"], payload["callId"], payload["id"])
+                    var status = ActivityNormalizer.status(jsonOrAny(payload["status"], payload["error"]))
+                    if status == "unknown" { status = payload["error"] == nil ? "success" : "error" }
+                    outcome.activityUpdated += try store.completeActivity(
+                        agent: name, callID: callID, status: status,
+                        endedAt: activityTS == 0 ? nil : activityTS,
+                        durationMs: (payload["durationMs"] as? NSNumber)?.int64Value)
+                }
                 if title == nil && kind == "event" && envelope["type"] as? String == "turn.started" {
                     if let prompt = payload["prompt"] as? String,
                        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -142,11 +168,15 @@ public struct KimiScanner: ScannerAdapter {
 
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
         var cursor = try store.getScanCursor(tool: name)
-        let journal = try scanJournal(store, prices, cursor: &cursor, full: full)
-        let cli = try scanCLI(store, prices, cursor: &cursor, full: full)
+        let effectiveFull = full || activityNeedsBackfill(cursor)
+        let journal = try scanJournal(store, prices, cursor: &cursor, full: effectiveFull)
+        let cli = try scanCLI(store, prices, cursor: &cursor, full: effectiveFull)
+        markActivityCurrent(&cursor)
         try store.setScanCursor(tool: name, cursor: cursor)
         return ScanOutcome(added: journal.added + cli.added,
                            updated: journal.updated + cli.updated,
-                           files: journal.files + cli.files)
+                           files: journal.files + cli.files,
+                           activityAdded: journal.activityAdded + cli.activityAdded,
+                           activityUpdated: journal.activityUpdated + cli.activityUpdated)
     }
 }

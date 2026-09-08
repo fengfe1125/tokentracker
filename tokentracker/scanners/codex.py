@@ -11,7 +11,7 @@ import os
 import re
 from datetime import datetime
 
-from .. import db, pricing
+from .. import activity, db, pricing
 from ._util import changed, expand, iter_jsonl, sqlite_ro, stat_key, user_text
 
 NAME = "codex"
@@ -31,6 +31,15 @@ _ALIASES = (
     ("cached_input_tokens", "cache_read"),
     ("cache_write_input_tokens", "cache_creation_input_tokens", "cache_write"),
 )
+_TOOL_CALL_TYPES = {
+    "function_call", "custom_tool_call", "mcp_call", "local_shell_call",
+    "shell_call", "computer_call", "apply_patch_call",
+}
+_TOOL_OUTPUT_TYPES = {
+    "function_call_output", "custom_tool_call_output", "mcp_call_output",
+    "local_shell_call_output", "shell_call_output", "computer_call_output",
+    "apply_patch_call_output",
+}
 
 
 def sqlite_path() -> str:
@@ -289,6 +298,70 @@ def _rollout_events(path):
         yield {"key": None, "title": title, "sid": sid, "project": project}
 
 
+def _scan_rollout_activity(conn, path):
+    sid = os.path.basename(path)[:-6]
+    turn = ""
+    added = updated = 0
+    for lineno, obj in iter_jsonl(path):
+        if not isinstance(obj, dict):
+            continue
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        kind = obj.get("type")
+        if kind == "session_meta":
+            sid = str(payload.get("id") or sid)
+            continue
+        if kind == "turn_context":
+            turn = str(payload.get("turn_id") or turn)
+            continue
+        if kind == "event_msg" and payload.get("type") == "task_started":
+            turn = str(payload.get("turn_id") or turn)
+            continue
+        if kind != "response_item":
+            continue
+        item_type = payload.get("type")
+        ts = _timestamp(obj.get("timestamp")) or None
+        call_id = str(payload.get("call_id") or payload.get("id") or "")
+        if item_type in _TOOL_CALL_TYPES:
+            raw_name = payload.get("name")
+            if not raw_name:
+                if item_type in ("local_shell_call", "shell_call"):
+                    raw_name = "shell"
+                elif item_type == "apply_patch_call":
+                    raw_name = "apply_patch"
+                elif item_type == "computer_call":
+                    raw_name = "computer"
+            if not raw_name:
+                continue
+            arguments = payload.get("arguments")
+            if arguments is None:
+                arguments = payload.get("input") if "input" in payload else payload.get("action")
+            source_key = f"{os.path.realpath(path)}|response|{payload.get('id') or call_id or lineno}"
+            change = activity.put(
+                conn, NAME, source_key, raw_name=str(raw_name), session_id=sid,
+                turn_id=turn, call_id=call_id, started_at=ts,
+                source_kind="codex_rollout", arguments=arguments, allow_skill_path=True)
+            added += change["added"]
+            updated += change["updated"]
+            if str(raw_name) == "exec" and isinstance(arguments, str):
+                for index, inner in enumerate(activity.inferred_codex_tools(arguments)):
+                    child = activity.put(
+                        conn, NAME, f"{source_key}|inner|{index}", raw_name=inner,
+                        session_id=sid, turn_id=turn, parent_call_id=call_id,
+                        started_at=ts, source_kind="codex_exec_payload",
+                        confidence="derived")
+                    added += child["added"]
+                    updated += child["updated"]
+        elif item_type in _TOOL_OUTPUT_TYPES:
+            status = activity.status_from(payload.get("status"))
+            output = payload.get("output")
+            if status == "unknown" and isinstance(output, dict):
+                status = "error" if output.get("is_error") or output.get("error") else "success"
+            if status == "unknown":
+                status = "success"
+            updated += db.complete_activity_event(conn, NAME, call_id, status=status, ended_at=ts)
+    return added, updated
+
+
 def _replace_sqlite_scope(conn, prices, event, previous_jsonl):
     sid, turn = event["sid"], event["turn"]
     if not turn:
@@ -310,11 +383,11 @@ def _replace_sqlite_scope(conn, prices, event, previous_jsonl):
             conn.execute("DELETE FROM usage_events WHERE tool=? AND src_key=?", (NAME, same["src_key"]))
 
 
-def _scan_legacy(conn, prices, cursor, full) -> tuple[int, int, int]:
+def _scan_legacy(conn, prices, cursor, full) -> tuple[int, int, int, int, int]:
     base = legacy_dir()
     if not os.path.isdir(base):
-        return 0, 0, 0
-    added = updated = files = 0
+        return 0, 0, 0, 0, 0
+    added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         for name in sorted(names):
             if not name.endswith(".jsonl"):
@@ -339,20 +412,23 @@ def _scan_legacy(conn, prices, cursor, full) -> tuple[int, int, int]:
                 _replace_sqlite_scope(conn, prices, event, previous_jsonl)
                 added += a
                 updated += u
+            aa, au = _scan_rollout_activity(conn, path)
+            activity_added += aa
+            activity_updated += au
             cursor[path] = snapshot
-    return added, updated, files
+    return added, updated, files, activity_added, activity_updated
 
 
 def scan(conn, prices, full: bool = False) -> dict:
     cursor = db.get_scan_cursor(conn, NAME)
-    full = full or cursor.get("parser_version") != _VERSION
+    full = full or cursor.get("parser_version") != _VERSION or activity.needs_backfill(cursor)
     # Roll back source deletion, insertion and cursor movement together, even
     # if the caller catches scanner errors and continues with another tool.
     conn.execute("SAVEPOINT codex_scan")
     try:
         # JSONL 先扫（主源），SQLite 后扫补缺：同一趟内去重查询就能看到
         # 最新的 JSONL 归因，归因变更无需等下一次全量扫描才收敛。
-        a2, u2, f2 = _scan_legacy(conn, prices, cursor, full)
+        a2, u2, f2, aa2, au2 = _scan_legacy(conn, prices, cursor, full)
         a1, u1, f1 = _scan_sqlite(conn, prices, cursor, full)
         ambiguous = conn.execute(
             "SELECT old.id FROM usage_events old WHERE old.tool=? AND old.source_kind='' "
@@ -362,13 +438,15 @@ def scan(conn, prices, full: bool = False) -> dict:
         if ambiguous:
             conn.executemany("UPDATE usage_events SET time_quality='unallocated' WHERE id=?", [(r[0],) for r in ambiguous])
         cursor["parser_version"] = _VERSION
+        activity.mark_current(cursor)
         conn.execute("INSERT OR REPLACE INTO scan_state(tool,cursor) VALUES (?,?)", (NAME, json.dumps(cursor)))
         conn.execute("RELEASE SAVEPOINT codex_scan")
     except Exception:
         conn.execute("ROLLBACK TO SAVEPOINT codex_scan")
         conn.execute("RELEASE SAVEPOINT codex_scan")
         raise
-    result = {"added": a1 + a2, "updated": u1 + u2, "files": f1 + f2}
+    result = {"added": a1 + a2, "updated": u1 + u2, "files": f1 + f2,
+              "activity_added": aa2, "activity_updated": au2}
     if ambiguous:
         result["warning"] = f"保留 {len(ambiguous)} 条无法核实与 JSONL 对应关系的旧 Codex 日志；已标记时间未知，可能存在重复历史。"
     return result

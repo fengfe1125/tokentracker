@@ -81,7 +81,8 @@ final class ScanSchedulerPortTests: XCTestCase {
             scan: { _, _ in
                 callCount.value += 1
                 if callCount.value == 1 { throw Synthetic() }
-                return ([:], 2)
+                return (["claude": ScanOutcome(
+                    added: 1, activityAdded: 2, activityUpdated: 3)], 2)
             },
             clock: {
                 defer { if !times.value.isEmpty { times.value.removeFirst() } }
@@ -97,6 +98,9 @@ final class ScanSchedulerPortTests: XCTestCase {
         last = scheduler.snapshot().last
         XCTAssertNil(last?.error)
         XCTAssertEqual(last?.repriced, 2)
+        XCTAssertEqual(last?.added, 1)
+        XCTAssertEqual(last?.activityAdded, 2)
+        XCTAssertEqual(last?.activityUpdated, 3)
         scheduler.stop()
     }
 

@@ -78,6 +78,24 @@ final class DifferentialScanTests: XCTestCase {
                                     title: $0.string("title")) }
     }
 
+    private func normalizedActivities(_ store: UsageStore) throws -> [ExpectedActivity] {
+        try store.conn.query(
+            "SELECT agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,"
+                + "parent_call_id,started_at,ended_at,duration_ms,status,source_kind,confidence,"
+                + "skill_name,skill_confidence,src_key FROM agent_activity_events ORDER BY agent,src_key"
+        ).map { row in
+            ExpectedActivity(agent: row.string("agent"), sessionID: row.string("session_id"),
+                turnID: row.string("turn_id"), rawName: row.string("raw_name"),
+                canonicalName: row.string("canonical_name"), namespace: row.string("namespace"),
+                callID: row.string("call_id"), parentCallID: row.string("parent_call_id"),
+                startedAt: row.intOrNil("started_at"), endedAt: row.intOrNil("ended_at"),
+                durationMs: row.intOrNil("duration_ms"), status: row.string("status"),
+                sourceKind: row.string("source_kind"), confidence: row.string("confidence"),
+                skillName: row.string("skill_name"), skillConfidence: row.string("skill_confidence"),
+                srcKey: row.string("src_key"))
+        }
+    }
+
     private func normalizedSnapshots(_ store: UsageStore) throws -> [ExpectedSnapshot] {
         try store.conn.query(
             "SELECT tool,source_scope,identity,values_json,observed_at,revision "
@@ -120,6 +138,7 @@ final class DifferentialScanTests: XCTestCase {
             scanResults[tool] = ScanResultCounts(
                 added: outcome.added, updated: outcome.updated, files: outcome.files,
                 counterResets: ["opencode", "hermes"].contains(tool) ? outcome.counterResets : nil,
+                activityAdded: outcome.activityAdded, activityUpdated: outcome.activityUpdated,
                 warning: outcome.warning, skipped: outcome.skipped)
         }
         assertDictEqual(scanResults, baseline.scanResults, label: "scan_results")
@@ -130,6 +149,12 @@ final class DifferentialScanTests: XCTestCase {
                        "events 数量不一致\nSwift: \(events)\nPython: \(baseline.events)")
         for (index, pair) in zip(events, baseline.events).enumerated() {
             XCTAssertEqual(pair.0, pair.1, "events[\(index)] 不一致", file: #filePath, line: 0)
+        }
+
+        let activities = try normalizedActivities(store)
+        XCTAssertEqual(activities.count, baseline.activities.count, "activities 数量不一致")
+        for (index, pair) in zip(activities, baseline.activities).enumerated() {
+            XCTAssertEqual(pair.0, pair.1, "activities[\(index)] 不一致", file: #filePath, line: 0)
         }
 
         // session_meta / snapshots

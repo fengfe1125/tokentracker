@@ -74,6 +74,11 @@ def export() -> dict:
             "source_kind,source_scope FROM usage_events ORDER BY tool,src_key")]
         for e in events:
             e["cost"] = round6(e["cost"])
+        activities = [dict(r) for r in conn.execute(
+            "SELECT agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,"
+            "parent_call_id,started_at,ended_at,duration_ms,status,source_kind,confidence,"
+            "skill_name,skill_confidence,src_key FROM agent_activity_events "
+            "ORDER BY agent,src_key")]
         meta = [dict(r) for r in conn.execute(
             "SELECT tool,session_id,title FROM session_meta ORDER BY tool,session_id")]
         snapshots = []
@@ -86,7 +91,8 @@ def export() -> dict:
     finally:
         conn.close()
         tmp.cleanup()
-    return {"format_version": 1, "events": events, "session_meta": meta,
+    return {"format_version": 2, "events": events, "activities": activities,
+            "session_meta": meta,
             "scan_results": scan_results, "snapshots": snapshots}
 
 

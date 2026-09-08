@@ -62,6 +62,8 @@ public struct ScanSchedulerStatus: Equatable, Sendable {
         public var done = false
         public var error: String?
         public var added: Int = 0
+        public var activityAdded: Int = 0
+        public var activityUpdated: Int = 0
         public var repriced: Int = 0
         public var counterResets: Int = 0
         public var warnings: [String] = []
@@ -170,7 +172,8 @@ public final class ScanScheduler: @unchecked Sendable {
 
     private func run(tools: [String]?, full: Bool) {
         var scanError: String?
-        var added = 0, repriced = 0, resets = 0, warnings: [String] = []
+        var added = 0, activityAdded = 0, activityUpdated = 0
+        var repriced = 0, resets = 0, warnings: [String] = []
         do {
             let result = try scan(tools, full)
             repriced = result.repriced
@@ -179,6 +182,8 @@ public final class ScanScheduler: @unchecked Sendable {
                 if let e = outcome.error { errors.append("\(name): \(e)") }
                 if let w = outcome.warning { warnings.append(w) }
                 added += outcome.added
+                activityAdded += outcome.activityAdded
+                activityUpdated += outcome.activityUpdated
                 resets += outcome.counterResets
             }
             if !errors.isEmpty { scanError = errors.joined(separator: "; ") }
@@ -191,6 +196,8 @@ public final class ScanScheduler: @unchecked Sendable {
         status.last?.finishedAt = clock()
         status.last?.error = scanError
         status.last?.added = added
+        status.last?.activityAdded = activityAdded
+        status.last?.activityUpdated = activityUpdated
         status.last?.repriced = repriced
         status.last?.counterResets = resets
         status.last?.warnings = warnings

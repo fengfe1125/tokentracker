@@ -15,6 +15,15 @@ public struct CodexScanner: ScannerAdapter {
     static let parserVersion = 4
     static let kindJSONL = "codex_jsonl"
     static let kindSQLite = "codex_sqlite"
+    static let toolCallTypes: Set<String> = [
+        "function_call", "custom_tool_call", "mcp_call", "local_shell_call",
+        "shell_call", "computer_call", "apply_patch_call",
+    ]
+    static let toolOutputTypes: Set<String> = [
+        "function_call_output", "custom_tool_call_output", "mcp_call_output",
+        "local_shell_call_output", "shell_call_output", "computer_call_output",
+        "apply_patch_call_output",
+    ]
 
     public let logsDB: String
     public let sessionsDir: String
@@ -419,10 +428,73 @@ public struct CodexScanner: ScannerAdapter {
         }
     }
 
+    private func scanRolloutActivity(_ store: UsageStore, path: String) throws -> (Int, Int) {
+        var sid = String((path as NSString).lastPathComponent.dropLast(".jsonl".count))
+        var turn = ""
+        var added = 0, updated = 0
+        for (lineno, obj) in iterJSONL(path) {
+            let payload = obj["payload"] as? [String: Any] ?? [:]
+            let kind = obj["type"] as? String ?? ""
+            if kind == "session_meta" {
+                if let value = payload["id"] as? String, !value.isEmpty { sid = value }
+                continue
+            }
+            if kind == "turn_context" {
+                if let value = payload["turn_id"] as? String, !value.isEmpty { turn = value }
+                continue
+            }
+            if kind == "event_msg", payload["type"] as? String == "task_started" {
+                turn = payload["turn_id"] as? String ?? turn
+                continue
+            }
+            guard kind == "response_item" else { continue }
+            let itemType = payload["type"] as? String ?? ""
+            let tsValue = timestamp(obj["timestamp"])
+            let ts: Int64? = tsValue == 0 ? nil : tsValue
+            let callID = jsonOrString(payload["call_id"], payload["id"])
+            if CodexScanner.toolCallTypes.contains(itemType) {
+                var rawName = payload["name"] as? String ?? ""
+                if rawName.isEmpty {
+                    if ["local_shell_call", "shell_call"].contains(itemType) { rawName = "shell" }
+                    else if itemType == "apply_patch_call" { rawName = "apply_patch" }
+                    else if itemType == "computer_call" { rawName = "computer" }
+                }
+                guard !rawName.isEmpty else { continue }
+                let arguments = payload["arguments"] ?? payload["input"] ?? payload["action"]
+                let sourceKey = "\(realPath(path))|response|\(jsonOrString(payload["id"], callID).isEmpty ? String(lineno) : jsonOrString(payload["id"], callID))"
+                let change = try store.recordActivity(
+                    agent: name, srcKey: sourceKey, rawName: rawName, sessionID: sid,
+                    turnID: turn, callID: callID, startedAt: ts,
+                    sourceKind: "codex_rollout", arguments: arguments, allowSkillPath: true)
+                added += change.added; updated += change.updated
+                if rawName == "exec", let script = arguments as? String {
+                    for (index, inner) in ActivityNormalizer.inferredCodexTools(script).enumerated() {
+                        let child = try store.recordActivity(
+                            agent: name, srcKey: "\(sourceKey)|inner|\(index)", rawName: inner,
+                            sessionID: sid, turnID: turn, parentCallID: callID,
+                            startedAt: ts, sourceKind: "codex_exec_payload",
+                            confidence: "derived")
+                        added += child.added; updated += child.updated
+                    }
+                }
+            } else if CodexScanner.toolOutputTypes.contains(itemType) {
+                var status = ActivityNormalizer.status(payload["status"])
+                if status == "unknown", let output = payload["output"] as? [String: Any] {
+                    status = ((output["is_error"] as? Bool) == true || output["error"] != nil)
+                        ? "error" : "success"
+                }
+                if status == "unknown" { status = "success" }
+                updated += try store.completeActivity(agent: name, callID: callID,
+                                                       status: status, endedAt: ts)
+            }
+        }
+        return (added, updated)
+    }
+
     private func scanLegacy(_ store: UsageStore, _ prices: PriceTable,
-                            cursor: inout [String: Any], full: Bool) throws -> (Int, Int, Int) {
-        guard isDirectory(sessionsDir) else { return (0, 0, 0) }
-        var added = 0, updated = 0, files = 0
+                            cursor: inout [String: Any], full: Bool) throws -> (Int, Int, Int, Int, Int) {
+        guard isDirectory(sessionsDir) else { return (0, 0, 0, 0, 0) }
+        var added = 0, updated = 0, files = 0, activityAdded = 0, activityUpdated = 0
         var allFiles: [String] = []
         if let enumerator = FileManager.default.enumerator(atPath: sessionsDir) {
             for case let entry as String in enumerator where entry.hasSuffix(".jsonl") {
@@ -451,9 +523,12 @@ public struct CodexScanner: ScannerAdapter {
                 added += a
                 updated += u
             }
+            let activity = try scanRolloutActivity(store, path: path)
+            activityAdded += activity.0
+            activityUpdated += activity.1
             cursor[path] = statKey.asDict
         }
-        return (added, updated, files)
+        return (added, updated, files, activityAdded, activityUpdated)
     }
 
     // ------------------------------------------------------------ 入口 ----
@@ -462,12 +537,14 @@ public struct CodexScanner: ScannerAdapter {
         var cursor = try store.getScanCursor(tool: name)
         let effectiveFull = full
             || (cursor["parser_version"] as? NSNumber)?.intValue != CodexScanner.parserVersion
+            || activityNeedsBackfill(cursor)
         // 数据源删除、插入、游标移动一起回滚（即使调用方捕获后继续其他工具）。
         _ = try store.conn.execute("SAVEPOINT codex_scan")
         do {
             // JSONL 先扫（主源），SQLite 后扫补缺：同一趟内去重查询就能看到
             // 最新的 JSONL 归因，归因变更无需等下一次全量扫描才收敛。
-            let (a2, u2, f2) = try scanLegacy(store, prices, cursor: &cursor, full: effectiveFull)
+            let (a2, u2, f2, aa2, au2) = try scanLegacy(
+                store, prices, cursor: &cursor, full: effectiveFull)
             let (a1, u1, f1) = try scanSQLite(store, prices, cursor: &cursor, full: effectiveFull)
             let ambiguous = try store.conn.query(
                 "SELECT old.id FROM usage_events old WHERE old.tool=? AND old.source_kind='' "
@@ -479,12 +556,14 @@ public struct CodexScanner: ScannerAdapter {
                                            [row.int("id")])
             }
             cursor["parser_version"] = CodexScanner.parserVersion
+            markActivityCurrent(&cursor)
             let cursorJSON = String(data: try JSONSerialization.data(withJSONObject: cursor),
                                     encoding: .utf8) ?? "{}"
             _ = try store.conn.execute("INSERT OR REPLACE INTO scan_state(tool,cursor) VALUES (?,?)",
                                        [name, cursorJSON])
             _ = try store.conn.execute("RELEASE SAVEPOINT codex_scan")
-            var outcome = ScanOutcome(added: a1 + a2, updated: u1 + u2, files: f1 + f2)
+            var outcome = ScanOutcome(added: a1 + a2, updated: u1 + u2, files: f1 + f2,
+                                      activityAdded: aa2, activityUpdated: au2)
             if !ambiguous.isEmpty {
                 outcome.warning = "保留 \(ambiguous.count) 条无法核实与 JSONL 对应关系的旧 Codex 日志；已标记时间未知，可能存在重复历史。"
             }

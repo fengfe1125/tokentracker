@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from .. import db, pricing
+from .. import activity, db, pricing
 from ._util import changed, expand, iter_jsonl, stat_key, user_text
 
 NAME = "pi"
@@ -45,14 +45,15 @@ def _parse_ts(ts_raw) -> int:
 
 def scan(conn, prices, full: bool = False) -> dict:
     cursor = db.get_scan_cursor(conn, NAME)
-    added = updated = files = 0
+    effective_full = full or activity.needs_backfill(cursor)
+    added = updated = files = activity_added = activity_updated = 0
     for base in roots():
         for dirpath, _dirs, names in os.walk(base):
             for name in sorted(names):
                 if not name.endswith(".jsonl"):
                     continue
                 path = os.path.join(dirpath, name)
-                if not full and not changed(cursor, path):
+                if not effective_full and not changed(cursor, path):
                     continue
                 try:
                     snapshot = stat_key(path)
@@ -79,6 +80,29 @@ def scan(conn, prices, full: bool = False) -> dict:
                     msg = obj.get("message")
                     if not isinstance(msg, dict):
                         continue
+                    ts = _parse_ts(msg.get("timestamp") or obj.get("timestamp"))
+                    content = msg.get("content") if isinstance(msg.get("content"), list) else []
+                    for index, part in enumerate(content):
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = part.get("type")
+                        if part_type == "toolCall" and part.get("name"):
+                            call_id = part.get("id") or part.get("toolCallId")
+                            change = activity.put(
+                                conn, NAME, f"{os.path.realpath(path)}|tool|{call_id or str(obj.get('id')) + '|' + str(index)}",
+                                raw_name=str(part["name"]), session_id=session_id,
+                                call_id=str(call_id or ""), started_at=ts or None,
+                                source_kind="pi_jsonl",
+                                arguments=part.get("arguments") or part.get("input"))
+                            activity_added += change["added"]
+                            activity_updated += change["updated"]
+                        elif part_type == "toolResult":
+                            status = "error" if part.get("isError") else activity.status_from(part.get("status"))
+                            if status == "unknown":
+                                status = "success"
+                            activity_updated += db.complete_activity_event(
+                                conn, NAME, str(part.get("toolCallId") or part.get("id") or ""),
+                                status=status, ended_at=ts or None)
                     usage = msg.get("usage")
                     if not isinstance(usage, dict):
                         continue
@@ -89,7 +113,6 @@ def scan(conn, prices, full: bool = False) -> dict:
                     if inp + outp + cr + cw == 0:
                         continue
                     model = msg.get("model") or obj.get("modelId") or ""
-                    ts = _parse_ts(msg.get("timestamp") or obj.get("timestamp"))
                     key = f"{os.path.basename(path)}|{obj.get('id')}"
                     cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
                     cost = cost_obj.get("total") or 0
@@ -102,5 +125,7 @@ def scan(conn, prices, full: bool = False) -> dict:
                 cursor[path] = snapshot
                 if title:
                     db.set_session_title(conn, NAME, session_id, title)
+    activity.mark_current(cursor)
     db.set_scan_cursor(conn, NAME, cursor)
-    return {"added": added, "updated": updated, "files": files}
+    return {"added": added, "updated": updated, "files": files,
+            "activity_added": activity_added, "activity_updated": activity_updated}

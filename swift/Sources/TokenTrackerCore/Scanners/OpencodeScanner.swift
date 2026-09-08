@@ -63,7 +63,33 @@ public struct OpencodeScanner: ScannerAdapter {
             outcome.counterResets += result.counterResets
             outcome.updated += 1
         }
-        try store.setScanCursor(tool: name, cursor: ["mode": "snapshots", "observed_at": observedAt])
+        let tables = Set(try src.query("SELECT name FROM sqlite_master WHERE type='table'")
+            .map { $0.string("name") })
+        if tables.contains("part") {
+            for row in try src.query("SELECT id,session_id,time_created,time_updated,data FROM part") {
+                guard let dataText = row.stringOrNil("data"),
+                      let data = dataText.data(using: .utf8),
+                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      obj["type"] as? String == "tool",
+                      let rawName = obj["tool"] as? String else { continue }
+                let state = obj["state"] as? [String: Any] ?? [:]
+                let timing = state["time"] as? [String: Any] ?? [:]
+                let status = ActivityNormalizer.status(state["status"])
+                let start = jsonOrInt(timing["start"], row["time_created"])
+                let end = jsonOrInt(timing["end"], status == "unknown" ? nil : row["time_updated"])
+                let change = try store.recordActivity(
+                    agent: name, srcKey: "\(scope)|part|\(row.string("id"))",
+                    rawName: rawName, sessionID: row.string("session_id"),
+                    callID: jsonOrString(obj["callID"], obj["callId"]),
+                    startedAt: start == 0 ? nil : start, endedAt: end == 0 ? nil : end,
+                    status: status, sourceKind: "opencode_part", arguments: state["input"])
+                outcome.activityAdded += change.added
+                outcome.activityUpdated += change.updated
+            }
+        }
+        var cursor: [String: Any] = ["mode": "snapshots", "observed_at": observedAt]
+        markActivityCurrent(&cursor)
+        try store.setScanCursor(tool: name, cursor: cursor)
         return outcome
     }
 }

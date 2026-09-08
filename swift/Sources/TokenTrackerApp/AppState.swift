@@ -13,7 +13,7 @@ import TokenTrackerCore
 
 /// 侧边栏导航
 enum NavSelection: Hashable {
-    case overview, sessions, settings
+    case overview, sessions, activity, settings
     case tool(String)
 }
 
@@ -38,6 +38,16 @@ final class AppState: ObservableObject {
     @Published var sessionSearch = ""
     /// 表格选中行；详情面板跟着它走，所以放在 AppState 而不是视图 @State
     @Published var selectedSessionID: String?
+    @Published var activityRange = "week"
+    @Published var activityAgent: String?
+    @Published var activityConfidence = "exact"
+    @Published var activityExactRows: [UsageStore.ActivitySummaryRow] = []
+    @Published var activityDerivedRows: [UsageStore.ActivitySummaryRow] = []
+    @Published var activityToolRows: [UsageStore.ActivitySummaryRow] = []
+    @Published var activitySkillRows: [UsageStore.ActivitySummaryRow] = []
+    @Published var activityExactSkillRows: [UsageStore.ActivitySummaryRow] = []
+    @Published var activityTimelineRows: [ActivityEvent] = []
+    @Published var activityMatrixRows: [String: [UsageStore.ActivitySummaryRow]] = [:]
     @Published var detectInfo: [String: DetectInfo] = [:]
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
@@ -124,7 +134,7 @@ final class AppState: ObservableObject {
             },
             interval: Double(scanIntervalSeconds))
         scheduler.onFinish = { [weak self] in
-            DispatchQueue.main.async { self?.refreshData() }
+            DispatchQueue.main.async { self?.refreshVisibleData() }
         }
         scheduler.startAuto()
 
@@ -137,9 +147,9 @@ final class AppState: ObservableObject {
         }
         // 60s 数据刷新
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshData() }
+            Task { @MainActor in self?.refreshVisibleData() }
         }
-        refreshData()
+        refreshVisibleData()
 
         // 更新检查：启动后延迟 30s 的后台一次性请求（对齐 updatecheck.py 注释），
         // 网络失败静默，绝不阻塞启动
@@ -162,7 +172,7 @@ final class AppState: ObservableObject {
         let wasScanning = scanning
         scanning = snap.running
         lastScan = snap.last
-        if wasScanning && !scanning { refreshData() }  // 扫描刚结束立即刷新
+        if wasScanning && !scanning { refreshVisibleData() }  // 扫描刚结束立即刷新
     }
 
     private func reloadSettingsIfChanged() {
@@ -189,6 +199,11 @@ final class AppState: ObservableObject {
     }
 
     // ------------------------------------------------------------ 数据 ----
+
+    func refreshVisibleData() {
+        refreshData()
+        if selection == .activity { refreshActivity() }
+    }
 
     func refreshData() {
         reloadCodexAccounts()   // 账号列表与 active 跟随轮询热反映
@@ -260,6 +275,49 @@ final class AppState: ObservableObject {
                 // 读库失败（如迁移中短暂锁定）：写到 stderr 便于诊断，下一轮再试
                 FileHandle.standardError.write(Data(
                     "[tt] refreshData FAILED: \(error)\n".utf8))
+            }
+        }
+    }
+
+    /// Activity 统计比普通概览查询更重，只在活动页或筛选变化时加载。
+    func refreshActivity() {
+        let store = readStore
+        let range = activityRange
+        let agent = activityAgent
+        let confidence = activityConfidence
+        queryQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let exact = try store.activitySummary(
+                    rangeKey: range, agent: agent, group: "agent", confidence: "exact")
+                let derived = try store.activitySummary(
+                    rangeKey: range, agent: agent, group: "agent", confidence: "derived")
+                let tools = try store.activitySummary(
+                    rangeKey: range, agent: agent, group: "tool", confidence: confidence)
+                let skills = try store.activitySummary(
+                    rangeKey: range, agent: agent, group: "skill", confidence: confidence)
+                let exactSkills = try store.activitySummary(
+                    rangeKey: range, agent: agent, group: "skill", confidence: "exact")
+                let timeline = try store.activityTimeline(
+                    rangeKey: range, agent: agent, confidence: confidence, limit: 80)
+                var matrix: [String: [UsageStore.ActivitySummaryRow]] = [:]
+                for matrixAgent in ScannerRegistry.all {
+                    matrix[matrixAgent] = try store.activitySummary(
+                        rangeKey: range, agent: matrixAgent,
+                        group: "tool", confidence: confidence)
+                }
+                DispatchQueue.main.async {
+                    self.activityExactRows = exact
+                    self.activityDerivedRows = derived
+                    self.activityToolRows = tools
+                    self.activitySkillRows = skills
+                    self.activityExactSkillRows = exactSkills
+                    self.activityTimelineRows = timeline
+                    self.activityMatrixRows = matrix
+                }
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "[tt] refreshActivity FAILED: \(error)\n".utf8))
             }
         }
     }

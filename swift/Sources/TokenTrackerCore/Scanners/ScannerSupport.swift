@@ -308,6 +308,10 @@ public func jsonOrAny(_ a: Any?, _ b: Any?) -> Any? {
     }
 }
 
+public func jsonOrAny(_ a: Any?, _ b: Any?, _ c: Any?) -> Any? {
+    jsonOrAny(jsonOrAny(a, b), c)
+}
+
 public func jsonString(_ value: Any?) -> String? {
     value as? String
 }
@@ -322,4 +326,10 @@ public func jsonOrInt(_ first: Any?, _ second: Any?) -> Int64 {
 public func jsonOrString(_ first: Any?, _ second: Any?) -> String {
     if let s = first as? String, !s.isEmpty { return s }
     return (second as? String) ?? ""
+}
+
+
+public func jsonOrString(_ first: Any?, _ second: Any?, _ third: Any?) -> String {
+    let value = jsonOrString(first, second)
+    return value.isEmpty ? (third as? String ?? "") : value
 }

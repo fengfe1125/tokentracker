@@ -9,7 +9,7 @@ import glob
 import json
 import os
 
-from .. import db
+from .. import activity, db
 from ._util import expand, sqlite_ro
 
 NAME = "hermes"
@@ -49,6 +49,50 @@ def _identity(row):
 
 def _counts(row):
     return tuple(row[k] or 0 for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
+
+
+def _scan_activity(conn, path: str) -> tuple[int, int]:
+    added = updated = 0
+    src = sqlite_ro(path)
+    try:
+        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "messages" not in tables:
+            return 0, 0
+        rows = src.execute("SELECT id,session_id,role,tool_call_id,tool_calls,tool_name,"
+                           "effect_disposition,timestamp FROM messages ORDER BY id")
+        for row in rows:
+            ts = int((row["timestamp"] or 0) * 1000) if 0 < (row["timestamp"] or 0) < 1e12 else int(row["timestamp"] or 0)
+            if row["role"] == "assistant" and row["tool_calls"]:
+                try:
+                    calls = json.loads(row["tool_calls"])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(calls, dict):
+                    calls = [calls]
+                for index, call in enumerate(calls if isinstance(calls, list) else []):
+                    if not isinstance(call, dict):
+                        continue
+                    fn = call.get("function") if isinstance(call.get("function"), dict) else call
+                    raw_name = fn.get("name") or call.get("name")
+                    call_id = call.get("call_id") or call.get("id") or call.get("tool_call_id")
+                    if not raw_name:
+                        continue
+                    change = activity.put(
+                        conn, NAME, f"{os.path.realpath(path)}|message|{row['id']}|{call_id or index}",
+                        raw_name=str(raw_name), session_id=str(row["session_id"] or ""),
+                        call_id=str(call_id or ""), started_at=ts or None,
+                        source_kind="hermes_messages", arguments=fn.get("arguments"))
+                    added += change["added"]
+                    updated += change["updated"]
+            elif row["role"] == "tool" and row["tool_call_id"]:
+                status = activity.status_from(row["effect_disposition"])
+                if status == "unknown":
+                    status = "success"
+                updated += db.complete_activity_event(
+                    conn, NAME, str(row["tool_call_id"]), status=status, ended_at=ts or None)
+    finally:
+        src.close()
+    return added, updated
 
 
 def _legacy_owners(conn, sources):
@@ -109,7 +153,7 @@ def _scan_one(conn, path: str, prices, rows=None, owners=None) -> tuple[int, int
 
 
 def scan(conn, prices, full: bool = False) -> dict:
-    added = updated = resets = 0
+    added = updated = resets = activity_added = activity_updated = 0
     files = db_files()
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
@@ -120,10 +164,16 @@ def scan(conn, prices, full: bool = False) -> dict:
         added += a
         updated += u
         resets += r
+        aa, au = _scan_activity(conn, path)
+        activity_added += aa
+        activity_updated += au
     unresolved = conn.execute("SELECT COUNT(*) FROM usage_events WHERE tool=? AND source_scope='' AND time_quality='unallocated'",
                               (NAME,)).fetchone()[0]
-    db.set_scan_cursor(conn, NAME, {"mode": "snapshots"})
-    result = {"added": added, "updated": updated, "files": len(files), "counter_resets": resets}
+    cursor = {"mode": "snapshots"}
+    activity.mark_current(cursor)
+    db.set_scan_cursor(conn, NAME, cursor)
+    result = {"added": added, "updated": updated, "files": len(files), "counter_resets": resets,
+              "activity_added": activity_added, "activity_updated": activity_updated}
     if unresolved:
         result["warning"] = f"保留 {unresolved} 条无法映射 profile 的未分配历史，可能与现存来源重叠"
     return result

@@ -43,6 +43,7 @@ public struct DshScanner: ScannerAdapter {
 
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
         var cursor = try store.getScanCursor(tool: name)
+        let effectiveFull = full || activityNeedsBackfill(cursor)
         var outcome = ScanOutcome()
         var files: [String] = []
         if let enumerator = FileManager.default.enumerator(atPath: root) {
@@ -53,7 +54,7 @@ public struct DshScanner: ScannerAdapter {
         files.sort()
         for rel in files {
             let path = (root as NSString).appendingPathComponent(rel)
-            if !full && !fingerprintChanged(cursor: cursor, path: path) { continue }
+            if !effectiveFull && !fingerprintChanged(cursor: cursor, path: path) { continue }
             guard let statKey = StatKey(path: path) else { continue }
             outcome.files += 1
             // 一级子目录是 workspace slug，二级是 session id
@@ -65,7 +66,7 @@ public struct DshScanner: ScannerAdapter {
             var sessionID = ""
             var project = parts.count >= 1 ? parts[0] : ""
             var model = ""
-            for (_, obj) in reader(path) {
+            for (lineno, obj) in reader(path) {
                 let type = obj["type"] as? String ?? ""
                 if type == "session" {
                     let id = obj["id"] as? String ?? ""
@@ -77,6 +78,40 @@ public struct DshScanner: ScannerAdapter {
                     let header = data["header"] as? [String: Any] ?? [:]
                     let config = header["config"] as? [String: Any] ?? [:]
                     if let m = config["model"] as? String, !m.isEmpty { model = m }
+                } else if type == "tool/call" {
+                    let data = obj["data"] as? [String: Any] ?? [:]
+                    let rawName = jsonOrString(data["name"], data["tool"])
+                    let callID = jsonOrString(data["callId"], data["id"])
+                    let sid = sessionID.isEmpty ? fallbackID : sessionID
+                    if !rawName.isEmpty {
+                        let change = try store.recordActivity(
+                            agent: name, srcKey: "\(sid)|tool|\(callID.isEmpty ? String(lineno) : callID)",
+                            rawName: rawName, sessionID: sid,
+                            turnID: {
+                                guard let value = data["turn"] else { return "" }
+                                if let number = value as? NSNumber, number.int64Value == 0 { return "" }
+                                return String(describing: value)
+                            }(),
+                            callID: callID,
+                            startedAt: {
+                                let value = jsonOrInt(obj["time"], data["time"])
+                                return value == 0 ? nil : value
+                            }(),
+                            sourceKind: "dsh_zstd",
+                            arguments: jsonOrAny(data["arguments"], data["args"], data["input"]))
+                        outcome.activityAdded += change.added
+                        outcome.activityUpdated += change.updated
+                    }
+                } else if type == "tool/result" {
+                    let data = obj["data"] as? [String: Any] ?? [:]
+                    let callID = jsonOrString(data["callId"], data["id"])
+                    var status = ActivityNormalizer.status(jsonOrAny(data["status"], data["error"]))
+                    if status == "unknown" { status = data["error"] == nil ? "success" : "error" }
+                    let ended = jsonOrInt(obj["time"], data["time"])
+                    outcome.activityUpdated += try store.completeActivity(
+                        agent: name, callID: callID, status: status,
+                        endedAt: ended == 0 ? nil : ended,
+                        durationMs: (data["durationMs"] as? NSNumber)?.int64Value)
                 } else if type == "assistant/chunk" {
                     let data = obj["data"] as? [String: Any] ?? [:]
                     let chunk = data["chunk"] as? [String: Any] ?? [:]
@@ -129,6 +164,7 @@ public struct DshScanner: ScannerAdapter {
             }
             cursor[path] = statKey.asDict
         }
+        markActivityCurrent(&cursor)
         try store.setScanCursor(tool: name, cursor: cursor)
         return outcome
     }

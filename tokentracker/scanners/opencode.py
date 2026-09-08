@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 
-from .. import db
+from .. import activity, db
 from ._util import expand, sqlite_ro
 
 NAME = "opencode"
@@ -39,7 +39,7 @@ def scan(conn, prices, full: bool = False) -> dict:
     # Read every cumulative row: unchanged observations narrow the next interval;
     # updated_at is not a safe cursor (ties and resets can hide changed counters).
     path = db_path()
-    added = updated = resets = 0
+    added = updated = resets = activity_added = activity_updated = 0
     src = sqlite_ro(path)
     try:
         rows = src.execute("SELECT * FROM session").fetchall()
@@ -55,7 +55,31 @@ def scan(conn, prices, full: bool = False) -> dict:
             added += result["added"]
             resets += result["counter_resets"]
             updated += 1
-        db.set_scan_cursor(conn, NAME, {"mode": "snapshots", "observed_at": observed_at})
+        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "part" in tables:
+            for row in src.execute("SELECT id,session_id,time_created,time_updated,data FROM part"):
+                try:
+                    data = json.loads(row["data"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(data, dict) or data.get("type") != "tool" or not data.get("tool"):
+                    continue
+                state = data.get("state") if isinstance(data.get("state"), dict) else {}
+                timing = state.get("time") if isinstance(state.get("time"), dict) else {}
+                status = activity.status_from(state.get("status"))
+                change = activity.put(
+                    conn, NAME, f"{os.path.realpath(path)}|part|{row['id']}",
+                    raw_name=str(data["tool"]), session_id=str(row["session_id"] or ""),
+                    call_id=str(data.get("callID") or data.get("callId") or row["id"]),
+                    started_at=timing.get("start") or row["time_created"],
+                    ended_at=timing.get("end") or (row["time_updated"] if status != "unknown" else None),
+                    status=status, source_kind="opencode_part", arguments=state.get("input"))
+                activity_added += change["added"]
+                activity_updated += change["updated"]
+        cursor = {"mode": "snapshots", "observed_at": observed_at}
+        activity.mark_current(cursor)
+        db.set_scan_cursor(conn, NAME, cursor)
     finally:
         src.close()
-    return {"added": added, "updated": updated, "files": 1, "counter_resets": resets}
+    return {"added": added, "updated": updated, "files": 1, "counter_resets": resets,
+            "activity_added": activity_added, "activity_updated": activity_updated}

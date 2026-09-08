@@ -24,6 +24,7 @@ def cmd_scan(args) -> int:
         if getattr(args, "reset", False):
             marks = ",".join("?" * len(tools))
             conn.execute(f"DELETE FROM usage_events WHERE tool IN ({marks})", tools)
+            conn.execute(f"DELETE FROM agent_activity_events WHERE agent IN ({marks})", tools)
             conn.execute(f"DELETE FROM scan_state WHERE tool IN ({marks})", tools)
             conn.execute(f"DELETE FROM aggregate_snapshots WHERE tool IN ({marks})", tools)
             conn.commit()
@@ -40,6 +41,8 @@ def cmd_scan(args) -> int:
             print(f"— {tool:<10} {r['skipped']}")
         else:
             print(f"✓ {tool:<10} 新增 {r['added']} 条 / 更新 {r['updated']} 条 / 文件 {r['files']} 个")
+            if r.get("activity_added") or r.get("activity_updated"):
+                print(f"  活动: 新增 {r.get('activity_added', 0)} 条 / 补全 {r.get('activity_updated', 0)} 条")
         if r.get("counter_resets"):
             print(f"⚠ {tool}: {r['counter_resets']} 个累计计数器重置，已更新基线并保留历史")
         if r.get("warning"):
@@ -81,6 +84,28 @@ def cmd_stats(args) -> int:
         print(f"≈ 按观测时间估算: {fmt(total['estimated_tokens'])} Token（已计入当前总量）")
     if total["unpriced"]:
         print(f"⚠ 有 {total['unpriced']} 条事件未匹配到价格（已按 token 统计，不计费）。编辑 prices.json 可补价格。")
+    return 0
+
+
+def cmd_activity(args) -> int:
+    conn = db.connect()
+    try:
+        rows = db.activity_summary(conn, args.range, args.agent, args.group, args.confidence)
+    finally:
+        conn.close()
+    payload = {"range": args.range, "group": args.group,
+               "confidence": args.confidence, "rows": rows,
+               "capabilities": db.activity_capabilities()}
+    if args.json:
+        import json
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    print(f"范围: {args.range}  分组: {args.group}  证据: {args.confidence}")
+    print(f"{'名称':<28} {'调用':>8} {'会话':>8} {'成功':>8} {'失败':>8} {'未知':>8} {'推断':>8}")
+    for row in rows:
+        print(f"{row['name'][:28]:<28} {row['calls']:>8} {row['sessions']:>8} "
+              f"{row['success']:>8} {row['error'] + row['denied']:>8} "
+              f"{row['unknown']:>8} {row['derived']:>8}")
     return 0
 
 
@@ -127,10 +152,17 @@ def main(argv=None) -> int:
     pt.add_argument("--range", default="all", choices=["day", "week", "month", "all"])
     pt.add_argument("--tool")
 
+    pa = sub.add_parser("activity", help="查看 Agent 工具与 Skill 活动")
+    pa.add_argument("--range", default="all", choices=["day", "week", "month", "all"])
+    pa.add_argument("--group", default="tool", choices=["agent", "tool", "skill"])
+    pa.add_argument("--agent", choices=["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"])
+    pa.add_argument("--confidence", default="exact", choices=["exact", "derived", "all"])
+    pa.add_argument("--json", action="store_true")
+
     pq = sub.add_parser("quotas", help="查看订阅配额进度（官方数据优先，本地估算兜底）")
 
     args = p.parse_args(argv)
-    return {"detect": cmd_detect, "scan": cmd_scan, "stats": cmd_stats,
+    return {"detect": cmd_detect, "scan": cmd_scan, "stats": cmd_stats, "activity": cmd_activity,
             "quotas": cmd_quotas}[args.cmd](args)
 
 

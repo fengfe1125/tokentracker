@@ -10,6 +10,7 @@ Python 只暂留 CLI 与差分 oracle，不再提供桌面或浏览器界面。
 Sources/
   TokenTrackerCore/
     Billing/       Claude、Kimi、Codex、OpenCode Go 官方配额
+    Activity/      工具与 Skill 活动模型、归一化和证据等级
     MenuBar/       状态栏格式化纯逻辑
     Pricing/       价格表与成本计算
     Quotas/        本地窗口和官方配额合并
@@ -18,7 +19,7 @@ Sources/
     Settings/      settings.json 读写
     Store/         SQLite schema、迁移、聚合和查询
   TokenTrackerApp/ 状态栏、主窗口、详情窗口、设置和应用内更新
-  tt-swift/        detect、scan、stats、quotas
+  tt-swift/        detect、scan、stats、activity、quotas
 Tests/
   TokenTrackerCoreTests/
 ```
@@ -43,7 +44,7 @@ open dist/TokenTracker.app
 
 Python CLI 与 Swift 共用以下兼容数据：
 
-- `~/.tokentracker/usage.db`（schema v2）
+- `~/.tokentracker/usage.db`（schema v3）
 - `~/.tokentracker/settings.json`
 - `~/.tokentracker/official_cache.json`
 - `~/.tokentracker/claude_cred_backup.json`

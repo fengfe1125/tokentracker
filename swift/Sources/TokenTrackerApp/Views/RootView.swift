@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  主面板骨架：NavigationSplitView 侧栏（视图 + 7 工具数据源状态）+
-//  详情区（概览 / 会话记录 / 设置）。快捷键 ⌘1/⌘2 切视图、⌘R 扫描。
+//  详情区（概览 / 会话记录 / Agent 活动 / 设置）。快捷键 ⌘1/⌘2/⌘3 切视图、⌘R 扫描。
 //
 
 import SwiftUI
@@ -22,8 +22,10 @@ struct RootView: View {
                         .tag(NavSelection.overview)
                     Label("会话记录", systemImage: "list.bullet.rectangle")
                         .tag(NavSelection.sessions)
+                    Label("Agent 活动", systemImage: "point.3.connected.trianglepath.dotted")
+                        .tag(NavSelection.activity)
                 }
-                Section("工具") {
+                Section("Agent 数据源") {
                     ForEach(ScannerRegistry.all, id: \.self) { name in
                         ToolSidebarRow(name: name,
                                        installed: state.detectInfo[name]?.installed ?? false,
@@ -45,6 +47,8 @@ struct RootView: View {
                 OverviewView(state: state)
             case .sessions:
                 SessionsView(state: state, toolFilter: nil)
+            case .activity:
+                ActivityView(state: state)
             case .tool(let id):
                 SessionsView(state: state, toolFilter: id)
             case .settings:
@@ -52,13 +56,15 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 820, minHeight: 520)
-        // 快捷键：⌘1/⌘2 切视图 · ⌘R 扫描（⌘, 设置走系统 Settings 场景，⌘W 关闭面板）
+        // 快捷键：⌘1/⌘2/⌘3 切视图 · ⌘R 扫描（⌘, 设置走系统 Settings 场景，⌘W 关闭面板）
         .background {
             VStack {
                 Button("") { state.selection = .overview }
                     .keyboardShortcut("1", modifiers: .command)
                 Button("") { state.selection = .sessions }
                     .keyboardShortcut("2", modifiers: .command)
+                Button("") { state.selection = .activity }
+                    .keyboardShortcut("3", modifiers: .command)
                 Button("") { state.requestScan() }
                     .keyboardShortcut("r", modifiers: .command)
             }
@@ -66,8 +72,8 @@ struct RootView: View {
             .allowsHitTesting(false)
         }
         .onChange(of: state.range) { _, _ in state.refreshData() }
-        .onChange(of: state.selection) { _, _ in state.refreshData() }
-        .onAppear { state.refreshData() }
+        .onChange(of: state.selection) { _, _ in state.refreshVisibleData() }
+        .onAppear { state.refreshVisibleData() }
     }
 
     private func todayTokens(for tool: String) -> Int64? {

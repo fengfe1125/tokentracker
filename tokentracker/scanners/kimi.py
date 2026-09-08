@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from .. import db, pricing
+from .. import activity, db, pricing
 from ._util import changed, expand, iter_jsonl, stat_key
 
 NAME = "kimi"
@@ -46,8 +46,8 @@ def _parse_ts(ts_raw) -> int:
 def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
     base = journal_dir()
     if not os.path.isdir(base):
-        return 0, 0, 0
-    added = updated = files = 0
+        return 0, 0, 0, 0, 0
+    added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         for name in sorted(names):
             if not (name.startswith("session_") and name.endswith(".jsonl")):
@@ -70,6 +70,29 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                 kind = obj.get("kind")
                 env = obj.get("envelope") or {}
                 payload = env.get("payload") or {}
+                event_type = env.get("type")
+                ts = _parse_ts(env.get("timestamp") or obj.get("time"))
+                if kind == "event" and event_type == "tool.call.started":
+                    call = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else payload
+                    raw_name = call.get("name") or call.get("toolName") or call.get("tool")
+                    call_id = call.get("id") or call.get("toolCallId") or payload.get("toolCallId")
+                    if raw_name:
+                        change = activity.put(
+                            conn, NAME, f"{session_id}|tool|{call_id or obj.get('seq')}",
+                            raw_name=str(raw_name), session_id=session_id,
+                            turn_id=str(payload.get("turnId") or ""), call_id=str(call_id or ""),
+                            started_at=ts, source_kind="kimi_journal",
+                            arguments=call.get("args") or call.get("arguments") or call.get("input"))
+                        activity_added += change["added"]
+                        activity_updated += change["updated"]
+                elif kind == "event" and event_type == "tool.result":
+                    call_id = payload.get("toolCallId") or payload.get("callId") or payload.get("id")
+                    status = activity.status_from(payload.get("status") or payload.get("error"))
+                    if status == "unknown":
+                        status = "error" if payload.get("error") else "success"
+                    activity_updated += db.complete_activity_event(
+                        conn, NAME, str(call_id or ""), status=status, ended_at=ts,
+                        duration_ms=payload.get("durationMs"))
                 if title is None and kind == "event" and env.get("type") == "turn.started":
                     prompt = payload.get("prompt")
                     if isinstance(prompt, str) and prompt.strip():
@@ -107,14 +130,14 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
             cursor[path] = snapshot
             if title:
                 db.set_session_title(conn, NAME, session_id, title)
-    return added, updated, files
+    return added, updated, files, activity_added, activity_updated
 
 
 def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
     base = cli_dir()
     if not os.path.isdir(base):
-        return 0, 0, 0
-    added = updated = files = 0
+        return 0, 0, 0, 0, 0
+    added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         for name in sorted(names):
             if not name.endswith(".jsonl"):
@@ -144,12 +167,15 @@ def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
                                       ts=_parse_ts(obj.get("timestamp") or 0), model=str(model),
                                       input=inp, output=outp, cost=cost)
             cursor[path] = snapshot
-    return added, updated, files
+    return added, updated, files, activity_added, activity_updated
 
 
 def scan(conn, prices, full: bool = False) -> dict:
     cursor = db.get_scan_cursor(conn, NAME)
-    a1, u1, f1 = _scan_journal(conn, prices, cursor, full)
-    a2, u2, f2 = _scan_cli(conn, prices, cursor, full)
+    effective_full = full or activity.needs_backfill(cursor)
+    a1, u1, f1, aa1, au1 = _scan_journal(conn, prices, cursor, effective_full)
+    a2, u2, f2, aa2, au2 = _scan_cli(conn, prices, cursor, effective_full)
+    activity.mark_current(cursor)
     db.set_scan_cursor(conn, NAME, cursor)
-    return {"added": a1 + a2, "updated": u1 + u2, "files": f1 + f2}
+    return {"added": a1 + a2, "updated": u1 + u2, "files": f1 + f2,
+            "activity_added": aa1 + aa2, "activity_updated": au1 + au2}

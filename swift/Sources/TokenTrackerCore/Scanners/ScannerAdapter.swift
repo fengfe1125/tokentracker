@@ -12,6 +12,8 @@ public struct ScanOutcome: Equatable, Sendable {
     public var updated: Int = 0
     public var files: Int = 0
     public var counterResets: Int = 0
+    public var activityAdded: Int = 0
+    public var activityUpdated: Int = 0
     public var warning: String?
     public var skipped: String?
     public var error: String?

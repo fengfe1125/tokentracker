@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 2
+    public static let schemaVersion: Int32 = 3
     public static let tokenColumns = ["input", "output", "cache_read", "cache_write"]
     public static let tokensExpr = "(input+output+cache_read+cache_write)"
 
@@ -48,6 +48,21 @@ public final class UsageStore {
         tool TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
         updated_at INTEGER NOT NULL, PRIMARY KEY(tool, session_id)
     );
+    CREATE TABLE IF NOT EXISTS agent_activity_events (
+        id INTEGER PRIMARY KEY, agent TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '', turn_id TEXT NOT NULL DEFAULT '',
+        raw_name TEXT NOT NULL, canonical_name TEXT NOT NULL,
+        namespace TEXT NOT NULL DEFAULT '', call_id TEXT NOT NULL DEFAULT '',
+        parent_call_id TEXT NOT NULL DEFAULT '', started_at INTEGER, ended_at INTEGER,
+        duration_ms INTEGER, status TEXT NOT NULL DEFAULT 'unknown',
+        source_kind TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'exact',
+        skill_name TEXT NOT NULL DEFAULT '', skill_confidence TEXT NOT NULL DEFAULT '',
+        src_key TEXT NOT NULL, UNIQUE(agent, src_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_agent_time ON agent_activity_events(agent, started_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_session ON agent_activity_events(agent, session_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_tool ON agent_activity_events(canonical_name, started_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_skill ON agent_activity_events(skill_name, started_at);
     """
 
     public let conn: SQLiteConnection
@@ -100,6 +115,7 @@ public final class UsageStore {
             let backup = try SQLiteConnection(path: backupPath)
             try conn.backup(to: backup)
         }
+        if version < 3 { try validateResidualActivityTable() }
         try conn.beginImmediate()
         do {
             if legacy && version < 1 {
@@ -155,6 +171,41 @@ public final class UsageStore {
         }
     }
 
+    /// Some rollback builds reset user_version to 2 while leaving the complete
+    /// v3 activity table behind. Preserve that table, but never guess how to
+    /// migrate a malformed residual schema.
+    private func validateResidualActivityTable() throws {
+        guard try conn.queryOne(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_activity_events'") != nil
+        else { return }
+        let expected: Set<String> = [
+            "id", "agent", "session_id", "turn_id", "raw_name", "canonical_name",
+            "namespace", "call_id", "parent_call_id", "started_at", "ended_at",
+            "duration_ms", "status", "source_kind", "confidence", "skill_name",
+            "skill_confidence", "src_key",
+        ]
+        let columns = Set(try conn.query("PRAGMA table_info(agent_activity_events)")
+            .map { $0.string("name") })
+        guard columns == expected else {
+            throw SQLiteError(message: "Existing agent_activity_events schema is incompatible")
+        }
+        var hasIdentityConstraint = false
+        for index in try conn.query("PRAGMA index_list(agent_activity_events)")
+            where index.int("unique") == 1 {
+            let escaped = index.string("name").replacingOccurrences(of: "\"", with: "\"\"")
+            let names = try conn.query("PRAGMA index_info(\"\(escaped)\")")
+                .sorted { $0.int("seqno") < $1.int("seqno") }
+                .map { $0.string("name") }
+            if names == ["agent", "src_key"] {
+                hasIdentityConstraint = true
+                break
+            }
+        }
+        guard hasIdentityConstraint else {
+            throw SQLiteError(message: "Existing agent_activity_events lacks UNIQUE(agent,src_key)")
+        }
+    }
+
     // ------------------------------------------------------------ 写入 ----
 
     /// INSERT OR IGNORE（replace=true 时 OR REPLACE）。返回实际写入行数。
@@ -183,6 +234,65 @@ public final class UsageStore {
                 + "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [tool, srcKey, sessionID, project, ts, model, input, output, cacheRead, cacheWrite,
              cost as Any, quality, intervalStart as Any, costSource, sourceKind, sourceScope])
+    }
+
+    @discardableResult
+    public func putActivityEvent(_ event: ActivityEvent) throws -> (added: Int, updated: Int) {
+        guard ["success", "error", "denied", "unknown"].contains(event.status),
+              ["exact", "derived"].contains(event.confidence),
+              event.skillConfidence.isEmpty || ["exact", "derived"].contains(event.skillConfidence),
+              !event.agent.isEmpty, !event.srcKey.isEmpty, !event.rawName.isEmpty else {
+            throw SQLiteError(message: "Invalid activity event")
+        }
+        let before = try conn.queryOne(
+            "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+            [event.agent, event.srcKey])
+        _ = try conn.execute("""
+            INSERT INTO agent_activity_events (
+              agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,parent_call_id,
+              started_at,ended_at,duration_ms,status,source_kind,confidence,
+              skill_name,skill_confidence,src_key
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(agent,src_key) DO UPDATE SET
+              session_id=CASE WHEN excluded.session_id!='' THEN excluded.session_id ELSE session_id END,
+              turn_id=CASE WHEN excluded.turn_id!='' THEN excluded.turn_id ELSE turn_id END,
+              ended_at=COALESCE(excluded.ended_at,ended_at),
+              duration_ms=COALESCE(excluded.duration_ms,duration_ms),
+              status=CASE WHEN excluded.status!='unknown' THEN excluded.status ELSE status END,
+              skill_name=CASE WHEN excluded.skill_name!='' THEN excluded.skill_name ELSE skill_name END,
+              skill_confidence=CASE WHEN excluded.skill_confidence!='' THEN excluded.skill_confidence ELSE skill_confidence END
+            """, [event.agent, event.sessionID, event.turnID, event.rawName, event.canonicalName,
+                   event.namespace, event.callID, event.parentCallID, event.startedAt as Any,
+                   event.endedAt as Any, event.durationMs as Any, event.status, event.sourceKind,
+                   event.confidence, event.skillName, event.skillConfidence, event.srcKey])
+        let after = try conn.queryOne(
+            "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+            [event.agent, event.srcKey])
+        let changed = before != nil && (before?.string("status") != after?.string("status")
+            || before?.intOrNil("ended_at") != after?.intOrNil("ended_at")
+            || before?.intOrNil("duration_ms") != after?.intOrNil("duration_ms"))
+        return (before == nil ? 1 : 0, changed ? 1 : 0)
+    }
+
+    @discardableResult
+    public func completeActivity(agent: String, callID: String, status: String = "success",
+                                 endedAt: Int64? = nil, durationMs inputDuration: Int64? = nil) throws -> Int {
+        guard !callID.isEmpty, ["success", "error", "denied", "unknown"].contains(status),
+              let row = try conn.queryOne(
+                "SELECT id,started_at,status,ended_at,duration_ms FROM agent_activity_events "
+                    + "WHERE agent=? AND call_id=? ORDER BY id DESC LIMIT 1", [agent, callID]) else { return 0 }
+        var duration = inputDuration
+        if duration == nil, let endedAt, let started = row.intOrNil("started_at") {
+            duration = max(0, endedAt - started)
+        }
+        let effectiveEnded = endedAt ?? row.intOrNil("ended_at")
+        let effectiveDuration = duration ?? row.intOrNil("duration_ms")
+        let changed = row.string("status") != status || row.intOrNil("ended_at") != effectiveEnded
+            || row.intOrNil("duration_ms") != effectiveDuration
+        _ = try conn.execute("UPDATE agent_activity_events SET status=?,ended_at=COALESCE(?,ended_at),"
+            + "duration_ms=COALESCE(?,duration_ms) WHERE id=?",
+            [status, endedAt as Any, duration as Any, row.int("id")])
+        return changed ? 1 : 0
     }
 
     public func setScanCursor(tool: String, cursor: [String: Any]) throws {
@@ -621,6 +731,98 @@ public final class UsageStore {
         return n
     }
 
+    public struct ActivitySummaryRow: Equatable, Sendable {
+        public var name: String
+        public var calls: Int64
+        public var sessions: Int64
+        public var success: Int64
+        public var errors: Int64
+        public var denied: Int64
+        public var unknown: Int64
+        public var exact: Int64
+        public var derived: Int64
+        public var lastUsed: Int64
+    }
+
+    private func activityFilter(rangeKey: String, agent: String?, confidence: String,
+                                sessionID: String?, skill: Bool) throws -> (String, [Any?]) {
+        guard ["day", "week", "month", "all"].contains(rangeKey),
+              ["exact", "derived", "all"].contains(confidence) else {
+            throw SQLiteError(message: "Invalid activity filter")
+        }
+        var clauses: [String] = []
+        var args: [Any?] = []
+        if rangeKey != "all" {
+            let bounds = rangeBounds(rangeKey)
+            clauses.append("COALESCE(started_at,ended_at,0)>=? AND COALESCE(started_at,ended_at,0)<?")
+            args.append(contentsOf: [bounds.0, bounds.1])
+        }
+        if let agent { clauses.append("agent=?"); args.append(agent) }
+        if let sessionID { clauses.append("session_id=?"); args.append(sessionID) }
+        if confidence != "all" {
+            clauses.append((skill ? "skill_confidence" : "confidence") + "=?")
+            args.append(confidence)
+        }
+        if skill { clauses.append("skill_name!=''") }
+        return (clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND "), args)
+    }
+
+    public func activitySummary(rangeKey: String = "all", agent: String? = nil,
+                                group: String = "tool", confidence: String = "all",
+                                sessionID: String? = nil) throws -> [ActivitySummaryRow] {
+        guard ["agent", "tool", "skill"].contains(group) else {
+            throw SQLiteError(message: "Invalid activity group")
+        }
+        let skill = group == "skill"
+        let (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: agent,
+            confidence: confidence, sessionID: sessionID, skill: skill)
+        let name = group == "agent" ? "agent"
+            : (skill ? "skill_name" : (agent == nil ? "canonical_name" : "raw_name"))
+        let evidence = skill ? "skill_confidence" : "confidence"
+        return try conn.query("""
+            SELECT \(name) AS name,COUNT(*) AS calls,COUNT(DISTINCT session_id) AS sessions,
+              SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
+              SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
+              SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown,
+              SUM(CASE WHEN \(evidence)='exact' THEN 1 ELSE 0 END) AS exact,
+              SUM(CASE WHEN \(evidence)='derived' THEN 1 ELSE 0 END) AS derived,
+              MAX(COALESCE(ended_at,started_at,0)) AS last_used
+            FROM agent_activity_events WHERE \(whereSQL)
+            GROUP BY \(name) ORDER BY calls DESC,name
+            """, args).map { row in
+                ActivitySummaryRow(name: row.string("name"), calls: row.int("calls"),
+                    sessions: row.int("sessions"), success: row.int("success"),
+                    errors: row.int("error"), denied: row.int("denied"),
+                    unknown: row.int("unknown"), exact: row.int("exact"),
+                    derived: row.int("derived"), lastUsed: row.int("last_used"))
+            }
+    }
+
+    public func activityTimeline(rangeKey: String = "all", agent: String? = nil, sessionID: String? = nil,
+                                 confidence: String = "all", limit: Int = 200,
+                                 before: Int64? = nil) throws -> [ActivityEvent] {
+        var (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: agent,
+            confidence: confidence, sessionID: sessionID, skill: false)
+        if let before {
+            whereSQL += " AND COALESCE(started_at,ended_at,0)<?"
+            args.append(before)
+        }
+        args.append(max(1, min(limit, 1000)))
+        return try conn.query("SELECT * FROM agent_activity_events WHERE \(whereSQL) "
+            + "ORDER BY COALESCE(started_at,ended_at,0) DESC,id DESC LIMIT ?", args).map { row in
+            ActivityEvent(agent: row.string("agent"), sessionID: row.string("session_id"),
+                turnID: row.string("turn_id"), rawName: row.string("raw_name"),
+                canonicalName: row.string("canonical_name"), namespace: row.string("namespace"),
+                callID: row.string("call_id"), parentCallID: row.string("parent_call_id"),
+                startedAt: row.intOrNil("started_at"), endedAt: row.intOrNil("ended_at"),
+                durationMs: row.intOrNil("duration_ms"), status: row.string("status"),
+                sourceKind: row.string("source_kind"), confidence: row.string("confidence"),
+                skillName: row.string("skill_name"), skillConfidence: row.string("skill_confidence"),
+                srcKey: row.string("src_key"))
+        }
+    }
+
     public struct ObservationInterval: Equatable, Sendable {
         public var intervalStart: Int64?
         public var ts: Int64
@@ -634,6 +836,8 @@ public final class UsageStore {
         public var lastTs: Int64?
         public var models: [ModelRow] = []
         public var observationIntervals: [ObservationInterval] = []
+        public var activity: [ActivityEvent] = []
+        public var activitySummary: [ActivitySummaryRow] = []
     }
 
     public func sessionDetail(tool: String, sessionID: String) throws -> SessionDetail {
@@ -659,6 +863,8 @@ public final class UsageStore {
             ObservationInterval(intervalStart: $0.intOrNil("interval_start"),
                                 ts: $0.int("ts"), tokens: $0.int("tokens"))
         }
+        detail.activity = try activityTimeline(agent: tool, sessionID: sessionID, limit: 500)
+        detail.activitySummary = try activitySummary(agent: tool, group: "tool", sessionID: sessionID)
         return detail
     }
 
@@ -671,6 +877,9 @@ public final class UsageStore {
         public var model: String
         public var title: String?
         public var stats: ToolStats
+        public var activityExact: Int64 = 0
+        public var activityDerived: Int64 = 0
+        public var skills: Int64 = 0
     }
 
     public func sessions(rangeKey: String = "all", tool: String? = nil,
@@ -690,12 +899,33 @@ public final class UsageStore {
         }
         sql += " ORDER BY s.ts DESC LIMIT ?"
         args.append(limit)
-        return try conn.query(sql, args).map { row in
+        var rows = try conn.query(sql, args).map { row in
             SessionRow(tool: row.string("tool"), sessionID: row.string("session_id"),
                        project: row.string("project"), lastSeen: row.stringOrNil("last_seen"),
                        ts: row.intOrNil("ts"), model: row.string("model"),
                        title: row.stringOrNil("title"), stats: ToolStats(row: row))
         }
+        let bounds = rangeBounds(rangeKey)
+        let rangeClause = rangeKey == "all" ? "1=1" :
+            "COALESCE(started_at,ended_at,0)>=\(bounds.0) AND COALESCE(started_at,ended_at,0)<\(bounds.1)"
+        let counts = try conn.query("""
+            SELECT agent,session_id,
+              SUM(CASE WHEN confidence='exact' THEN 1 ELSE 0 END) AS activity_exact,
+              SUM(CASE WHEN confidence='derived' THEN 1 ELSE 0 END) AS activity_derived,
+              COUNT(DISTINCT CASE WHEN skill_name!='' THEN skill_name END) AS skills
+            FROM agent_activity_events WHERE \(rangeClause) GROUP BY agent,session_id
+            """)
+        let byKey = Dictionary(uniqueKeysWithValues: counts.map {
+            ("\($0.string("agent"))\u{0}\($0.string("session_id"))", $0)
+        })
+        for index in rows.indices {
+            if let count = byKey["\(rows[index].tool)\u{0}\(rows[index].sessionID)"] {
+                rows[index].activityExact = count.int("activity_exact")
+                rows[index].activityDerived = count.int("activity_derived")
+                rows[index].skills = count.int("skills")
+            }
+        }
+        return rows
     }
 }
 

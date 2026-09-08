@@ -95,6 +95,31 @@ struct SessionDetailView: View {
                 }
                 ResumeSection(session: session, state: state)
                 if let detail {
+                    if !detail.activitySummary.isEmpty {
+                        DetailCard(title: "工具与 Skill 摘要") {
+                            ForEach(Array(detail.activitySummary.enumerated()), id: \.offset) { index, row in
+                                if index > 0 { Divider() }
+                                HStack(spacing: 8) {
+                                    Text(row.name)
+                                        .font(.callout)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(row.calls) 次")
+                                        .font(.callout.monospacedDigit())
+                                    if row.derived > 0 {
+                                        Text("推断 \(row.derived)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    } else {
+                                        Text("已确认")
+                                            .font(.caption2)
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
                     DetailCard(title: "按模型分解") {
                         ForEach(Array(detail.models.enumerated()), id: \.element.model) { i, model in
                             if i > 0 { Divider() }   // 只加在行间，末行下面不留悬空线
@@ -130,6 +155,33 @@ struct SessionDetailView: View {
                             }
                         }
                     }
+                    if !detail.activity.isEmpty {
+                        DetailCard(title: "最近 Tool / Skill 活动") {
+                            ForEach(Array(detail.activity.prefix(40).enumerated()), id: \.offset) { index, event in
+                                if index > 0 { Divider() }
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(toolColor(event.agent))
+                                        .frame(width: 7, height: 7)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(event.skillName.isEmpty
+                                             ? event.rawName : "Skill · \(event.skillName)")
+                                            .font(.callout)
+                                            .lineLimit(1)
+                                        Text("\(activityStatus(event.status)) · "
+                                             + UIFormat.dateTime(ms: event.startedAt ?? event.endedAt))
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    Spacer()
+                                    Text(event.confidence == "exact" ? "已确认" : "推断")
+                                        .font(.caption2)
+                                        .foregroundStyle(event.confidence == "exact" ? Color.green : Color.orange)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
                 } else {
                     ProgressView().controlSize(.small)
                         .frame(maxWidth: .infinity)
@@ -138,6 +190,11 @@ struct SessionDetailView: View {
             }
             .padding(14)
         }
+    }
+
+    private func activityStatus(_ status: String) -> String {
+        ["success": "成功", "error": "错误", "denied": "拒绝", "unknown": "未知"][status]
+            ?? status
     }
 }
 

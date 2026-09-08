@@ -30,30 +30,52 @@ public struct ClaudeScanner: ScannerAdapter {
     /// 解析一行 → (added, 标题候选)。标题 = 首个真实用户消息。
     private func scanLine(_ obj: [String: Any], fallbackKey: String, sessionID: String,
                           slug: String, mtimeMs: Int64, prices: PriceTable,
-                          store: UsageStore) throws -> (Int, String?) {
+                          store: UsageStore) throws -> (Int, Int, Int, String?) {
         let title = userText(obj)
         let msg = obj["message"] as? [String: Any] ?? [:]
+        let ts = ms(fromTS: obj["timestamp"] as? String, fallback: mtimeMs)
+        var activityAdded = 0, activityUpdated = 0
+        for (index, value) in (msg["content"] as? [Any] ?? []).enumerated() {
+            guard let part = value as? [String: Any] else { continue }
+            if part["type"] as? String == "tool_use", let rawName = part["name"] as? String {
+                let callID = part["id"] as? String ?? ""
+                let key = "\(sessionID)|tool|\(callID.isEmpty ? "\(fallbackKey)|\(index)" : callID)"
+                let change = try store.recordActivity(
+                    agent: name, srcKey: key, rawName: rawName, sessionID: sessionID,
+                    callID: callID, startedAt: ts, sourceKind: "claude_jsonl",
+                    arguments: part["input"])
+                activityAdded += change.added; activityUpdated += change.updated
+            } else if part["type"] as? String == "tool_result" {
+                var status = (part["is_error"] as? Bool) == true ? "error" : ActivityNormalizer.status(part["status"])
+                if status == "unknown" { status = "success" }
+                activityUpdated += try store.completeActivity(
+                    agent: name, callID: jsonOrString(part["tool_use_id"], part["toolUseId"]),
+                    status: status, endedAt: ts)
+            }
+        }
         var usage = msg["usage"] as? [String: Any]
         if usage == nil { usage = obj["usage"] as? [String: Any] }
-        guard let usage else { return (0, title.isEmpty ? nil : title) }
+        guard let usage else { return (0, activityAdded, activityUpdated, title.isEmpty ? nil : title) }
         let inp = jsonInt(usage["input_tokens"])
         let outp = jsonInt(usage["output_tokens"])
         let cr = jsonInt(usage["cache_read_input_tokens"])
         let cw = jsonInt(usage["cache_creation_input_tokens"])
-        if inp + outp + cr + cw == 0 { return (0, title.isEmpty ? nil : title) }
+        if inp + outp + cr + cw == 0 {
+            return (0, activityAdded, activityUpdated, title.isEmpty ? nil : title)
+        }
         let model = jsonOrString(msg["model"], obj["model"])
         let key = (msg["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "\(sessionID)|\(fallbackKey)"
-        let ts = ms(fromTS: obj["timestamp"] as? String, fallback: mtimeMs)
         let cost = prices.cost(for: model, input: inp, output: outp, cacheRead: cr, cacheWrite: cw)
         let added = try store.putEvent(tool: name, srcKey: "\(sessionID)|\(key)",
                                        sessionID: sessionID, project: slug, ts: ts,
                                        model: model, input: inp, output: outp,
                                        cacheRead: cr, cacheWrite: cw, cost: cost)
-        return (added, title.isEmpty ? nil : title)
+        return (added, activityAdded, activityUpdated, title.isEmpty ? nil : title)
     }
 
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
         var cursor = try store.getScanCursor(tool: name)
+        let effectiveFull = full || activityNeedsBackfill(cursor)
         var outcome = ScanOutcome()
         guard let enumerator = FileManager.default.enumerator(atPath: root) else { return outcome }
         // 收集 (dirpath, filename)；os.walk 跨目录顺序无关（结果集按 src_key 落库后排序导出），
@@ -75,14 +97,14 @@ public struct ClaudeScanner: ScannerAdapter {
                 ? ((dirpath as NSString).deletingLastPathComponent as NSString).lastPathComponent
                 : (dirBase.isEmpty ? dirpath : dirBase)
             let path = (dirpath as NSString).appendingPathComponent(fileName)
-            if !full && !fingerprintChanged(cursor: cursor, path: path) { continue }
+            if !effectiveFull && !fingerprintChanged(cursor: cursor, path: path) { continue }
             guard let statKey = StatKey(path: path) else { continue }
             outcome.files += 1
 
             let sessionID = String(fileName.dropLast(".jsonl".count))
             var title: String?
             let mtimeMs = statKey.m / 1_000_000
-            let prevOffset: Int64 = full ? 0 : ((cursor[path] as? [String: Any])
+            let prevOffset: Int64 = effectiveFull ? 0 : ((cursor[path] as? [String: Any])
                 .flatMap { ($0["o"] as? NSNumber)?.int64Value } ?? 0)
             var newOffset: Int64 = 0
             var delta: [(Int64, [String: Any])]?
@@ -98,20 +120,22 @@ public struct ClaudeScanner: ScannerAdapter {
             if delta == nil {
                 // 全量解析：行号兜底键，与历史数据幂等
                 for (lineno, obj) in iterJSONL(path) {
-                    let (a, t) = try scanLine(obj, fallbackKey: String(lineno),
+                    let (a, aa, au, t) = try scanLine(obj, fallbackKey: String(lineno),
                                               sessionID: sessionID, slug: slug,
                                               mtimeMs: mtimeMs, prices: prices, store: store)
                     outcome.added += a
+                    outcome.activityAdded += aa; outcome.activityUpdated += au
                     if let t, title == nil { title = t }
                 }
                 newOffset = statKey.s
             } else if let delta {
                 // 增量解析：字节偏移兜底键（仅追加文件中稳定）
                 for (lineOffset, obj) in delta {
-                    let (a, t) = try scanLine(obj, fallbackKey: "b\(lineOffset)",
+                    let (a, aa, au, t) = try scanLine(obj, fallbackKey: "b\(lineOffset)",
                                               sessionID: sessionID, slug: slug,
                                               mtimeMs: mtimeMs, prices: prices, store: store)
                     outcome.added += a
+                    outcome.activityAdded += aa; outcome.activityUpdated += au
                     if let t, title == nil { title = t }
                 }
             }
@@ -122,6 +146,7 @@ public struct ClaudeScanner: ScannerAdapter {
                 try store.setSessionTitle(tool: self.name, sessionID: sessionID, title: title)
             }
         }
+        markActivityCurrent(&cursor)
         try store.setScanCursor(tool: name, cursor: cursor)
         return outcome
     }

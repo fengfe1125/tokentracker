@@ -35,6 +35,7 @@ public struct PiScanner: ScannerAdapter {
 
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
         var cursor = try store.getScanCursor(tool: name)
+        let effectiveFull = full || activityNeedsBackfill(cursor)
         var outcome = ScanOutcome()
         for base in roots {
             var files: [String] = []
@@ -45,14 +46,14 @@ public struct PiScanner: ScannerAdapter {
             }
             files.sort()
             for path in files {
-                if !full && !fingerprintChanged(cursor: cursor, path: path) { continue }
+                if !effectiveFull && !fingerprintChanged(cursor: cursor, path: path) { continue }
                 guard let statKey = StatKey(path: path) else { continue }
                 outcome.files += 1
                 var sessionID = ""
                 var project = ((path as NSString).deletingLastPathComponent as NSString)
                     .lastPathComponent
                 var title: String?
-                for (_, obj) in iterJSONL(path) {
+                for (lineno, obj) in iterJSONL(path) {
                     if title == nil {
                         let text = userText(obj)
                         if !text.isEmpty { title = text }
@@ -65,15 +66,37 @@ public struct PiScanner: ScannerAdapter {
                         continue
                     }
                     guard type == "message",
-                          let msg = obj["message"] as? [String: Any],
-                          let usage = msg["usage"] as? [String: Any] else { continue }
+                          let msg = obj["message"] as? [String: Any] else { continue }
+                    let ts = parseTS(jsonOrAny(msg["timestamp"], obj["timestamp"]))
+                    for (index, value) in (msg["content"] as? [Any] ?? []).enumerated() {
+                        guard let part = value as? [String: Any],
+                              let partType = part["type"] as? String else { continue }
+                        if partType == "toolCall", let rawName = part["name"] as? String {
+                            let callID = jsonOrString(part["id"], part["toolCallId"])
+                            let fallback = "\(obj["id"].map(String.init(describing:)) ?? String(lineno))|\(index)"
+                            let change = try store.recordActivity(
+                                agent: name, srcKey: "\(realPath(path))|tool|\(callID.isEmpty ? fallback : callID)",
+                                rawName: rawName, sessionID: sessionID, callID: callID,
+                                startedAt: ts == 0 ? nil : ts, sourceKind: "pi_jsonl",
+                                arguments: jsonOrAny(part["arguments"], part["input"]))
+                            outcome.activityAdded += change.added
+                            outcome.activityUpdated += change.updated
+                        } else if partType == "toolResult" {
+                            var status = (part["isError"] as? Bool) == true
+                                ? "error" : ActivityNormalizer.status(part["status"])
+                            if status == "unknown" { status = "success" }
+                            outcome.activityUpdated += try store.completeActivity(
+                                agent: name, callID: jsonOrString(part["toolCallId"], part["id"]),
+                                status: status, endedAt: ts == 0 ? nil : ts)
+                        }
+                    }
+                    guard let usage = msg["usage"] as? [String: Any] else { continue }
                     let inp = jsonInt(usage["input"])
                     let outp = jsonInt(usage["output"])
                     let cr = jsonInt(usage["cacheRead"])
                     let cw = jsonInt(usage["cacheWrite"])
                     if inp + outp + cr + cw == 0 { continue }
                     let model = jsonOrString(msg["model"], obj["modelId"])
-                    let ts = parseTS(jsonOrAny(msg["timestamp"], obj["timestamp"]))
                     let basename = (path as NSString).lastPathComponent
                     let eventID = (obj["id"] as? NSNumber)?.stringValue
                         ?? (obj["id"] as? String) ?? "None"
@@ -96,6 +119,7 @@ public struct PiScanner: ScannerAdapter {
                 }
             }
         }
+        markActivityCurrent(&cursor)
         try store.setScanCursor(tool: name, cursor: cursor)
         return outcome
     }
