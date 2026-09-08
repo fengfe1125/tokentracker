@@ -128,6 +128,11 @@ def export() -> dict:
                 event["src_key"] = "|".join(parts)
         for event in activities:
             event["src_key"] = canonical_corpus_path(event["src_key"])
+        events.sort(key=lambda event: (event["tool"], event["src_key"]))
+        activities.sort(key=lambda event: (event["agent"], event["src_key"]))
+        snapshots.sort(key=lambda snapshot: (
+            snapshot["tool"], snapshot["source_scope"], snapshot["identity"]
+        ))
     finally:
         conn.close()
         tmp.cleanup()
