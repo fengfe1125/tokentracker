@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
+    private var detailWindow: SessionDetailWindowController?
     private var tickTimer: Timer?
     private var wasScanning = false
 
@@ -36,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dbg("statusItem installed")
 
         mainWindow = MainWindowController(appState: appState)
+        let detail = SessionDetailWindowController(appState: appState)
+        appState.onSessionDetail = { explicit in explicit ? detail.show() : detail.autoShow() }
+        detailWindow = detail
         appState.start()
         dbg("appState started")
 

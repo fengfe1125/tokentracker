@@ -13,6 +13,12 @@ public struct UpdateInfo: Equatable, Sendable {
     public var url: String
     public var checkedAt: Double
 
+    public init(latest: String, url: String, checkedAt: Double) {
+        self.latest = latest
+        self.url = url
+        self.checkedAt = checkedAt
+    }
+
     enum CodingKeys: String, CodingKey {
         case latest, url
         case checkedAt = "checked_at"

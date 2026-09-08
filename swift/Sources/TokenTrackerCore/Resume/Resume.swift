@@ -122,6 +122,19 @@ public struct Resume {
         return nil
     }
 
+    /// claude 的会话记录文件在不在（~/.claude/projects/<slug>/<id>.jsonl）。
+    /// `claude --resume` 读的就是它，文件不在必然恢复失败——库里的子代理伪会话
+    /// （project=subagents、id 形如 agent-xxx）和已清理的会话都属于这种。
+    /// 根目录本身读不到时返回 nil（CLAUDE_CONFIG_DIR 换过位置，不下判断）。
+    public func claudeSessionMissing(_ sessionID: String) -> Bool? {
+        let root = claudeRoot ?? home + "/.claude/projects"
+        guard let projects = try? FileManager.default.contentsOfDirectory(atPath: root)
+        else { return nil }
+        return !projects.contains {
+            FileManager.default.fileExists(atPath: "\(root)/\($0)/\(sessionID).jsonl")
+        }
+    }
+
     /// 恢复会话前 cd 的目录；解析不到或目录已不存在 → nil。
     public func resolveCwd(_ tool: String, _ sessionID: String, _ project: String = "") -> String? {
         var candidates: [String] = []
@@ -169,7 +182,8 @@ public struct Resume {
         return (cmd, nil)
     }
 
-    public struct ResumeInfo: Equatable {
+    /// Sendable：UI 把 info() 丢到后台线程算（解析 jsonl + 查 CLI 不能占主线程）
+    public struct ResumeInfo: Equatable, Sendable {
         public var ok: Bool
         public var reason: String
         public var command: String
@@ -187,6 +201,13 @@ public struct Resume {
         guard let cmd else {
             return ResumeInfo(ok: false, reason: reason ?? "", command: "", cwd: "",
                               cwdMissing: false)
+        }
+        // CLI 存在但会话记录已经没了 → 与其给一个必定失败的按钮，不如直说
+        if tool == "claude", claudeSessionMissing(sessionID) == true {
+            return ResumeInfo(ok: false,
+                              reason: "找不到这个会话的记录文件，claude --resume 无法恢复"
+                                  + "（子代理会话、以及已被清理的会话都会这样）",
+                              command: "", cwd: "", cwdMissing: false)
         }
         let cwd = resolveCwd(tool, sessionID, project)
         return ResumeInfo(ok: true, reason: "", command: cmd,

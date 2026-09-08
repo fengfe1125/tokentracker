@@ -126,6 +126,31 @@ final class ResumeInfoPortTests: XCTestCase {
         XCTAssertTrue(payload.ok)
         XCTAssertTrue(payload.cwdMissing)
     }
+
+    /// test_claude_without_jsonl_is_not_resumable
+    /// 子代理伪会话 / 已清理会话：claude --resume 必然失败，不给按钮。
+    func testClaudeWithoutJSONLIsNotResumable() throws {
+        let root = try TempDir()
+        try FileManager.default.createDirectory(atPath: root.path("-Users-x-proj"),
+                                                withIntermediateDirectories: true)
+        let resume = Resume(cliResolver: { _ in "/usr/bin/x" }, claudeRoot: root.url.path)
+        var payload = resume.info("claude", "agent-abc", "subagents")
+        XCTAssertFalse(payload.ok)
+        XCTAssertTrue(payload.reason.contains("记录文件"))
+
+        // 记录文件在 → 照常可恢复
+        writeJSONL(root.path("-Users-x-proj", "sid-1.jsonl"), [["cwd": root.url.path]])
+        payload = resume.info("claude", "sid-1", "-Users-x-proj")
+        XCTAssertTrue(payload.ok)
+    }
+
+    /// test_claude_root_absent_does_not_gate
+    func testClaudeRootAbsentDoesNotGate() {
+        let resume = Resume(cliResolver: { _ in "/usr/bin/x" },
+                            claudeRoot: "/nonexistent-root-xyz")
+        XCTAssertNil(resume.claudeSessionMissing("abc"))
+        XCTAssertTrue(resume.info("claude", "abc", "").ok)
+    }
 }
 
 final class ResumeTerminalPortTests: XCTestCase {

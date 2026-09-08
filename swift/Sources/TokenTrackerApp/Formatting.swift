@@ -29,6 +29,13 @@ enum UIFormat {
         return fmt.string(from: date)
     }
 
+    /// 本地今日 "yyyy-MM-dd"（会话表里当天的行省略日期，只留时刻）
+    static var todayString: String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        return fmt.string(from: Date())
+    }
+
     static func percent(_ v: Double?) -> String {
         v.map { String(format: "%.1f%%", $0) } ?? "—"
     }

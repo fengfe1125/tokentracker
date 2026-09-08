@@ -36,6 +36,8 @@ final class AppState: ObservableObject {
     @Published var modelRows: [UsageStore.ModelRow] = []
     @Published var sessionRows: [UsageStore.SessionRow] = []
     @Published var sessionSearch = ""
+    /// 表格选中行；详情面板跟着它走，所以放在 AppState 而不是视图 @State
+    @Published var selectedSessionID: String?
     @Published var detectInfo: [String: DetectInfo] = [:]
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
@@ -43,6 +45,9 @@ final class AppState: ObservableObject {
 
     // 设置（effective = 默认值 + 校验后的已存值）
     @Published var settings: [String: Any] = [:]
+
+    /// 会话列表查询上限（顶栏计数要据此区分「共 N 个」和「最近 N 个」）
+    nonisolated static let sessionLimit = 300
 
     let readStore: UsageStore
     let settingsStore: SettingsStore
@@ -59,6 +64,13 @@ final class AppState: ObservableObject {
 
     /// 数值刷新闪光（状态栏动画）；由 StatusItemController 消费。
     var onTokensChanged: (() -> Void)?
+    /// 会话详情面板（AppDelegate 注入；参数 true = 用户显式打开）
+    var onSessionDetail: ((Bool) -> Void)?
+
+    /// 单击选中：面板已开才跟着更新，用户关过就不再自动弹
+    func autoShowSessionDetail() { onSessionDetail?(false) }
+    /// 双击 / ⌘I / 右键「查看详情」：无条件打开
+    func showSessionDetail() { onSessionDetail?(true) }
 
     init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService()) {
         let env = ProcessInfo.processInfo.environment
@@ -178,6 +190,7 @@ final class AppState: ObservableObject {
                 let daily = try store.daily(rangeKey: range)
                 let models = try store.models(rangeKey: range)
                 let sessions = try store.sessions(rangeKey: range, tool: toolFilter,
+                                                  limit: Self.sessionLimit,
                                                   query: search.isEmpty ? nil : search)
                 let dayStats = try store.stats(rangeKey: "day")
                 let quotasConfig = QuotasConfig.load(
@@ -234,7 +247,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    func sessionDetail(tool: String, sessionID: String) -> UsageStore.SessionDetail? {
-        try? readStore.sessionDetail(tool: tool, sessionID: sessionID)
+    /// 会话详情走查询队列：选中一行不应该在主线程读库（大库时会顿）。
+    func sessionDetail(tool: String, sessionID: String) async -> UsageStore.SessionDetail? {
+        let store = readStore
+        return await withCheckedContinuation { cont in
+            queryQueue.async {
+                cont.resume(returning: try? store.sessionDetail(tool: tool, sessionID: sessionID))
+            }
+        }
     }
 }

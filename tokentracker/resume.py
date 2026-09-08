@@ -73,6 +73,22 @@ def _claude_cwd_from_jsonl(session_id: str, root: str | None = None) -> str | No
     return None
 
 
+def claude_session_missing(session_id: str, root: str | None = None) -> bool | None:
+    """claude 的会话记录文件在不在（~/.claude/projects/<slug>/<id>.jsonl）。
+    `claude --resume` 读的就是它，文件不在必然恢复失败——库里的子代理伪会话
+    （project=subagents、id 形如 agent-xxx）和已清理的会话都属于这种。
+    根目录本身读不到时返回 None（CLAUDE_CONFIG_DIR 换过位置，不下判断）。"""
+    root = root or os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    try:
+        projects = os.listdir(root)
+    except OSError:
+        return None
+    return not any(
+        os.path.isfile(os.path.join(root, proj, session_id + ".jsonl"))
+        for proj in projects
+    )
+
+
 def resolve_cwd(tool: str, session_id: str, project: str = "",
                 claude_root: str | None = None) -> str | None:
     """恢复会话前 cd 的目录；解析不到或目录已不存在 → None。"""
@@ -114,16 +130,23 @@ def shell_line(tool: str, session_id: str, project: str = "",
     return cmd, None
 
 
-def info(tool: str, session_id: str, project: str = "") -> dict:
+def info(tool: str, session_id: str, project: str = "",
+         claude_root: str | None = None) -> dict:
     """前端按钮可用性 + 展示用命令。ok=False 时 reason 为人类可读原因。"""
     argv = resume_argv(tool, session_id or "")
     if argv is None:
         reason = "缺少会话 ID" if tool in RESUME_PREFIX else "该工具不支持恢复会话"
         return {"ok": False, "reason": reason, "command": "", "cwd": "", "cwd_missing": False}
-    cmd, reason = shell_line(tool, session_id, project or "")
+    cmd, reason = shell_line(tool, session_id, project or "", claude_root=claude_root)
     if cmd is None:
         return {"ok": False, "reason": reason, "command": "", "cwd": "", "cwd_missing": False}
-    cwd = resolve_cwd(tool, session_id, project or "")
+    # CLI 存在但会话记录已经没了 → 与其给一个必定失败的按钮，不如直说
+    if tool == "claude" and claude_session_missing(session_id, claude_root) is True:
+        return {"ok": False,
+                "reason": "找不到这个会话的记录文件，claude --resume 无法恢复"
+                          "（子代理会话、以及已被清理的会话都会这样）",
+                "command": "", "cwd": "", "cwd_missing": False}
+    cwd = resolve_cwd(tool, session_id, project or "", claude_root)
     return {"ok": True, "reason": "", "command": cmd,
             "cwd": cwd or "", "cwd_missing": cwd is None}
 

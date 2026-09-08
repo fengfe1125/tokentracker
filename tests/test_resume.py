@@ -99,6 +99,29 @@ class InfoTest(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertTrue(payload["cwd_missing"])
 
+    def test_claude_without_jsonl_is_not_resumable(self):
+        """子代理伪会话 / 已清理会话：claude --resume 必然失败，不给按钮。"""
+        with patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"), \
+                tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "-Users-x-proj"))
+            payload = resume.info("claude", "agent-abc", "subagents", claude_root=root)
+            self.assertFalse(payload["ok"])
+            self.assertIn("记录文件", payload["reason"])
+
+            # 记录文件在 → 照常可恢复
+            with open(os.path.join(root, "-Users-x-proj", "sid-1.jsonl"), "w") as f:
+                f.write(json.dumps({"cwd": root}) + "\n")
+            payload = resume.info("claude", "sid-1", "-Users-x-proj", claude_root=root)
+            self.assertTrue(payload["ok"])
+
+    def test_claude_root_absent_does_not_gate(self):
+        """CLAUDE_CONFIG_DIR 换过位置 / 根目录读不到时不下判断，保持可恢复。"""
+        with patch.object(resume.clifind, "resolve", return_value="/usr/bin/x"):
+            self.assertIsNone(
+                resume.claude_session_missing("abc", "/nonexistent-root-xyz"))
+            payload = resume.info("claude", "abc", "", claude_root="/nonexistent-root-xyz")
+            self.assertTrue(payload["ok"])
+
 
 class TerminalTest(unittest.TestCase):
     def test_pick_terminal_fallback(self):

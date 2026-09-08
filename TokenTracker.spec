@@ -1,4 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+# 版本号单一来源：tokentracker/__init__.py（同 Swift 版的 TokenTrackerCore.version）
+import re, pathlib
+_VERSION = re.search(r'__version__ = "([^"]+)"',
+                     pathlib.Path('tokentracker/__init__.py').read_text()).group(1)
 
 
 a = Analysis(
@@ -58,6 +62,7 @@ app = BUNDLE(
         # 状态栏常驻应用：默认不出现在 Dock（主面板打开时动态切回 Regular）
         'LSUIElement': True,
         'CFBundleName': 'TokenTracker',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleShortVersionString': _VERSION,
+        'CFBundleVersion': _VERSION,
     },
 )

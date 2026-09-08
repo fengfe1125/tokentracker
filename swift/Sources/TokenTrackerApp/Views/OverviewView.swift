@@ -19,15 +19,35 @@ struct OverviewView: View {
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                statCards
-                chartCard
-                quotaSection
-                modelSection
+        VStack(spacing: 0) {
+            PanelHeader(title: "用量概览", subtitle: updatedText) {
+                Picker("时间范围", selection: $state.range) {
+                    Text("今天").tag("day")
+                    Text("本周").tag("week")
+                    Text("本月").tag("month")
+                    Text("全部").tag("all")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 260)
+                Button {
+                    state.requestScan()
+                } label: {
+                    Label(state.scanning ? "扫描中…" : "扫描",
+                          systemImage: state.scanning
+                              ? "arrow.triangle.2.circlepath" : "magnifyingglass")
+                }
+                .disabled(state.scanning)
             }
-            .padding(24)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    statCards
+                    chartCard
+                    quotaSection
+                    modelSection
+                }
+                .padding(24)
+            }
         }
         .navigationTitle("用量概览")
         .onAppear { applyAutoScale() }
@@ -36,31 +56,9 @@ struct OverviewView: View {
         }
     }
 
-    // ------------------------------------------------------------ 头部 ----
-
-    private var header: some View {
-        HStack(alignment: .center) {
-            Picker("时间范围", selection: $state.range) {
-                Text("今天").tag("day")
-                Text("本周").tag("week")
-                Text("本月").tag("month")
-                Text("全部").tag("all")
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 320)
-            Spacer()
-            if let updatedAt = state.updatedAt {
-                Text("更新于 \(UIFormat.dateTime(ms: Int64(updatedAt.timeIntervalSince1970 * 1000)))")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            Button {
-                state.requestScan()
-            } label: {
-                Label(state.scanning ? "扫描中…" : "扫描日志",
-                      systemImage: state.scanning ? "arrow.triangle.2.circlepath" : "magnifyingglass")
-            }
-            .disabled(state.scanning)
+    private var updatedText: String? {
+        state.updatedAt.map {
+            "更新于 " + UIFormat.dateTime(ms: Int64($0.timeIntervalSince1970 * 1000))
         }
     }
 
@@ -139,7 +137,7 @@ struct OverviewView: View {
             }
             if chartPoints.isEmpty {
                 ContentUnavailableView("暂无数据", systemImage: "chart.bar",
-                                       description: Text("点右上角「扫描日志」"))
+                                       description: Text("点右上角「扫描」"))
                     .frame(height: 240)
             } else {
                 Chart(chartPoints) { point in
