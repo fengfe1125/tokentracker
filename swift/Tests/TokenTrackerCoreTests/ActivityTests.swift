@@ -61,6 +61,24 @@ final class ActivityTests: XCTestCase {
             agent: "claude", group: "tool").first?.name, "Bash")
     }
 
+    func testMatrixSummaryMatchesPerAgentCanonicalSummaries() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        _ = try store.recordActivity(agent: "claude", srcKey: "one", rawName: "Bash")
+        _ = try store.recordActivity(agent: "claude", srcKey: "alias", rawName: "shell")
+        _ = try store.recordActivity(agent: "codex", srcKey: "two", rawName: "shell")
+        _ = try store.recordActivity(agent: "codex", srcKey: "three", rawName: "apply_patch",
+                                     confidence: "derived")
+
+        let matrix = try store.activityMatrixSummary(confidence: "all")
+        XCTAssertEqual(matrix["claude"]?.map(\.name), ["shell"])
+        XCTAssertEqual(matrix["claude"]?.map(\.calls), [2])
+        XCTAssertEqual(matrix["codex"]?.map(\.name), ["file.edit", "shell"])
+        XCTAssertEqual(matrix["codex"]?.map(\.calls), [1, 1])
+        XCTAssertEqual(try store.activityMatrixSummary(confidence: "exact")["codex"]?.map(\.name),
+                       ["shell"])
+    }
+
     func testNormalizationAndConservativeCodexInference() {
         XCTAssertEqual(ActivityNormalizer.canonicalToolName("apply_patch"), "file.edit")
         XCTAssertEqual(ActivityNormalizer.canonicalToolName("mcp__server__lookup"), "mcp.server.lookup")

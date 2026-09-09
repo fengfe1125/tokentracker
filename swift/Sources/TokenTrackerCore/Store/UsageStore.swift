@@ -806,6 +806,36 @@ public final class UsageStore {
             }
     }
 
+    /// Agent × canonical tool 矩阵的一次性聚合，替代逐 Agent 重复查询。
+    public func activityMatrixSummary(rangeKey: String = "all", confidence: String = "all") throws
+        -> [String: [ActivitySummaryRow]] {
+        let (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: nil,
+            confidence: confidence, sessionID: nil, skill: false)
+        let rows = try conn.query("""
+            SELECT agent,canonical_name AS name,COUNT(*) AS calls,
+              COUNT(DISTINCT session_id) AS sessions,
+              SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
+              SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
+              SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown,
+              SUM(CASE WHEN confidence='exact' THEN 1 ELSE 0 END) AS exact,
+              SUM(CASE WHEN confidence='derived' THEN 1 ELSE 0 END) AS derived,
+              MAX(COALESCE(ended_at,started_at,0)) AS last_used
+            FROM agent_activity_events WHERE \(whereSQL)
+            GROUP BY agent,canonical_name ORDER BY agent,calls DESC,name
+            """, args)
+        var matrix: [String: [ActivitySummaryRow]] = [:]
+        for row in rows {
+            matrix[row.string("agent"), default: []].append(ActivitySummaryRow(
+                name: row.string("name"), calls: row.int("calls"),
+                sessions: row.int("sessions"), success: row.int("success"),
+                errors: row.int("error"), denied: row.int("denied"),
+                unknown: row.int("unknown"), exact: row.int("exact"),
+                derived: row.int("derived"), lastUsed: row.int("last_used")))
+        }
+        return matrix
+    }
+
     public func activityTimeline(rangeKey: String = "all", agent: String? = nil, sessionID: String? = nil,
                                  confidence: String = "all", limit: Int = 200,
                                  before: Int64? = nil) throws -> [ActivityEvent] {

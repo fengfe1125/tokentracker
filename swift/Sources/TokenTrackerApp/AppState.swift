@@ -38,16 +38,7 @@ final class AppState: ObservableObject {
     @Published var sessionSearch = ""
     /// 表格选中行；详情面板跟着它走，所以放在 AppState 而不是视图 @State
     @Published var selectedSessionID: String?
-    @Published var activityRange = "week"
-    @Published var activityAgent: String?
-    @Published var activityConfidence = "exact"
-    @Published var activityExactRows: [UsageStore.ActivitySummaryRow] = []
-    @Published var activityDerivedRows: [UsageStore.ActivitySummaryRow] = []
-    @Published var activityToolRows: [UsageStore.ActivitySummaryRow] = []
-    @Published var activitySkillRows: [UsageStore.ActivitySummaryRow] = []
-    @Published var activityExactSkillRows: [UsageStore.ActivitySummaryRow] = []
-    @Published var activityTimelineRows: [ActivityEvent] = []
-    @Published var activityMatrixRows: [String: [UsageStore.ActivitySummaryRow]] = [:]
+    let activityPage = ActivityPageState()
     @Published var detectInfo: [String: DetectInfo] = [:]
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
@@ -134,7 +125,10 @@ final class AppState: ObservableObject {
             },
             interval: Double(scanIntervalSeconds))
         scheduler.onFinish = { [weak self] in
-            DispatchQueue.main.async { self?.refreshVisibleData() }
+            DispatchQueue.main.async {
+                self?.pollScanStatus()
+                self?.refreshVisibleData()
+            }
         }
         scheduler.startAuto()
 
@@ -169,10 +163,8 @@ final class AppState: ObservableObject {
 
     private func pollScanStatus() {
         let snap = scheduler?.snapshot() ?? ScanSchedulerStatus()
-        let wasScanning = scanning
-        scanning = snap.running
-        lastScan = snap.last
-        if wasScanning && !scanning { refreshVisibleData() }  // 扫描刚结束立即刷新
+        if scanning != snap.running { scanning = snap.running }
+        if lastScan != snap.last { lastScan = snap.last }
     }
 
     private func reloadSettingsIfChanged() {
@@ -281,43 +273,51 @@ final class AppState: ObservableObject {
 
     /// Activity 统计比普通概览查询更重，只在活动页或筛选变化时加载。
     func refreshActivity() {
+        guard let request = activityPage.beginRefresh() else { return }
+        performActivityRefresh(request)
+    }
+
+    private func performActivityRefresh(_ request: ActivityRefreshRequest) {
         let store = readStore
-        let range = activityRange
-        let agent = activityAgent
-        let confidence = activityConfidence
+        let filter = request.filter
+        let scan = lastScan
         queryQueue.async { [weak self] in
             guard let self else { return }
             do {
                 let exact = try store.activitySummary(
-                    rangeKey: range, agent: agent, group: "agent", confidence: "exact")
+                    rangeKey: filter.range, agent: filter.agent, group: "agent", confidence: "exact")
                 let derived = try store.activitySummary(
-                    rangeKey: range, agent: agent, group: "agent", confidence: "derived")
+                    rangeKey: filter.range, agent: filter.agent, group: "agent", confidence: "derived")
                 let tools = try store.activitySummary(
-                    rangeKey: range, agent: agent, group: "tool", confidence: confidence)
+                    rangeKey: filter.range, agent: filter.agent, group: "tool",
+                    confidence: filter.confidence)
                 let skills = try store.activitySummary(
-                    rangeKey: range, agent: agent, group: "skill", confidence: confidence)
+                    rangeKey: filter.range, agent: filter.agent, group: "skill",
+                    confidence: filter.confidence)
                 let exactSkills = try store.activitySummary(
-                    rangeKey: range, agent: agent, group: "skill", confidence: "exact")
+                    rangeKey: filter.range, agent: filter.agent, group: "skill", confidence: "exact")
                 let timeline = try store.activityTimeline(
-                    rangeKey: range, agent: agent, confidence: confidence, limit: 80)
-                var matrix: [String: [UsageStore.ActivitySummaryRow]] = [:]
-                for matrixAgent in ScannerRegistry.all {
-                    matrix[matrixAgent] = try store.activitySummary(
-                        rangeKey: range, agent: matrixAgent,
-                        group: "tool", confidence: confidence)
-                }
+                    rangeKey: filter.range, agent: filter.agent,
+                    confidence: filter.confidence, limit: 80)
+                let matrix = try store.activityMatrixSummary(
+                    rangeKey: filter.range, confidence: filter.confidence)
+                let snapshot = ActivityDashboardSnapshot(
+                    exactRows: exact, derivedRows: derived, toolRows: tools,
+                    skillRows: skills, exactSkillRows: exactSkills,
+                    timelineRows: timeline, matrixRows: matrix, lastScan: scan)
                 DispatchQueue.main.async {
-                    self.activityExactRows = exact
-                    self.activityDerivedRows = derived
-                    self.activityToolRows = tools
-                    self.activitySkillRows = skills
-                    self.activityExactSkillRows = exactSkills
-                    self.activityTimelineRows = timeline
-                    self.activityMatrixRows = matrix
+                    if let next = self.activityPage.finish(request, snapshot: snapshot) {
+                        self.performActivityRefresh(next)
+                    }
                 }
             } catch {
                 FileHandle.standardError.write(Data(
                     "[tt] refreshActivity FAILED: \(error)\n".utf8))
+                DispatchQueue.main.async {
+                    if let next = self.activityPage.finish(request, snapshot: nil) {
+                        self.performActivityRefresh(next)
+                    }
+                }
             }
         }
     }

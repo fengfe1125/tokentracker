@@ -1,17 +1,24 @@
 import SwiftUI
 import TokenTrackerCore
 
-struct ActivityView: View {
-    @ObservedObject var state: AppState
+@MainActor
+struct ActivityView: View, @MainActor Equatable {
+    @ObservedObject var state: ActivityPageState
+    let refresh: () -> Void
 
-    private var exactCalls: Int64 { state.activityExactRows.reduce(0) { $0 + $1.calls } }
-    private var derivedCalls: Int64 { state.activityDerivedRows.reduce(0) { $0 + $1.calls } }
-    private var exactSkillCalls: Int64 { state.activityExactSkillRows.reduce(0) { $0 + $1.calls } }
+    private var snapshot: ActivityDashboardSnapshot { state.snapshot }
+    private var exactCalls: Int64 { snapshot.exactRows.reduce(0) { $0 + $1.calls } }
+    private var derivedCalls: Int64 { snapshot.derivedRows.reduce(0) { $0 + $1.calls } }
+    private var exactSkillCalls: Int64 { snapshot.exactSkillRows.reduce(0) { $0 + $1.calls } }
     private var failures: Int64 {
-        state.activityExactRows.reduce(0) { $0 + $1.errors + $1.denied }
+        snapshot.exactRows.reduce(0) { $0 + $1.errors + $1.denied }
     }
-    private var unknownResults: Int64 { state.activityExactRows.reduce(0) { $0 + $1.unknown } }
-    private var piSkillUnknown: Bool { state.activityAgent == "pi" }
+    private var unknownResults: Int64 { snapshot.exactRows.reduce(0) { $0 + $1.unknown } }
+    private var piSkillUnknown: Bool { state.agent == "pi" }
+
+    static func == (lhs: ActivityView, rhs: ActivityView) -> Bool {
+        lhs.state === rhs.state
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,12 +26,12 @@ struct ActivityView: View {
                 filters
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     evidenceNotice
                     metrics
                     HStack(alignment: .top, spacing: 12) {
-                        rankingCard(title: "工具榜", rows: state.activityToolRows, skill: false)
-                        rankingCard(title: "Skill 榜", rows: state.activitySkillRows, skill: true)
+                        rankingCard(title: "工具榜", rows: snapshot.toolRows, skill: false)
+                        rankingCard(title: "Skill 榜", rows: snapshot.skillRows, skill: true)
                     }
                     matrixCard
                     timelineCard
@@ -33,14 +40,14 @@ struct ActivityView: View {
             }
         }
         .navigationTitle("Agent 活动")
-        .onChange(of: state.activityRange) { _, _ in state.refreshActivity() }
-        .onChange(of: state.activityAgent) { _, _ in state.refreshActivity() }
-        .onChange(of: state.activityConfidence) { _, _ in state.refreshActivity() }
+        .onChange(of: state.range) { _, _ in refresh() }
+        .onChange(of: state.agent) { _, _ in refresh() }
+        .onChange(of: state.confidence) { _, _ in refresh() }
     }
 
     private var filters: some View {
         HStack(spacing: 8) {
-            Picker("范围", selection: $state.activityRange) {
+            Picker("范围", selection: $state.range) {
                 Text("今天").tag("day")
                 Text("最近 7 天").tag("week")
                 Text("本月").tag("month")
@@ -48,7 +55,7 @@ struct ActivityView: View {
             }
             .labelsHidden()
             .frame(width: 96)
-            Picker("Agent", selection: $state.activityAgent) {
+            Picker("Agent", selection: $state.agent) {
                 Text("全部 Agent").tag(String?.none)
                 ForEach(ScannerRegistry.all, id: \.self) { agent in
                     Text(toolDisplayName(agent)).tag(Optional(agent))
@@ -56,7 +63,7 @@ struct ActivityView: View {
             }
             .labelsHidden()
             .frame(width: 118)
-            Picker("证据", selection: $state.activityConfidence) {
+            Picker("证据", selection: $state.confidence) {
                 Text("只看已确认").tag("exact")
                 Text("包含推断").tag("all")
                 Text("只看推断").tag("derived")
@@ -77,7 +84,7 @@ struct ActivityView: View {
                 }
             }
             Spacer()
-            if let last = state.lastScan, last.done {
+            if let last = snapshot.lastScan, last.done {
                 Text("最近扫描：Token +\(last.added) · 活动 +\(last.activityAdded) / 补全 \(last.activityUpdated)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -92,10 +99,10 @@ struct ActivityView: View {
 
     private var metrics: some View {
         let values: [(String, String, String, Color)] = [
-            ("已确认工具调用", "\(exactCalls)", "来自 \(state.activityExactRows.count) 个 Agent", .green),
+            ("已确认工具调用", "\(exactCalls)", "来自 \(snapshot.exactRows.count) 个 Agent", .green),
             ("推断调用", "\(derivedCalls)", "不计入确认总数", .orange),
             ("Skill 使用", piSkillUnknown ? "不可判定" : "\(exactSkillCalls)",
-             piSkillUnknown ? "Pi 没有明确 Skill 事件" : "\(state.activityExactSkillRows.count) 个不同 Skill", .primary),
+             piSkillUnknown ? "Pi 没有明确 Skill 事件" : "\(snapshot.exactSkillRows.count) 个不同 Skill", .primary),
             ("错误 / 拒绝", "\(failures)", "\(unknownResults) 次结果未知", .red),
         ]
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
@@ -132,20 +139,9 @@ struct ActivityView: View {
                 ContentUnavailableView("暂无活动", systemImage: "waveform.path.ecg")
                     .frame(minHeight: 190)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.prefix(10).enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.name).font(.callout.weight(.medium)).lineLimit(1)
-                                Text(skill ? "最近 \(relativeTime(row.lastUsed))" : statusText(row))
-                                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                            }
-                            Spacer()
-                            Text("\(row.calls)").font(.callout.monospacedDigit())
-                            Text("\(row.sessions) 会话").font(.caption2).foregroundStyle(.secondary)
-                            EvidencePill(exact: row.exact, derived: row.derived)
-                        }
-                        .padding(.vertical, 7)
+                LazyVStack(spacing: 0) {
+                    ForEach(rows.prefix(10), id: \.name) { row in
+                        ActivityRankingRow(row: row, skill: skill)
                         Divider()
                     }
                 }
@@ -193,7 +189,8 @@ struct ActivityView: View {
                                     Text(count == 0 ? "—" : "\(count)")
                                         .font(.caption.monospacedDigit().weight(count == maximum ? .semibold : .regular))
                                         .frame(width: 78, height: 30)
-                                        .background(heatColor(count: count, maximum: maximum), in: RoundedRectangle(cornerRadius: 7))
+                                        .background(heatColor(count: count, maximum: maximum),
+                                                    in: RoundedRectangle(cornerRadius: 7))
                                 }
                             }
                         }
@@ -213,27 +210,15 @@ struct ActivityView: View {
                 Spacer()
                 Text("按会话关联 Tool / Skill").font(.caption2).foregroundStyle(.tertiary)
             }
-            if state.activityTimelineRows.isEmpty {
+            if snapshot.timelineRows.isEmpty {
                 ContentUnavailableView("暂无活动", systemImage: "clock")
                     .frame(height: 130)
             } else {
-                ForEach(Array(state.activityTimelineRows.prefix(30).enumerated()), id: \.offset) { _, event in
-                    HStack(spacing: 9) {
-                        Text(relativeTime(event.startedAt ?? event.endedAt ?? 0))
-                            .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 66, alignment: .leading)
-                        Circle().fill(toolColor(event.agent)).frame(width: 7, height: 7)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(event.skillName.isEmpty ? event.rawName : "Skill · \(event.skillName)")
-                                .font(.callout.weight(.medium))
-                            Text("\(toolDisplayName(event.agent)) · \(statusLabel(event.status))")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                        Spacer()
-                        EvidencePill(exact: event.confidence == "exact" ? 1 : 0,
-                                     derived: event.confidence == "derived" ? 1 : 0)
+                LazyVStack(spacing: 0) {
+                    ForEach(snapshot.timelineRows.prefix(30), id: \.srcKey) { event in
+                        ActivityTimelineRow(event: event)
+                        Divider()
                     }
-                    .padding(.vertical, 5)
-                    Divider()
                 }
             }
         }
@@ -244,11 +229,8 @@ struct ActivityView: View {
 
     private var canonicalMatrix: [String: [String: Int64]] {
         Dictionary(uniqueKeysWithValues: ScannerRegistry.all.map { agent in
-            var merged: [String: Int64] = [:]
-            for row in state.activityMatrixRows[agent] ?? [] {
-                merged[ActivityNormalizer.canonicalToolName(row.name), default: 0] += row.calls
-            }
-            return (agent, merged)
+            let rows = snapshot.matrixRows[agent] ?? []
+            return (agent, Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0.calls) }))
         })
     }
 
@@ -263,22 +245,48 @@ struct ActivityView: View {
         guard count > 0 else { return Color.secondary.opacity(0.06) }
         return Color.green.opacity(0.10 + 0.58 * Double(count) / Double(maximum))
     }
+}
 
-    private func statusText(_ row: UsageStore.ActivitySummaryRow) -> String {
-        "成功 \(row.success) · 错误 \(row.errors) · 拒绝 \(row.denied) · 未知 \(row.unknown)"
+private struct ActivityRankingRow: View {
+    let row: UsageStore.ActivitySummaryRow
+    let skill: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.name).font(.callout.weight(.medium)).lineLimit(1)
+                Text(skill ? "最近 \(activityRelativeTime(row.lastUsed))" : activityStatusText(row))
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
+            Spacer()
+            Text("\(row.calls)").font(.callout.monospacedDigit())
+            Text("\(row.sessions) 会话").font(.caption2).foregroundStyle(.secondary)
+            EvidencePill(exact: row.exact, derived: row.derived)
+        }
+        .padding(.vertical, 7)
     }
+}
 
-    private func statusLabel(_ status: String) -> String {
-        ["success": "成功", "error": "错误", "denied": "拒绝", "unknown": "未知"][status] ?? status
-    }
+private struct ActivityTimelineRow: View {
+    let event: ActivityEvent
 
-    private func relativeTime(_ ms: Int64) -> String {
-        guard ms > 0 else { return "—" }
-        let seconds = max(0, Int(Date().timeIntervalSince1970 - Double(ms) / 1000))
-        if seconds < 60 { return "刚刚" }
-        if seconds < 3600 { return "\(seconds / 60) 分钟前" }
-        if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
-        return "\(seconds / 86_400) 天前"
+    var body: some View {
+        HStack(spacing: 9) {
+            Text(activityRelativeTime(event.startedAt ?? event.endedAt ?? 0))
+                .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                .frame(width: 66, alignment: .leading)
+            Circle().fill(toolColor(event.agent)).frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.skillName.isEmpty ? event.rawName : "Skill · \(event.skillName)")
+                    .font(.callout.weight(.medium))
+                Text("\(toolDisplayName(event.agent)) · \(activityStatusLabel(event.status))")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            EvidencePill(exact: event.confidence == "exact" ? 1 : 0,
+                         derived: event.confidence == "derived" ? 1 : 0)
+        }
+        .padding(.vertical, 5)
     }
 }
 
@@ -301,4 +309,21 @@ private struct EvidencePill: View {
             .background(color.opacity(0.09), in: Capsule())
             .overlay(Capsule().stroke(color.opacity(0.55), lineWidth: 0.7))
     }
+}
+
+private func activityStatusText(_ row: UsageStore.ActivitySummaryRow) -> String {
+    "成功 \(row.success) · 错误 \(row.errors) · 拒绝 \(row.denied) · 未知 \(row.unknown)"
+}
+
+private func activityStatusLabel(_ status: String) -> String {
+    ["success": "成功", "error": "错误", "denied": "拒绝", "unknown": "未知"][status] ?? status
+}
+
+private func activityRelativeTime(_ ms: Int64) -> String {
+    guard ms > 0 else { return "—" }
+    let seconds = max(0, Int(Date().timeIntervalSince1970 - Double(ms) / 1000))
+    if seconds < 60 { return "刚刚" }
+    if seconds < 3600 { return "\(seconds / 60) 分钟前" }
+    if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
+    return "\(seconds / 86_400) 天前"
 }

@@ -27,5 +27,10 @@ let package = Package(
             dependencies: ["TokenTrackerCore"],
             path: "Tests/TokenTrackerCoreTests"
         ),
+        .testTarget(
+            name: "TokenTrackerAppTests",
+            dependencies: ["TokenTrackerApp", "TokenTrackerCore"],
+            path: "Tests/TokenTrackerAppTests"
+        ),
     ]
 )
