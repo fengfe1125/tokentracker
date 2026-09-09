@@ -80,6 +80,9 @@ final class AppState: ObservableObject {
     private(set) var scheduler: ScanScheduler!
 
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
+    /// 上报独占一条队列：网络最长阻塞 12 秒，不能占着查询队列。
+    private let publishQueue = DispatchQueue(label: "tokentracker.publish")
+    private let publisher = PublicStatsPublisher()
     private var pollTimer: Timer?
     private var refreshTimer: Timer?
     private var settingsFingerprint: String = ""
@@ -135,6 +138,13 @@ final class AppState: ObservableObject {
             interval: Double(scanIntervalSeconds))
         scheduler.onFinish = { [weak self] in
             DispatchQueue.main.async { self?.refreshVisibleData() }
+            // 上报另开只读连接：与 scan 另开 writeStore 同一纪律，
+            // 绝不从后台线程序列化 readStore。三道闸在 publishIfNeeded 内部，
+            // 关闭时会在碰数据库之前就返回。
+            self?.publishQueue.async {
+                guard let store = try? UsageStore(path: path) else { return }
+                self?.publisher.publishIfNeeded(store: store)
+            }
         }
         scheduler.startAuto()
 

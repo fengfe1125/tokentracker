@@ -34,6 +34,12 @@ func fmt(_ n: Int64) -> String {
 
 func fmtCost(_ v: Double) -> String { String(format: "$%.2f", v) }
 
+func UIDate(_ epoch: Double) -> String {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd HH:mm"
+    return f.string(from: Date(timeIntervalSince1970: epoch))
+}
+
 switch command {
 case "detect":
     let store = try openStore()
@@ -126,6 +132,111 @@ case "activity":
                   + "\(row.errors)\t\(row.denied)\t\(row.unknown)\t\(row.derived)")
         }
     }
+case "export-public":
+    // 只写 stdout，全程不联网 —— 先亲眼读完自己的载荷，再谈发布。
+    let store = try openStore()
+    var days = 365
+    if let index = args.firstIndex(of: "--days"), index + 1 < args.count,
+       let value = Int(args[index + 1]) { days = value }
+    let payload = try PublicStatsBuilder.build(store: store, days: days)
+    let data = try payload.encoded(pretty: args.contains("--pretty"))
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+
+case "publish":
+    let settings = SettingsStore()
+    let statePath = NSHomeDirectory() + "/.tokentracker/publish_state.json"
+
+    if args.contains("--set-token") {
+        // token 从 stdin 读，不走命令行参数 —— argv 里的密钥 ps 就能看见。
+        let handle = settings.effectiveString("publish_handle") ?? ""
+        guard !handle.isEmpty else {
+            print("✗ 先设置 publish_handle：tt-swift publish --config handle=<你的用户名>")
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("请粘贴 token 后回车（不回显在日志里）: ".utf8))
+        guard let line = readLine(strippingNewline: true), !line.isEmpty else {
+            print("✗ 未读到 token"); exit(1)
+        }
+        let store = KeychainPublishTokenStore()
+        switch store.writeReportingLocation(handle: handle, token: line) {
+        case .keychain:
+            print("✓ token 已写入钥匙串（服务 \(KeychainPublishTokenStore.service)，账号 \(handle)）")
+        case .file:
+            print("✓ 钥匙串不可用，已写入 \(store.fallbackPath)（权限 0600）")
+        case nil:
+            print("✗ token 写入失败"); exit(1)
+        }
+        exit(0)
+    }
+
+    if args.contains("--config") {
+        // 形如 --config handle=sakura endpoint=https://tt.example.com enabled=true
+        for pair in args where pair.contains("=") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let (name, raw) = (parts[0], parts[1])
+            let key = "publish_" + name
+            let ok: Bool
+            switch name {
+            case "enabled": ok = settings.set(key: key, value: NSNumber(value: raw == "true"))
+            case "days":    ok = settings.set(key: key, value: NSNumber(value: Int(raw) ?? 0))
+            default:        ok = settings.set(key: key, value: raw)
+            }
+            print(ok ? "✓ \(key) = \(raw)" : "✗ \(key) 校验未通过：\(raw)")
+        }
+        exit(0)
+    }
+
+    if args.contains("--status") {
+        let state = PublishState.load(path: statePath)
+        let config = settings.effective()
+        print("启用      \((config["publish_enabled"] as? NSNumber)?.boolValue ?? false)")
+        print("端点      \(config["publish_endpoint"] as? String ?? "（未设置）")")
+        print("用户名    \(config["publish_handle"] as? String ?? "（未设置）")")
+        print("窗口      \((config["publish_days"] as? NSNumber)?.intValue ?? 365) 天")
+        print("上次成功  \(state.lastOkAt > 0 ? UIDate(state.lastOkAt) : "从未")")
+        print("连续失败  \(state.consecutiveFailures)")
+        if !state.lastError.isEmpty { print("上次错误  \(state.lastError)") }
+        exit(0)
+    }
+
+    let store = try openStore()
+    if args.contains("--dry-run") {
+        let days = settings.effectiveInt("publish_days") ?? 365
+        let payload = try PublicStatsBuilder.build(store: store, days: days)
+        let body = try payload.encoded()
+        let state = PublishState.load(path: statePath)
+        let hash = PublicStatsPublisher.contentHash(payload)
+        let config = settings.effective()
+        let decision = publishDecision(
+            enabled: (config["publish_enabled"] as? NSNumber)?.boolValue ?? false,
+            configured: !(config["publish_endpoint"] as? String ?? "").isEmpty
+                     && !(config["publish_handle"] as? String ?? "").isEmpty,
+            lastHash: state.lastHash, newHash: hash,
+            lastOkAt: state.lastOkAt, failures: state.consecutiveFailures,
+            now: Date().timeIntervalSince1970)
+        print("载荷 \(body.count) 字节 / \(payload.range.days) 天 / 内容哈希 \(hash.prefix(16))")
+        print("决策 \(decision)")
+        exit(0)
+    }
+
+    let outcome = PublicStatsPublisher(settings: settings, statePath: statePath)
+        .publishIfNeeded(store: store, force: args.contains("--force"))
+    switch outcome.decision {
+    case .publish:
+        if outcome.error.isEmpty {
+            print("✓ 已上报 \(outcome.bytes) 字节")
+        } else {
+            print("✗ 上报失败：\(outcome.error)"); exit(1)
+        }
+    case .skipDisabled:      print("— 未启用（publish_enabled=false）")
+    case .skipUnconfigured:  print("— 未配置 endpoint / handle")
+    case .skipUnchanged:     print("— 内容未变化，跳过")
+    case .skipThrottled:     print("— 距上次上报不足 \(Int(PublishThrottle.minInterval)) 秒，跳过")
+    case .skipBackoff:       print("— 处于失败退避窗口，跳过")
+    }
+
 case "quotas":
     let store = try openStore()
     let config = QuotasConfig.load(from: env["TOKENTRACKER_QUOTAS"] ?? "")
@@ -154,6 +265,12 @@ default:
       tt-swift activity [--range day|week|month|all] [--group agent|tool|skill]
                         [--agent NAME] [--confidence exact|derived|all] [--json]
       tt-swift quotas            终端查看全部配额窗口
+      tt-swift export-public [--days 365] [--pretty]
+                                 生成公开统计载荷到 stdout（不联网）
+      tt-swift publish [--dry-run|--force|--status]
+                                 上报公开统计到配置的服务
+      tt-swift publish --config handle=<名> endpoint=<https://…> enabled=true
+      tt-swift publish --set-token   从 stdin 读 token 写入钥匙串
     环境变量: TOKENTRACKER_DB / TOKENTRACKER_PRICES / TOKENTRACKER_QUOTAS 等
     """)
 }

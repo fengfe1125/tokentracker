@@ -1,0 +1,11 @@
+{
+  "name": "tokentracker-stats",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "schema": "wrangler d1 execute tokentracker-stats --remote --file=./schema.sql"
+  },
+  "devDependencies": { "wrangler": "^4" }
+}

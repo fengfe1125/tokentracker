@@ -20,6 +20,12 @@ public struct SettingsStore {
         "terminal_app": "auto",         // 继续会话用哪个终端
         "unit_yi": false,               // 大数以「亿」显示
         "scan_interval": 60,            // 自动扫描/刷新节奏（秒）
+
+        // 公开统计上报。默认关闭不可协商 —— 这是个把数据发到公网的开关。
+        "publish_enabled": false,       // 扫描结束后自动上报
+        "publish_endpoint": "",         // 形如 https://tt.example.com（必须 https）
+        "publish_handle": "",           // 服务上的用户名
+        "publish_days": 365,            // 热力图窗口天数
     ]
 
     public let path: String
@@ -55,6 +61,16 @@ public struct SettingsStore {
 
     private static let providerPattern = try! NSRegularExpression(
         pattern: #"off|[a-z0-9][a-z0-9_-]{0,23}"#)
+    /// 只接受 https：bearer token 走明文就是凭据泄漏。
+    private static let endpointPattern = try! NSRegularExpression(
+        pattern: #"https://[a-z0-9.-]{3,64}(:[0-9]{2,5})?(/[A-Za-z0-9._~/-]{0,64})?"#)
+    private static let handlePattern = try! NSRegularExpression(
+        pattern: #"[a-z0-9][a-z0-9-]{1,30}"#)
+
+    private static func fullMatch(_ regex: NSRegularExpression, _ v: String) -> Bool {
+        let range = NSRange(v.startIndex..., in: v)
+        return regex.firstMatch(in: v, range: range)?.range == range
+    }
 
     public static func isValid(key: String, value: Any) -> Bool {
         switch key {
@@ -62,8 +78,16 @@ public struct SettingsStore {
             guard let v = value as? String else { return false }
             let range = NSRange(v.startIndex..., in: v)
             return providerPattern.firstMatch(in: v, range: range)?.range == range
-        case "menubar_compact", "menubar_ring", "launch_at_login", "unit_yi":
+        case "menubar_compact", "menubar_ring", "launch_at_login", "unit_yi", "publish_enabled":
             return (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
+        case "publish_endpoint":
+            guard let v = value as? String else { return false }
+            return v.isEmpty || (v.count <= 200 && fullMatch(endpointPattern, v))
+        case "publish_handle":
+            guard let v = value as? String else { return false }
+            return v.isEmpty || fullMatch(handlePattern, v)
+        case "publish_days":
+            return [90, 365, 730].contains((value as? NSNumber)?.intValue ?? 0)
         case "terminal_app":
             return (value as? String).map { terminalApps.contains($0) } ?? false
         case "scan_interval":
@@ -97,4 +121,5 @@ public struct SettingsStore {
     public func effectiveBool(_ key: String) -> Bool {
         (effective()[key] as? NSNumber)?.boolValue ?? false
     }
+    public func effectiveInt(_ key: String) -> Int? { (effective()[key] as? NSNumber)?.intValue }
 }

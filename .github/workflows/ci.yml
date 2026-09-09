@@ -37,3 +37,18 @@ jobs:
           cmp assets/icon.icns dist/TokenTracker.app/Contents/Resources/icon.icns
           python3 scripts/check_icon.py
           git diff --exit-code -- assets
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 语法检查（零依赖）
+        run: |
+          node --check web/worker/src/index.js
+          node --check web/worker/src/validate.js
+          bash -n web/worker/setup.sh
+      - name: 载荷校验器回归
+        run: node tests/test_web.js
