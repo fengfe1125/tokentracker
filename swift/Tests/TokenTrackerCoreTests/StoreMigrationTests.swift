@@ -36,6 +36,15 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(try store.daily().first?.stats.tokens, 340)
     }
 
+    func testCacheHitRateUsesInputSideOnly() throws {
+        var stats = UsageStore.ToolStats()
+        stats.input = 100
+        stats.output = 900
+        stats.cacheRead = 300
+        stats.cacheWrite = 100
+        XCTAssertEqual(try XCTUnwrap(stats.cacheHitRate), 60, accuracy: 1e-9)
+    }
+
     private func makeOldDatabase(at path: String, fail: Bool = false) throws {
         let conn = try SQLiteConnection(path: path)
         for statement in oldSchema.split(separator: ";") {

@@ -55,6 +55,24 @@ class ScannerCase(unittest.TestCase):
 
 
 class JsonlScannerTest(ScannerCase):
+    def test_claude_keeps_latest_usage_for_streamed_message(self):
+        source = self.root / "claude"
+        write_jsonl(source / "project" / "session.jsonl", [
+            {"timestamp": TS, "message": {"id": "same-message", "model": "test-model",
+             "usage": {"input_tokens": 10, "output_tokens": 4,
+                       "cache_read_input_tokens": 20,
+                       "cache_creation_input_tokens": 5}}},
+            {"timestamp": TS, "message": {"id": "same-message", "model": "test-model",
+             "usage": {"input_tokens": 10, "output_tokens": 9,
+                       "cache_read_input_tokens": 20,
+                       "cache_creation_input_tokens": 5}}},
+        ])
+        with patch.object(claude, "root", return_value=str(source)):
+            result = claude.scan(self.conn, PRICES)
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]["output"], 9)
+        self.assertEqual((result["added"], result["updated"]), (1, 1))
+
     def test_claude_accepts_top_level_usage_and_invalid_message(self):
         source = self.root / "claude"
         write_jsonl(source / "project" / "session.jsonl", [
@@ -299,10 +317,30 @@ class CodexScannerTest(ScannerCase):
         self.assertEqual(sum(r["input"] for r in self.rows()), 95)
         self.assertTrue(all(r["input"] >= 0 and r["cache_read"] >= 0 for r in self.rows()))
 
-    def test_initial_historical_total_has_unknown_time(self):
+    def test_initial_inherited_total_uses_last_usage(self):
         self.rollout([token_event(usage(1000, 100, 200), last=usage())])
         self.scan()
-        self.assertEqual(self.rows()[0]["time_quality"], "unallocated")
+        row = self.rows()[0]
+        self.assertEqual(row["time_quality"], "exact")
+        self.assertEqual((row["input"], row["output"], row["cache_read"]), (80, 10, 20))
+
+    def test_continuation_file_does_not_recount_inherited_session_total(self):
+        write_jsonl(self.sessions / "a-original.jsonl", [
+            {"type": "session_meta", "timestamp": TS,
+             "payload": {"id": "continued-session", "cwd": "/fixture"}},
+            token_event(usage()),
+        ])
+        write_jsonl(self.sessions / "b-continuation.jsonl", [
+            {"type": "session_meta", "timestamp": TS,
+             "payload": {"id": "continued-session", "cwd": "/fixture"}},
+            token_event(usage(1000, 100, 200), turn="turn-b", last=usage()),
+        ])
+        self.scan()
+        rows = self.rows()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(row["input"] for row in rows), 160)
+        self.assertEqual(sum(row["output"] for row in rows), 20)
+        self.assertEqual(sum(row["cache_read"] for row in rows), 40)
 
     def test_codex_append_after_eof_is_read_on_next_scan(self):
         path = self.rollout([token_event(usage())])

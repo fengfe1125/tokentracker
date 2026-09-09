@@ -12,7 +12,7 @@ import Foundation
 public struct CodexScanner: ScannerAdapter {
     public let name = "codex"
     public let detail = "~/.codex/logs_2.sqlite 或 ~/.codex/sessions/"
-    static let parserVersion = 4
+    static let parserVersion = 5
     static let kindJSONL = "codex_jsonl"
     static let kindSQLite = "codex_sqlite"
     static let toolCallTypes: Set<String> = [
@@ -339,8 +339,8 @@ public struct CodexScanner: ScannerAdapter {
                 continue
             }
             let ts = timestamp(obj["timestamp"])
-            var quality = "exact"
-            var eventTurn = (payload["turn_id"] as? String) ?? (obj["turn_id"] as? String) ?? turn
+            let quality = "exact"
+            let eventTurn = (payload["turn_id"] as? String) ?? (obj["turn_id"] as? String) ?? turn
             var counts: (Int64, Int64, Int64, Int64)?
             if kind == "event_msg" && payload["type"] as? String == "token_count" {
                 guard let info = payload["info"] as? [String: Any] else { continue }
@@ -349,10 +349,10 @@ public struct CodexScanner: ScannerAdapter {
                 if let total {
                     if previous == nil {
                         counts = total
-                        // 部分导出可能以全生命周期用量开头：保留但不假装都发生在当前 turn。
+                        // 续跑/分叉文件的首个 total 带着继承历史；只有 last
+                        // 是这个文件中新发生、可以安全归因的调用。
                         if let last, last != total {
-                            quality = "unallocated"
-                            eventTurn = ""
+                            counts = last
                         }
                     } else if let prev = previous,
                               zip([total.0, total.1, total.2, total.3],

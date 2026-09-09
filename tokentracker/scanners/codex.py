@@ -16,7 +16,7 @@ from ._util import changed, expand, iter_jsonl, sqlite_ro, stat_key, user_text
 
 NAME = "codex"
 DETAIL = "~/.codex/logs_2.sqlite 或 ~/.codex/sessions/"
-_VERSION = 4
+_VERSION = 5
 _JSONL = "codex_jsonl"
 _SQLITE = "codex_sqlite"
 _FIELDS = re.compile(
@@ -260,10 +260,10 @@ def _rollout_events(path):
             if total is not None:
                 if previous is None:
                     counts = total
-                    # A partial export can start with lifetime usage. Keep it
-                    # without pretending it all occurred in the current turn.
+                    # 续跑/分叉文件的首个 total 带着继承的历史累计；只有
+                    # last_token_usage 是这个文件中新发生、可安全归因的调用。
                     if last is not None and last != total:
-                        quality, event_turn = "unallocated", ""
+                        counts = last
                 elif any(current < before for current, before in zip(total, previous)):
                     # Compaction may reset counters: establish a new baseline,
                     # rather than produce negative deltas or recharge context.

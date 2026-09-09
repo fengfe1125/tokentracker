@@ -71,9 +71,10 @@ class ActivityCase(unittest.TestCase):
         self.assertEqual(len(first["rows"]), 2)
         self.assertEqual(len(second["rows"]), 1)
         self.assertEqual(len({row["id"] for row in first["rows"] + second["rows"]}), 3)
-        self.assertEqual(len(db.activity_timeline(self.conn, range_key="day")["rows"]), 3)
-        self.assertEqual(db.activity_timeline(
-            self.conn, range_key="day", before=TS_MS - 1)["rows"], [])
+        with patch.object(db, "_range_bounds", return_value=(TS_MS - 1, TS_MS + 1000)):
+            self.assertEqual(len(db.activity_timeline(self.conn, range_key="day")["rows"]), 3)
+            self.assertEqual(db.activity_timeline(
+                self.conn, range_key="day", before=TS_MS - 1)["rows"], [])
 
     def test_v2_upgrade_creates_backup_and_activity_table(self):
         path = str(self.root / "legacy-v2.db")

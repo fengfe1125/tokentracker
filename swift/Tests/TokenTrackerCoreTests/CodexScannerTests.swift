@@ -254,10 +254,34 @@ final class CodexScannerPortTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.int("input") >= 0 && $0.int("cache_read") >= 0 })
     }
 
-    func testInitialHistoricalTotalHasUnknownTime() throws {
+    func testInitialInheritedTotalUsesLastUsage() throws {
         rollout([tokenEvent(fixtureUsage(1000, 100, 200), last: fixtureUsage())])
         _ = try scan()
-        XCTAssertEqual(try rows().first?.string("time_quality"), "unallocated")
+        let row = try XCTUnwrap(rows().first)
+        XCTAssertEqual(row.string("time_quality"), "exact")
+        XCTAssertEqual(row.int("input"), 80)
+        XCTAssertEqual(row.int("output"), 10)
+        XCTAssertEqual(row.int("cache_read"), 20)
+    }
+
+    func testContinuationFileDoesNotRecountInheritedSessionTotal() throws {
+        writeJSONL((sessionsDir as NSString).appendingPathComponent("a-original.jsonl"), [
+            ["type": "session_meta", "timestamp": fixtureTS,
+             "payload": ["id": "continued-session", "cwd": "/fixture"]],
+            tokenEvent(fixtureUsage()),
+        ])
+        writeJSONL((sessionsDir as NSString).appendingPathComponent("b-continuation.jsonl"), [
+            ["type": "session_meta", "timestamp": fixtureTS,
+             "payload": ["id": "continued-session", "cwd": "/fixture"]],
+            tokenEvent(fixtureUsage(1000, 100, 200), turn: "turn-b",
+                       last: fixtureUsage()),
+        ])
+        _ = try scan()
+        let rows = try rows()
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.reduce(0) { $0 + $1.int("input") }, 160)
+        XCTAssertEqual(rows.reduce(0) { $0 + $1.int("output") }, 20)
+        XCTAssertEqual(rows.reduce(0) { $0 + $1.int("cache_read") }, 40)
     }
 
     func testAppendAfterEOFIsReadOnNextScan() throws {

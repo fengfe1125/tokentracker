@@ -611,6 +611,13 @@ public final class UsageStore {
         public var estimatedTokens: Int64 = 0, unallocatedTokens: Int64 = 0
         public var cost: Double = 0
 
+        /// 缓存命中只属于输入侧；模型输出不能进入命中率分母。
+        public var cacheHitRate: Double? {
+            let inputSide = input + cacheRead + cacheWrite
+            guard inputSide > 0 else { return nil }
+            return Double(cacheRead) / Double(inputSide) * 100
+        }
+
         init(row: Row) {
             tool = row.string("tool")
             sessions = row.int("sessions")

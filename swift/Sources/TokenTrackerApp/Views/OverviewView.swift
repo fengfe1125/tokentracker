@@ -146,11 +146,11 @@ struct OverviewView: View {
 
     private var detailGrid: some View {
         let t = state.statTotal
-        let cards: [(title: String, value: String, icon: String, tint: Color)] = [
-            ("新增输入", UIFormat.tokens(t.input, yi: yi), "arrow.down.to.line", .blue),
-            ("Output", UIFormat.tokens(t.output, yi: yi), "arrow.up.to.line", .purple),
-            ("创建", UIFormat.tokens(t.cacheWrite, yi: yi), "internaldrive", .secondary),
-            ("命中", UIFormat.tokens(t.cacheRead, yi: yi), "sparkles", .indigo),
+        let cards: [(title: String, value: Int64, icon: String, tint: Color)] = [
+            ("新增输入", t.input, "arrow.down.to.line", .blue),
+            ("模型输出", t.output, "arrow.up.to.line", .purple),
+            ("缓存创建", t.cacheWrite, "internaldrive", .secondary),
+            ("缓存命中", t.cacheRead, "sparkles", .indigo),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
                                    GridItem(.flexible(), spacing: 12)],
@@ -165,9 +165,14 @@ struct OverviewView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                    Text(card.value)
+                    Text(card.value, format: .number)
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Text(UIFormat.tokens(card.value, yi: yi))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -181,9 +186,7 @@ struct OverviewView: View {
     // ---------------------------------------------------- 缓存命中率 ----
 
     private var hitRate: Double? {
-        let t = state.statTotal
-        guard t.tokens > 0 else { return nil }
-        return Double(t.cacheRead) / Double(t.tokens) * 100
+        state.statTotal.cacheHitRate
     }
 
     private var hitRateCard: some View {

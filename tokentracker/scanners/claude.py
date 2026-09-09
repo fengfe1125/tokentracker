@@ -21,6 +21,7 @@ from ._util import changed, expand, iter_jsonl, read_jsonl_delta, stat_key, user
 
 NAME = "claude"
 DETAIL = "~/.claude/projects/**/*.jsonl"
+_VERSION = 2
 
 
 def root() -> str:
@@ -70,27 +71,44 @@ def _scan_line(obj, fallback_key, session_id, slug, st_mtime_ms, prices, conn):
     if not isinstance(usage, dict):
         usage = obj.get("usage") if isinstance(obj, dict) else None
     if not isinstance(usage, dict):
-        return 0, changes, title
+        return 0, 0, changes, title
     inp = usage.get("input_tokens") or 0
     outp = usage.get("output_tokens") or 0
     cr = usage.get("cache_read_input_tokens") or 0
     cw = usage.get("cache_creation_input_tokens") or 0
     if inp + outp + cr + cw == 0:
-        return 0, changes, title
+        return 0, 0, changes, title
     model = msg.get("model") or obj.get("model") or ""
     key = (msg or {}).get("id") or f"{session_id}|{fallback_key}"
     cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
-    added = db.put_event(conn, NAME, f"{session_id}|{key}",
+    source_key = f"{session_id}|{key}"
+    old = conn.execute(
+        "SELECT input,output,cache_read,cache_write FROM usage_events WHERE tool=? AND src_key=?",
+        (NAME, source_key)).fetchone()
+    if old:
+        # Claude Code 会为同一 message.id 写入多条流式快照。各计数器只会
+        # 向完整值增长，保留逐字段最大值，避免首个不完整快照锁死用量。
+        inp = max(inp, old["input"])
+        outp = max(outp, old["output"])
+        cr = max(cr, old["cache_read"])
+        cw = max(cw, old["cache_write"])
+        unchanged = (inp, outp, cr, cw) == tuple(old)
+        if unchanged:
+            return 0, 0, changes, title
+        cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+    added = db.put_event(conn, NAME, source_key,
                          session_id=session_id, project=slug, ts=ts,
                          model=model, input=inp, output=outp,
-                         cache_read=cr, cache_write=cw, cost=cost)
-    return added, changes, title
+                         cache_read=cr, cache_write=cw, cost=cost,
+                         replace=old is not None)
+    return (0, 1, changes, title) if old else (added, 0, changes, title)
 
 
 def scan(conn, prices, full: bool = False) -> dict:
     base = root()
     cursor = db.get_scan_cursor(conn, NAME)
-    effective_full = full or activity.needs_backfill(cursor)
+    effective_full = (full or cursor.get("parser_version") != _VERSION
+                      or activity.needs_backfill(cursor))
     added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         if dirpath == base:
@@ -121,9 +139,10 @@ def scan(conn, prices, full: bool = False) -> dict:
             if delta is None:
                 # 全量解析：行号兜底键，与历史数据幂等
                 for lineno, obj in iter_jsonl(path):
-                    a, ac, t = _scan_line(obj, str(lineno), session_id, slug,
-                                          int(st.st_mtime * 1000), prices, conn)
+                    a, u, ac, t = _scan_line(obj, str(lineno), session_id, slug,
+                                             int(st.st_mtime * 1000), prices, conn)
                     added += a
+                    updated += u
                     activity_added += ac["activity_added"]
                     activity_updated += ac["activity_updated"]
                     if t and title is None:
@@ -132,9 +151,10 @@ def scan(conn, prices, full: bool = False) -> dict:
             else:
                 # 增量解析：字节偏移兜底键（仅追加文件中稳定）
                 for line_off, obj in delta:
-                    a, ac, t = _scan_line(obj, f"b{line_off}", session_id, slug,
-                                          int(st.st_mtime * 1000), prices, conn)
+                    a, u, ac, t = _scan_line(obj, f"b{line_off}", session_id, slug,
+                                             int(st.st_mtime * 1000), prices, conn)
                     added += a
+                    updated += u
                     activity_added += ac["activity_added"]
                     activity_updated += ac["activity_updated"]
                     if t and title is None:
@@ -144,6 +164,7 @@ def scan(conn, prices, full: bool = False) -> dict:
             cursor[path] = snapshot
             if title:
                 db.set_session_title(conn, NAME, session_id, title)
+    cursor["parser_version"] = _VERSION
     activity.mark_current(cursor)
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files,

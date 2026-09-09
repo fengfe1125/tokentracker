@@ -10,6 +10,30 @@ import XCTest
 @testable import TokenTrackerCore
 
 final class JsonlScannerPortTests: XCTestCase {
+    func testClaudeKeepsLatestUsageForStreamedMessage() throws {
+        let tmp = try TempDir()
+        writeJSONL(tmp.path("claude", "project", "session.jsonl"), [
+            ["timestamp": fixtureTS,
+             "message": ["id": "same-message", "model": "test-model",
+                         "usage": ["input_tokens": 10, "output_tokens": 4,
+                                   "cache_read_input_tokens": 20,
+                                   "cache_creation_input_tokens": 5]]],
+            ["timestamp": fixtureTS,
+             "message": ["id": "same-message", "model": "test-model",
+                         "usage": ["input_tokens": 10, "output_tokens": 9,
+                                   "cache_read_input_tokens": 20,
+                                   "cache_creation_input_tokens": 5]]],
+        ])
+        let store = try tmp.store()
+        let outcome = try ClaudeScanner(root: tmp.path("claude"))
+            .scan(store, testPrices, full: false)
+        let rows = try store.conn.query("SELECT * FROM usage_events")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].int("output"), 9)
+        XCTAssertEqual(outcome.added, 1)
+        XCTAssertEqual(outcome.updated, 1)
+    }
+
     /// test_claude_accepts_top_level_usage_and_invalid_message
     func testClaudeTopLevelUsageAndInvalidMessage() throws {
         let tmp = try TempDir()
