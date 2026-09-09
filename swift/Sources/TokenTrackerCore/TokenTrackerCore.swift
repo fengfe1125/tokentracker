@@ -15,6 +15,10 @@ public enum TokenTrackerCore {
     /// 差分导出格式版本（tests/differential/export_python.py）。
     public static let differentialFormatVersion = 2
 
+    /// 公开统计载荷格式版本。与 differentialFormatVersion 完全独立：
+    /// 差分导出含绝对路径与原始 prompt，绝不复用。
+    public static let publicStatsFormatVersion = 1
+
     /// 应用版本（与 Python tokentracker.__version__ 对齐）。
     public static let version = "0.2.10"
 }
