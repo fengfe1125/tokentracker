@@ -104,7 +104,7 @@ struct OverviewView: View {
                     Text(total.tokens, format: .number)
                         .font(.system(size: 30, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                    Text(UIFormat.wan(total.tokens))
+                    Text(UIFormat.overviewTokens(total.tokens, yi: yi))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -170,7 +170,7 @@ struct OverviewView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
-                    Text(UIFormat.tokens(card.value, yi: yi))
+                    Text(UIFormat.overviewTokens(card.value, yi: yi))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

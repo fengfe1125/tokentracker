@@ -36,6 +36,15 @@ enum UIFormat {
         return "≈ \(n)"
     }
 
+    /// 概览卡副标签：开启「亿」时只转换真正达到 1 亿的数值；
+    /// 较小数值继续用「万」，避免 465 万显示成精度不足的 0.05 亿。
+    static func overviewTokens(_ n: Int64, yi: Bool) -> String {
+        if yi && n >= 100_000_000 {
+            return String(format: "≈ %.2f 亿", Double(n) / 100_000_000)
+        }
+        return wan(n)
+    }
+
     /// "2026-08-25 14:00" 本地时间
     static func dateTime(ms: Int64?) -> String {
         guard let ms, ms > 0 else { return "—" }
