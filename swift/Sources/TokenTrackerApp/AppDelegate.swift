@@ -40,6 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let detail = SessionDetailWindowController(appState: appState)
         appState.onSessionDetail = { explicit in explicit ? detail.show() : detail.autoShow() }
         detailWindow = detail
+        if ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_MAIN"] == "1" {
+            appState.selection = .activity
+            DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
+        }
         appState.start()
         dbg("appState started")
 

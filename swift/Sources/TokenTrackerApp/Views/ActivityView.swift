@@ -15,6 +15,7 @@ struct ActivityView: View, @MainActor Equatable {
     }
     private var unknownResults: Int64 { snapshot.exactRows.reduce(0) { $0 + $1.unknown } }
     private var piSkillUnknown: Bool { state.agent == "pi" }
+    private var visibleTimelineRows: ArraySlice<ActivityEvent> { snapshot.timelineRows.prefix(30) }
 
     static func == (lhs: ActivityView, rhs: ActivityView) -> Bool {
         lhs.state === rhs.state
@@ -25,19 +26,34 @@ struct ActivityView: View, @MainActor Equatable {
             PanelHeader(title: "Agent 活动", subtitle: "工具与 Skill 使用 · 仅保存活动元数据") {
                 filters
             }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    evidenceNotice
-                    metrics
-                    HStack(alignment: .top, spacing: 12) {
-                        rankingCard(title: "工具榜", rows: snapshot.toolRows, skill: false)
-                        rankingCard(title: "Skill 榜", rows: snapshot.skillRows, skill: true)
-                    }
-                    matrixCard
-                    timelineCard
+            List {
+                evidenceNotice
+                    .activityListRow()
+                metrics
+                    .activityListRow()
+                HStack(alignment: .top, spacing: 12) {
+                    rankingCard(title: "工具榜", rows: snapshot.toolRows, skill: false)
+                    rankingCard(title: "Skill 榜", rows: snapshot.skillRows, skill: true)
                 }
-                .padding(20)
+                .activityListRow()
+                matrixCard
+                    .activityListRow()
+                timelineHeader
+                    .activityListRow(bottom: 2)
+                if snapshot.timelineRows.isEmpty {
+                    ContentUnavailableView("暂无活动", systemImage: "clock")
+                        .frame(height: 130)
+                        .activityTimelineListRow(bottom: 12)
+                } else {
+                    ForEach(visibleTimelineRows, id: \.srcKey) { event in
+                        ActivityTimelineRow(event: event)
+                            .activityTimelineListRow(
+                                bottom: event.srcKey == visibleTimelineRows.last?.srcKey ? 12 : 2)
+                    }
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
         .navigationTitle("Agent 活动")
         .onChange(of: state.range) { _, _ in refresh() }
@@ -118,7 +134,8 @@ struct ActivityView: View, @MainActor Equatable {
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.background, in: RoundedRectangle(cornerRadius: 10))
-                .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
             }
         }
     }
@@ -150,7 +167,8 @@ struct ActivityView: View, @MainActor Equatable {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
     }
 
     private var matrixCard: some View {
@@ -200,31 +218,20 @@ struct ActivityView: View, @MainActor Equatable {
         }
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
     }
 
-    private var timelineCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("最近活动").font(.headline)
-                Spacer()
-                Text("按会话关联 Tool / Skill").font(.caption2).foregroundStyle(.tertiary)
-            }
-            if snapshot.timelineRows.isEmpty {
-                ContentUnavailableView("暂无活动", systemImage: "clock")
-                    .frame(height: 130)
-            } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(snapshot.timelineRows.prefix(30), id: \.srcKey) { event in
-                        ActivityTimelineRow(event: event)
-                        Divider()
-                    }
-                }
-            }
+    private var timelineHeader: some View {
+        HStack {
+            Text("最近活动").font(.headline)
+            Spacer()
+            Text("按会话关联 Tool / Skill").font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
     }
 
     private var canonicalMatrix: [String: [String: Int64]] {
@@ -244,6 +251,32 @@ struct ActivityView: View, @MainActor Equatable {
     private func heatColor(count: Int64, maximum: Int64) -> Color {
         guard count > 0 else { return Color.secondary.opacity(0.06) }
         return Color.green.opacity(0.10 + 0.58 * Double(count) / Double(maximum))
+    }
+}
+
+private struct ActivityListRowModifier: ViewModifier {
+    let top: CGFloat
+    let bottom: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
+private extension View {
+    func activityListRow(top: CGFloat = 8, bottom: CGFloat = 8) -> some View {
+        modifier(ActivityListRowModifier(top: top, bottom: bottom))
+    }
+
+    func activityTimelineListRow(bottom: CGFloat) -> some View {
+        padding(.horizontal, 14)
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.10), lineWidth: 0.5))
+            .activityListRow(top: 2, bottom: bottom)
     }
 }
 
