@@ -57,7 +57,7 @@ public enum UpdateInstallError: LocalizedError, Equatable {
 }
 
 public struct UpdateInstaller: Sendable {
-    public static let bundleID = "com.tokentracker.desktop"
+    public static let bundleID = "com.tokentracker.desktop.v2"
 
     /// 注入缝：抓 JSON（测试注入）
     public var fetch: @Sendable (String) throws -> Data

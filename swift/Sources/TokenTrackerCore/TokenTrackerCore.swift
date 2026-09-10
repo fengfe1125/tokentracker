@@ -16,5 +16,5 @@ public enum TokenTrackerCore {
     public static let differentialFormatVersion = 2
 
     /// 应用版本（与 Python tokentracker.__version__ 对齐）。
-    public static let version = "0.2.10"
+    public static let version = "0.2.11"
 }

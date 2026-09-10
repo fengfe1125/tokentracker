@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>TokenTracker</string>
   <key>CFBundleDisplayName</key><string>TokenTracker</string>
-  <key>CFBundleIdentifier</key><string>com.tokentracker.desktop</string>
+  <key>CFBundleIdentifier</key><string>com.tokentracker.desktop.v2</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>

@@ -18,7 +18,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private static let healDelay = 10.0      // 图标不可见多久后触发自愈
     private static let healBackoff = 30.0    // 自愈失败后的重试退避
     private static let nudgeInterval = 60.0  // 无条件重排轻推间隔
-    private static let autosaveName = "com.tokentracker.desktop.status-item"
     private static let accent = NSColor(calibratedRed: Double(0xD9) / 255,
                                         green: Double(0x77) / 255,
                                         blue: Double(0x57) / 255, alpha: 1)
@@ -106,13 +105,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 安装 ----
 
     func install() {
+        guard statusItem == nil else { return }
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // 给系统一个跨版本稳定的状态栏项身份。覆盖安装后即使菜单栏布局被
-        // 重新计算，也能恢复原位置；显式设为可见可清除异常隐藏状态。
-        item.autosaveName = Self.autosaveName
+        // Do not assign an autosave name here. macOS restores named status items
+        // from Control Center's persisted position, and a stale record can place
+        // this variable-width item outside the visible menu bar permanently.
+        // An anonymous item is laid out against the current screen on every run.
         item.isVisible = true
-        item.button?.title = ring ? "—" : "⚡ —"
+        let initialSegments = MenuBarFmt.fmtSegments(
+            today: appState.today, entries: appState.quotaEntries,
+            provider: provider, compact: compact, yi: yi, ring: ring)
+        let initialTitle = initialSegments.map(\.text).joined()
+        item.button?.title = initialTitle
 
         let menu = NSMenu()
         menu.delegate = self

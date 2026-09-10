@@ -33,7 +33,7 @@ swift test --package-path swift
 open dist/TokenTracker.app
 ```
 
-打包结果使用 bundle ID `com.tokentracker.desktop`，最低支持 macOS 14。
+打包结果使用 bundle ID `com.tokentracker.desktop.v2`，最低支持 macOS 14。
 发布 DMG 使用 `./scripts/release_swift.sh`。
 
 ## 差分验证
