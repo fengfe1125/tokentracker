@@ -57,7 +57,25 @@ public enum UpdateInstallError: LocalizedError, Equatable {
 }
 
 public struct UpdateInstaller: Sendable {
+    /// 当前构建写进 Info.plist 的 Bundle ID（见 scripts/build_swift_app.sh）。
     public static let bundleID = "com.tokentracker.desktop.v2"
+
+    /// 本项目的 Bundle ID 命名空间。
+    public static let bundleIDRoot = "com.tokentracker.desktop"
+
+    /// 安装包的 Bundle ID 是否属于本项目。
+    ///
+    /// 用命名空间而不是精确单值，是因为精确匹配会让每一次 Bundle ID 迁移都
+    /// 切断升级链：旧版本编译进去的是旧值，拿到新 DMG 会判成「冒名」而拒装，
+    /// 用户只能手工下载。v0.2.11 从 com.tokentracker.desktop 迁到 .v2 时就是
+    /// 这样（那批已发布的版本无法追溯修复，只能靠发版说明提示手动安装）。
+    ///
+    /// 这不削弱防冒名：前缀后必须紧跟 "."，所以 com.tokentracker.desktopEVIL
+    /// 之类的近似名仍会被拒；而真正的冒名包还要先过 SHA-256 校验与
+    /// codesign --verify 两道。
+    public static func isAcceptedBundleID(_ id: String) -> Bool {
+        id == bundleIDRoot || id.hasPrefix(bundleIDRoot + ".")
+    }
 
     /// 注入缝：抓 JSON（测试注入）
     public var fetch: @Sendable (String) throws -> Data
@@ -156,8 +174,9 @@ public struct UpdateInstaller: Sendable {
         let gotID = try run(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier",
                              newApp + "/Contents/Info.plist"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard gotID == Self.bundleID else {
-            throw UpdateInstallError.bundleIDMismatch(expected: Self.bundleID, actual: gotID)
+        guard Self.isAcceptedBundleID(gotID) else {
+            throw UpdateInstallError.bundleIDMismatch(expected: Self.bundleIDRoot + ".*",
+                                                      actual: gotID)
         }
 
         // 先拷到目标同卷的临时位置，成功后再换——中途失败原 bundle 原封不动

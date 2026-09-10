@@ -149,12 +149,44 @@ final class InstallTests: XCTestCase {
             try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
                                   into: "/Applications/TokenTracker.app")) { error in
             XCTAssertEqual(error as? UpdateInstallError,
-                           .bundleIDMismatch(expected: UpdateInstaller.bundleID,
+                           .bundleIDMismatch(expected: UpdateInstaller.bundleIDRoot + ".*",
                                              actual: "com.evil.app"))
         }
         XCTAssertFalse(rec.names.contains("mv"), "校验没过就不该动原来的 bundle")
         XCTAssertFalse(rec.names.contains("cp"))
         XCTAssertEqual(rec.names.last, "hdiutil", "失败也要卸载镜像")
+    }
+
+    /// 精确单值匹配会让每次 Bundle ID 迁移切断升级链（v0.2.11 迁 .v2 时就是如此）。
+    /// 命名空间校验必须同时做到：认自家的历史与未来变体，且挡住近似冒名。
+    func testAcceptedBundleIDSpansProjectNamespace() {
+        for accepted in ["com.tokentracker.desktop",        // v0.2.10 及更早
+                         "com.tokentracker.desktop.v2",     // 当前
+                         "com.tokentracker.desktop.v3",     // 将来再迁也不断链
+                         "com.tokentracker.desktop.beta"] {
+            XCTAssertTrue(UpdateInstaller.isAcceptedBundleID(accepted), accepted)
+        }
+        for rejected in ["com.evil.app",
+                         "com.tokentracker.desktopEVIL",    // 前缀后必须紧跟 "."
+                         "com.tokentracker.desktop2",
+                         "com.tokentracker",                // 更短的前缀不算
+                         "xcom.tokentracker.desktop",       // 不能只做子串匹配
+                         ""] {
+            XCTAssertFalse(UpdateInstaller.isAcceptedBundleID(rejected), rejected)
+        }
+        XCTAssertTrue(UpdateInstaller.isAcceptedBundleID(UpdateInstaller.bundleID),
+                      "当前构建自身必须被接受")
+    }
+
+    /// 老版本装新包（迁移方向）不再被拒。
+    func testLegacyBundleIDInstallsWithoutMismatch() throws {
+        let (mount, mountPath) = try mountedDMG()
+        _ = mount
+        let rec = recorder(mount: mountPath, bundleID: "com.tokentracker.desktop")
+        let installer = UpdateInstaller(run: rec.run)
+        XCTAssertNoThrow(
+            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
+                                  into: "/Applications/TokenTracker.app"))
     }
 
     func testRollsBackWhenSwapFails() throws {
