@@ -32,7 +32,7 @@ jobs:
         run: |
           test -x dist/TokenTracker.app/Contents/MacOS/TokenTracker
           codesign --verify --deep --strict dist/TokenTracker.app
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)" = "com.tokentracker.desktop"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)" = "com.tokentracker.desktop.v2"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' dist/TokenTracker.app/Contents/Info.plist)" = "true"
           cmp assets/icon.icns dist/TokenTracker.app/Contents/Resources/icon.icns
           python3 scripts/check_icon.py
