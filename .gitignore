@@ -22,3 +22,6 @@ swift/.build/
 
 # 差分语料（生成物，可重复生成）
 tests/differential/corpus/
+
+# 本机绝对路径的预览服务器配置（.claude/ 下其它文件仍可提交）
+.claude/launch.json
