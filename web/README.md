@@ -75,10 +75,36 @@ curl localhost:8799/healthz
 ```bash
 tt-swift export-public --pretty        # 只写 stdout，不联网
 tt-swift publish --config handle=你的名 endpoint=https://你的域名 enabled=true
-tt-swift publish --set-token           # 从 stdin 读 token 进钥匙串
+tt-swift publish --set-token           # 从 stdin 读 token，写入 0600 文件
+tt-swift publish --set-token --keychain # 改写钥匙串（见下方说明，多数情况不要用）
 tt-swift publish --dry-run             # 看载荷大小与本次决策
 tt-swift publish --status
 ```
+
+### token 存哪里
+
+解析顺序：`TOKENTRACKER_PUBLISH_TOKEN` 环境变量 →
+`~/.tokentracker/publish_token`（0600）→ 钥匙串。
+
+**默认走文件，不走钥匙串**，因为钥匙串在 ad-hoc 签名下会反复弹密码框：
+条目的 ACL 绑定创建它的那个二进制身份，而本项目全程 ad-hoc 签名 ——
+App 的标识是 `com.tokentracker.desktop.v2`，`tt-swift` 的标识里直接带着
+二进制哈希（`tt-swift-5555…`），**每次重新编译都变**。
+于是「谁建的谁能读」永远不成立，每次读都被当成陌生程序而弹窗。
+这个用 ad-hoc 签名无解，需要稳定的 Developer ID 证书。
+
+0600 文件与本项目既有做法一致 —— `codex_accounts.json`、
+`claude_cred_backup.json` 都是同目录下 0600 明文。
+
+`--keychain` 留给用真实证书签名的情况。要从钥匙串切回文件，
+删掉条目即可（条目不存在时 `SecItemCopyMatching` 静默返回 not-found，不弹窗）：
+
+```bash
+security delete-generic-password -a <你的handle> -s com.tokentracker.publish
+```
+
+忘了 token 也不用找回 —— 重跑 `web/worker/setup.sh` 会检测到本机没有
+可用 token 并重新签发。
 
 App 每次扫描结束后会尝试上报，三道闸决定发不发：
 

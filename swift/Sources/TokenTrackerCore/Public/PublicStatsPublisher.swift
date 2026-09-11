@@ -98,12 +98,21 @@ public protocol PublishTokenStore: Sendable {
     @discardableResult func write(handle: String, token: String) -> Bool
 }
 
-/// 钥匙串优先。解析顺序：环境变量 → 钥匙串 → ~/.tokentracker/publish_token(0600)。
-/// 环境变量是无头自部署与 CI 的出路；文件是钥匙串不可用时的兜底。
+/// 解析顺序：环境变量 → ~/.tokentracker/publish_token(0600) → 钥匙串。
 ///
-/// 走 Security 框架而不是 /usr/bin/security：后者的 `-w` 带值会把密钥暴露在 argv 里
-/// （ps 可见），不带值又是从 TTY 交互读并要求重输一次，管道喂不进去。
-/// 框架 API 两个毛病都没有。
+/// 文件排在钥匙串前面，是因为钥匙串在本项目里会反复弹密码框：
+/// 钥匙串条目的 ACL 绑定创建它的那个二进制身份，而本项目全程 ad-hoc 签名 ——
+/// App 的标识是 com.tokentracker.desktop.v2，tt-swift 的标识里直接带着二进制哈希
+/// （tt-swift-5555…），每次重新编译都变。于是「谁建的谁能读」永远不成立，
+/// 每次读都被当成陌生程序而弹窗。这个用 ad-hoc 签名无解，需要稳定的 Developer ID。
+///
+/// 0600 文件与本项目既有的做法一致 —— codex_accounts.json、claude_cred_backup.json
+/// 都是同目录下 0600 明文。钥匙串保留在最后，给将来用真实证书签名的情况。
+/// 注意：条目不存在时 SecItemCopyMatching 静默返回 not-found，不会弹窗；
+/// 只有条目存在而调用方不在 ACL 里才弹。
+///
+/// 写入走 Security 框架而不是 /usr/bin/security：后者的 `-w` 带值会把密钥暴露在
+/// argv 里（ps 可见），不带值又是从 TTY 交互读并要求重输一次，管道喂不进去。
 public struct KeychainPublishTokenStore: PublishTokenStore {
     public static let service = "com.tokentracker.publish"
     public let fallbackPath: String
@@ -115,6 +124,10 @@ public struct KeychainPublishTokenStore: PublishTokenStore {
     public func read(handle: String) -> String? {
         if let env = ProcessInfo.processInfo.environment["TOKENTRACKER_PUBLISH_TOKEN"],
            !env.isEmpty { return env }
+        if let text = try? String(contentsOfFile: fallbackPath, encoding: .utf8) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
         #if canImport(Security)
         if !handle.isEmpty {
             var item: CFTypeRef?
@@ -132,14 +145,11 @@ public struct KeychainPublishTokenStore: PublishTokenStore {
             }
         }
         #endif
-        if let text = try? String(contentsOfFile: fallbackPath, encoding: .utf8) {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
         return nil
     }
 
-    /// 写入钥匙串；不可用时退回 0600 文件，并如实返回写到了哪里。
+    /// 默认写 0600 文件（见类型注释：ad-hoc 签名下钥匙串必然反复弹窗）。
+    /// preferKeychain 为真时才尝试钥匙串，失败仍退回文件。
     @discardableResult
     public func write(handle: String, token: String) -> Bool {
         writeReportingLocation(handle: handle, token: token) != nil
@@ -147,9 +157,10 @@ public struct KeychainPublishTokenStore: PublishTokenStore {
 
     public enum Location: String, Sendable { case keychain, file }
 
-    public func writeReportingLocation(handle: String, token: String) -> Location? {
+    public func writeReportingLocation(handle: String, token: String,
+                                       preferKeychain: Bool = false) -> Location? {
         #if canImport(Security)
-        if !handle.isEmpty {
+        if preferKeychain, !handle.isEmpty {
             let query = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: Self.service,

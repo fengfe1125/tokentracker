@@ -159,7 +159,10 @@ case "publish":
             print("✗ 未读到 token"); exit(1)
         }
         let store = KeychainPublishTokenStore()
-        switch store.writeReportingLocation(handle: handle, token: line) {
+        // 默认落 0600 文件。钥匙串在 ad-hoc 签名下每次读都弹密码框
+        // （ACL 绑创建者的二进制身份，而 tt-swift 的标识含二进制哈希，编译一次变一次）。
+        switch store.writeReportingLocation(handle: handle, token: line,
+                                            preferKeychain: args.contains("--keychain")) {
         case .keychain:
             print("✓ token 已写入钥匙串（服务 \(KeychainPublishTokenStore.service)，账号 \(handle)）")
         case .file:

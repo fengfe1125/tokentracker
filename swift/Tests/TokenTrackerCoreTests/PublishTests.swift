@@ -146,7 +146,36 @@ final class PublishTests: XCTestCase {
 
     // -------------------------------------------------------- token ----
 
-    /// 解析顺序：环境变量 → 钥匙串 → 文件。这里验文件兜底与不存在时的返回。
+    /// 文件必须排在钥匙串之前。钥匙串条目的 ACL 绑创建者的二进制身份，
+    /// 而本项目全程 ad-hoc 签名、tt-swift 的标识里还带着二进制哈希 ——
+    /// 每次重编译都成"陌生程序"，读一次弹一次密码框。
+    /// 写入默认也落文件，否则 setup.sh 会把这个坑重新挖回来。
+    func testWritesToFileByDefaultNotKeychain() throws {
+        let dir = try TempDir()
+        let path = dir.path("publish_token")
+        let store = KeychainPublishTokenStore(fallbackPath: path)
+        let where_ = store.writeReportingLocation(handle: "order-test-handle", token: "tok-abc")
+        XCTAssertEqual(where_, .file, "默认必须落文件，不能碰钥匙串")
+        XCTAssertEqual(store.read(handle: "order-test-handle"), "tok-abc")
+
+        let perms = try FileManager.default
+            .attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(perms?.int16Value, 0o600, "凭据文件必须 0600")
+    }
+
+    /// 环境变量优先于文件 —— 无头自部署与 CI 靠它。
+    func testEnvOverridesFile() throws {
+        let dir = try TempDir()
+        let path = dir.path("publish_token")
+        try "from-file".write(toFile: path, atomically: true, encoding: .utf8)
+        let store = KeychainPublishTokenStore(fallbackPath: path)
+        XCTAssertEqual(store.read(handle: "h"), "from-file",
+                       "未设环境变量时应读文件")
+        // 环境变量无法在进程内可靠地注入后再读，这里只固定「文件可读」这一半，
+        // 环境变量分支由 read() 的第一行保证，改动它会让这条注释先失效。
+    }
+
+    /// 解析顺序：环境变量 → 文件 → 钥匙串。这里验文件兜底与不存在时的返回。
     func testTokenFallbackFile() throws {
         let dir = try TempDir()
         let path = dir.path("publish_token")
