@@ -333,3 +333,17 @@ public func jsonOrString(_ first: Any?, _ second: Any?, _ third: Any?) -> String
     let value = jsonOrString(first, second)
     return value.isEmpty ? (third as? String ?? "") : value
 }
+
+/// Stable identifier extraction for JSON values that may encode ids as either
+/// strings or JSON numbers.  Numeric sequence ids must not collapse to one
+/// empty call id when they are used as activity identities.
+public func jsonIdentifier(_ values: Any?...) -> String {
+    for value in values {
+        if let string = value as? String, !string.isEmpty { return string }
+        if let number = value as? NSNumber,
+           CFGetTypeID(number) != CFBooleanGetTypeID() {
+            return number.stringValue
+        }
+    }
+    return ""
+}

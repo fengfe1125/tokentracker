@@ -96,6 +96,103 @@ public struct CodexScanner: ScannerAdapter {
         return String(body[r])
     }
 
+    private func itemTime(_ value: Any?, fallback: Int64?) -> Int64? {
+        let parsed = timestamp(value)
+        return parsed > 0 ? parsed : fallback
+    }
+
+    private func itemDuration(_ item: [String: Any], started: Int64?, ended: Int64?) -> Int64? {
+        if let duration = item["duration"] as? [String: Any] {
+            let seconds = jsonInt(duration["secs"])
+            let nanos = jsonInt(duration["nanos"])
+            if seconds > 0 || nanos > 0 { return max(0, seconds * 1000 + nanos / 1_000_000) }
+        }
+        if let started, let ended { return max(0, ended - started) }
+        return nil
+    }
+
+    private func itemStatus(_ item: [String: Any]) -> String {
+        var status = ActivityNormalizer.status(item["status"])
+        if status == "unknown", let success = item["success"] as? Bool {
+            status = success ? "success" : "error"
+        }
+        if status == "unknown", let exitCode = item["exit_code"] as? NSNumber {
+            status = exitCode.intValue == 0 ? "success" : "error"
+        }
+        return status == "unknown" ? "success" : status
+    }
+
+    private func commandName(_ item: [String: Any]) -> String {
+        let parsed = item["parsed_cmd"] as? [[String: Any]] ?? []
+        let kinds = Set(parsed.compactMap { ($0["type"] as? String)?.lowercased() })
+        if kinds.count == 1, let kind = kinds.first {
+            return ["read": "Read", "search": "Search", "list_files": "ListFiles"][kind] ?? "shell"
+        }
+        return "shell"
+    }
+
+    private func completedItem(_ item: [String: Any]) ->
+        (rawName: String, kind: ActivityKind, parentCallID: String) {
+        let itemType = item["type"] as? String ?? ""
+        switch itemType {
+        case "CommandExecution": return (commandName(item), .tool, "")
+        case "FileChange": return ("apply_patch", .tool, "")
+        case "McpToolCall":
+            let server = (item["server"] as? String) ?? (item["server_name"] as? String) ?? ""
+            let tool = (item["tool"] as? String) ?? (item["tool_name"] as? String)
+                ?? (item["actionName"] as? String) ?? (item["name"] as? String) ?? ""
+            let raw = server.isEmpty || tool.isEmpty ? (tool.isEmpty ? "mcp" : tool)
+                : "mcp__\(server)__\(tool)"
+            return (raw, .tool, "")
+        case "DynamicToolCall":
+            return ((item["tool"] as? String) ?? (item["name"] as? String) ?? "dynamic_tool", .tool, "")
+        case "ImageView": return ("image_view", .tool, "")
+        case "WebSearch": return ("web_search", .tool, "")
+        case "Plan": return ("plan", .tool, "")
+        case "CollabAgentToolCall":
+            return ((item["tool"] as? String) ?? (item["name"] as? String) ?? "agent", .agent,
+                    (item["sender_thread_id"] as? String)
+                        ?? (item["parent_call_id"] as? String) ?? "")
+        case "SubAgentActivity":
+            let kind = (item["kind"] as? String) ?? "activity"
+            return ("subagent.\(kind)", .agent, "")
+        default:
+            let fallback = itemType.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased().replacingOccurrences(of: " ", with: "_")
+            return ("codex.\(fallback.isEmpty ? "unknown_item" : fallback)", .tool, "")
+        }
+    }
+
+    private func skillNames(_ item: [String: Any]) -> [String] {
+        let parsed = item["parsed_cmd"] as? [[String: Any]] ?? []
+        var names: [String] = []
+        for row in parsed {
+            // `cmd` is the structured command text. Passing it directly keeps
+            // JSON object encoding details from hiding an explicit SKILL.md
+            // path behind a dictionary bridge.
+            let arguments = row["cmd"] ?? row["command"] ?? row
+            let skill = ActivityNormalizer.skill(rawName: "skill_file", arguments: arguments,
+                                                 allowPath: true)
+            if skill.confidence == "derived", !skill.name.isEmpty, !names.contains(skill.name) {
+                names.append(skill.name)
+            }
+        }
+        return names
+    }
+
+    private func recordDerivedSkill(_ store: UsageStore, path: String, sid: String,
+                                    turn: String, parentID: String, started: Int64?,
+                                    name: String, index: Int) throws -> (Int, Int) {
+        try store.putActivityEvent(ActivityEvent(
+            agent: self.name, sessionID: sid, turnID: turn, rawName: "skill_file",
+            canonicalName: "skill.activate", namespace: "built-in", callID: "",
+            parentCallID: parentID, startedAt: started, endedAt: started, durationMs: 0,
+            status: "success", sourceKind: "codex_skill_file", confidence: "derived",
+            skillName: name, skillConfidence: "derived",
+            srcKey: "\(realPath(path))|skill|\(parentID)|\(index)",
+            eventKind: .skill, eventLayer: .execution))
+    }
+
     // ------------------------------------------------------------ 落库 ----
 
     @discardableResult
@@ -429,30 +526,80 @@ public struct CodexScanner: ScannerAdapter {
     }
 
     private func scanRolloutActivity(_ store: UsageStore, path: String) throws -> (Int, Int) {
+        let entries = iterJSONL(path)
         var sid = String((path as NSString).lastPathComponent.dropLast(".jsonl".count))
+        for (_, obj) in entries {
+            let payload = obj["payload"] as? [String: Any] ?? [:]
+            if obj["type"] as? String == "session_meta",
+               let value = payload["id"] as? String, !value.isEmpty {
+                sid = value
+                break
+            }
+        }
+        var turns: [Int: String] = [:]
         var turn = ""
-        var added = 0, updated = 0
-        for (lineno, obj) in iterJSONL(path) {
+        var completedIDs = Set<String>()
+        for (lineno, obj) in entries {
             let payload = obj["payload"] as? [String: Any] ?? [:]
             let kind = obj["type"] as? String ?? ""
-            if kind == "session_meta" {
-                if let value = payload["id"] as? String, !value.isEmpty { sid = value }
-                continue
-            }
-            if kind == "turn_context" {
-                if let value = payload["turn_id"] as? String, !value.isEmpty { turn = value }
-                continue
-            }
-            if kind == "event_msg", payload["type"] as? String == "task_started" {
+            if kind == "turn_context", let value = payload["turn_id"] as? String, !value.isEmpty {
+                turn = value
+            } else if kind == "event_msg", payload["type"] as? String == "task_started" {
                 turn = payload["turn_id"] as? String ?? turn
-                continue
             }
-            guard kind == "response_item" else { continue }
+            turns[lineno] = (payload["turn_id"] as? String) ?? (obj["turn_id"] as? String) ?? turn
+            if kind == "event_msg", payload["type"] as? String == "item_completed",
+               let item = payload["item"] as? [String: Any] {
+                if let id = item["id"] as? String, !id.isEmpty { completedIDs.insert(id) }
+                for key in ["call_id", "callId"] {
+                    if let id = item[key] as? String, !id.isEmpty { completedIDs.insert(id) }
+                }
+            }
+        }
+
+        var added = 0, updated = 0
+        for (lineno, obj) in entries {
+            let payload = obj["payload"] as? [String: Any] ?? [:]
+            guard obj["type"] as? String == "event_msg",
+                  payload["type"] as? String == "item_completed",
+                  let item = payload["item"] as? [String: Any] else { continue }
+            let descriptor = completedItem(item)
+            guard !descriptor.rawName.isEmpty else { continue }
+            let itemID = jsonIdentifier(item["id"], payload["item_id"], lineno)
+            let base = timestamp(obj["timestamp"])
+            let started = itemTime(payload["started_at_ms"] ?? item["started_at_ms"],
+                                   fallback: base == 0 ? nil : base)
+            let ended = itemTime(payload["completed_at_ms"] ?? item["completed_at_ms"],
+                                 fallback: base == 0 ? nil : base)
+            let callID = jsonIdentifier(item["call_id"], item["callId"], itemID)
+            var parent = descriptor.parentCallID
+            if parent.isEmpty { parent = jsonOrString(payload["parent_call_id"], descriptor.kind == .agent ? payload["thread_id"] : nil) }
+            let change = try store.recordActivity(
+                agent: name, srcKey: "\(realPath(path))|execution|\(itemID)",
+                rawName: descriptor.rawName, sessionID: sid, turnID: turns[lineno] ?? "",
+                callID: callID, parentCallID: parent, startedAt: started, endedAt: ended,
+                durationMs: itemDuration(item, started: started, ended: ended),
+                status: itemStatus(item), sourceKind: "codex_item_completed",
+                confidence: "exact", eventKind: descriptor.kind, eventLayer: .execution)
+            added += change.added; updated += change.updated
+            for (index, skillName) in skillNames(item).enumerated() {
+                let skill = try recordDerivedSkill(store, path: path, sid: sid,
+                    turn: turns[lineno] ?? "", parentID: itemID, started: started,
+                    name: skillName, index: index)
+                added += skill.0; updated += skill.1
+            }
+        }
+
+        for (lineno, obj) in entries {
+            let payload = obj["payload"] as? [String: Any] ?? [:]
+            guard obj["type"] as? String == "response_item" else { continue }
             let itemType = payload["type"] as? String ?? ""
             let tsValue = timestamp(obj["timestamp"])
             let ts: Int64? = tsValue == 0 ? nil : tsValue
-            let callID = jsonOrString(payload["call_id"], payload["id"])
+            let callID = jsonOrString(payload["call_id"], payload["callId"], payload["id"])
             if CodexScanner.toolCallTypes.contains(itemType) {
+                let responseID = jsonIdentifier(payload["id"], callID, lineno)
+                guard !completedIDs.contains(responseID), !completedIDs.contains(callID) else { continue }
                 var rawName = payload["name"] as? String ?? ""
                 if rawName.isEmpty {
                     if ["local_shell_call", "shell_call"].contains(itemType) { rawName = "shell" }
@@ -460,23 +607,15 @@ public struct CodexScanner: ScannerAdapter {
                     else if itemType == "computer_call" { rawName = "computer" }
                 }
                 guard !rawName.isEmpty else { continue }
-                let arguments = payload["arguments"] ?? payload["input"] ?? payload["action"]
-                let sourceKey = "\(realPath(path))|response|\(jsonOrString(payload["id"], callID).isEmpty ? String(lineno) : jsonOrString(payload["id"], callID))"
+                let isSkill = ["skill", "skill_view"].contains(rawName.lowercased())
                 let change = try store.recordActivity(
-                    agent: name, srcKey: sourceKey, rawName: rawName, sessionID: sid,
-                    turnID: turn, callID: callID, startedAt: ts,
-                    sourceKind: "codex_rollout", arguments: arguments, allowSkillPath: true)
+                    agent: name, srcKey: "\(realPath(path))|request|\(responseID)",
+                    rawName: rawName, sessionID: sid, turnID: turns[lineno] ?? "",
+                    callID: callID, startedAt: ts, sourceKind: "codex_request_fallback",
+                    confidence: isSkill ? "exact" : "derived",
+                    eventKind: isSkill ? .skill : .tool,
+                    eventLayer: isSkill ? .execution : .requestFallback)
                 added += change.added; updated += change.updated
-                if rawName == "exec", let script = arguments as? String {
-                    for (index, inner) in ActivityNormalizer.inferredCodexTools(script).enumerated() {
-                        let child = try store.recordActivity(
-                            agent: name, srcKey: "\(sourceKey)|inner|\(index)", rawName: inner,
-                            sessionID: sid, turnID: turn, parentCallID: callID,
-                            startedAt: ts, sourceKind: "codex_exec_payload",
-                            confidence: "derived")
-                        added += child.added; updated += child.updated
-                    }
-                }
             } else if CodexScanner.toolOutputTypes.contains(itemType) {
                 var status = ActivityNormalizer.status(payload["status"])
                 if status == "unknown", let output = payload["output"] as? [String: Any] {

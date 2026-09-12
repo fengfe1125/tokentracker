@@ -1,5 +1,24 @@
 import Foundation
 
+public enum ActivityKind: String, Equatable, Sendable {
+    case tool
+    case skill
+    case agent
+}
+
+public enum ActivityLayer: String, Equatable, Sendable {
+    case execution
+    case requestFallback = "request_fallback"
+    case lifecycle
+}
+
+public enum ActivityCapability: String, Equatable, Sendable, Codable {
+    case exact
+    case derived
+    case unknown
+    case unavailable
+}
+
 public struct ActivityEvent: Equatable, Sendable {
     public var agent: String
     public var sessionID: String = ""
@@ -18,10 +37,17 @@ public struct ActivityEvent: Equatable, Sendable {
     public var skillName: String = ""
     public var skillConfidence: String = ""
     public var srcKey: String
+    public var eventKind: ActivityKind = .tool
+    public var eventLayer: ActivityLayer = .execution
 }
 
 public enum ActivityNormalizer {
-    public static let parserVersion = 1
+    public static let parserVersion = 2
+
+    public static func eventKind(for rawName: String) -> ActivityKind {
+        ["skill", "skill_view"].contains(rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            ? .skill : .tool
+    }
 
     public static func canonicalToolName(_ raw: String) -> String {
         let low = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -95,14 +121,19 @@ public enum ActivityNormalizer {
 }
 
 public let activityCapabilities: [String: [String: String]] = [
-    "claude": ["tools": "exact", "skills": "exact"],
-    "kimi": ["tools": "exact", "skills": "exact"],
-    "dsh": ["tools": "exact", "skills": "exact"],
-    "opencode": ["tools": "exact", "skills": "exact"],
-    "hermes": ["tools": "exact", "skills": "exact"],
-    "pi": ["tools": "exact", "skills": "unknown"],
-    "codex": ["tools": "exact+derived", "skills": "derived"],
+    "claude": ["tools": "exact", "skills": "exact", "agents": "unknown"],
+    "kimi": ["tools": "exact", "skills": "exact", "agents": "exact"],
+    "dsh": ["tools": "exact", "skills": "exact", "agents": "unknown"],
+    "opencode": ["tools": "exact", "skills": "exact", "agents": "unknown"],
+    "hermes": ["tools": "exact", "skills": "exact", "agents": "unknown"],
+    "pi": ["tools": "exact", "skills": "unknown", "agents": "unknown"],
+    "codex": ["tools": "exact", "skills": "derived", "agents": "exact"],
 ]
+
+public func activityCapability(agent: String, category: String) -> ActivityCapability {
+    ActivityCapability(rawValue: activityCapabilities[agent]?[category] ?? "unavailable")
+        ?? .unavailable
+}
 
 public func activityNeedsBackfill(_ cursor: [String: Any]) -> Bool {
     (cursor["activity_parser_version"] as? NSNumber)?.intValue != ActivityNormalizer.parserVersion
@@ -120,10 +151,13 @@ extension UsageStore {
                                startedAt: Int64? = nil, endedAt: Int64? = nil,
                                durationMs: Int64? = nil, status: String = "unknown",
                                sourceKind: String = "", confidence: String = "exact",
-                               arguments: Any? = nil, allowSkillPath: Bool = false)
+                               arguments: Any? = nil, allowSkillPath: Bool = false,
+                               eventKind: ActivityKind? = nil,
+                               eventLayer: ActivityLayer = .execution)
         throws -> (added: Int, updated: Int) {
         let skill = ActivityNormalizer.skill(rawName: rawName, arguments: arguments,
                                              allowPath: allowSkillPath)
+        let kind = eventKind ?? ActivityNormalizer.eventKind(for: rawName)
         return try putActivityEvent(ActivityEvent(
             agent: agent, sessionID: sessionID, turnID: turnID, rawName: rawName,
             canonicalName: ActivityNormalizer.canonicalToolName(rawName),
@@ -131,6 +165,7 @@ extension UsageStore {
             parentCallID: parentCallID, startedAt: startedAt, endedAt: endedAt,
             durationMs: durationMs, status: status, sourceKind: sourceKind,
             confidence: confidence, skillName: skill.name,
-            skillConfidence: skill.confidence, srcKey: srcKey))
+            skillConfidence: skill.confidence, srcKey: srcKey,
+            eventKind: kind, eventLayer: eventLayer))
     }
 }

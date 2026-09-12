@@ -298,30 +298,176 @@ def _rollout_events(path):
         yield {"key": None, "title": title, "sid": sid, "project": project}
 
 
+def _item_time(value, fallback):
+    parsed = _timestamp(value)
+    return parsed or fallback
+
+
+def _item_duration(item, started_at, ended_at):
+    duration = item.get("duration") if isinstance(item, dict) else None
+    if isinstance(duration, dict):
+        secs = duration.get("secs") or 0
+        nanos = duration.get("nanos") or 0
+        if isinstance(secs, int) and isinstance(nanos, int):
+            return max(0, secs * 1000 + nanos // 1_000_000)
+    if started_at is not None and ended_at is not None:
+        return max(0, int(ended_at) - int(started_at))
+    return None
+
+
+def _item_status(item):
+    status = activity.status_from(item.get("status"))
+    if status == "unknown" and isinstance(item.get("success"), bool):
+        status = "success" if item["success"] else "error"
+    if status == "unknown" and isinstance(item.get("exit_code"), int):
+        status = "success" if item["exit_code"] == 0 else "error"
+    return status if status != "unknown" else "success"
+
+
+def _command_name(item):
+    parsed = item.get("parsed_cmd") if isinstance(item.get("parsed_cmd"), list) else []
+    kinds = {str(row.get("type") or "").lower() for row in parsed if isinstance(row, dict)}
+    if len(kinds) == 1:
+        return {"read": "Read", "search": "Search", "list_files": "ListFiles"}.get(
+            next(iter(kinds)), "shell")
+    return "shell"
+
+
+def _completed_item(item):
+    """Return (raw name, event kind, parent call ID) for a completed item."""
+    item_type = str(item.get("type") or "")
+    if item_type == "CommandExecution":
+        return _command_name(item), "tool", ""
+    if item_type == "FileChange":
+        return "apply_patch", "tool", ""
+    if item_type == "McpToolCall":
+        server = str(item.get("server") or item.get("server_name") or "")
+        tool = str(item.get("tool") or item.get("tool_name")
+                   or item.get("actionName") or item.get("name") or "")
+        raw = f"mcp__{server}__{tool}" if server and tool else (tool or "mcp")
+        return raw, "tool", ""
+    if item_type == "DynamicToolCall":
+        return str(item.get("tool") or item.get("name") or "dynamic_tool"), "tool", ""
+    if item_type == "ImageView":
+        return "image_view", "tool", ""
+    if item_type == "WebSearch":
+        return "web_search", "tool", ""
+    if item_type == "Plan":
+        return "plan", "tool", ""
+    if item_type == "CollabAgentToolCall":
+        return (str(item.get("tool") or item.get("name") or "agent"), "agent",
+                str(item.get("sender_thread_id") or item.get("parent_call_id") or ""))
+    if item_type == "SubAgentActivity":
+        kind = str(item.get("kind") or "activity")
+        return f"subagent.{kind}", "agent", ""
+    # Preserve a completed item even when a newer Codex rollout introduces a
+    # structure we do not understand yet. The raw type is metadata, not the
+    # command or payload.
+    fallback = item_type.strip().lower().replace(" ", "_") or "unknown_item"
+    return f"codex.{fallback}", "tool", ""
+
+
+def _skill_names_from_item(item):
+    parsed = item.get("parsed_cmd") if isinstance(item.get("parsed_cmd"), list) else []
+    names = []
+    for row in parsed:
+        name, confidence = activity.skill_from("skill_file", row, allow_path=True)
+        if name and confidence == "derived" and name not in names:
+            names.append(name)
+    return names
+
+
+def _record_derived_skill(conn, path, sid, turn, parent_id, ts, name, index):
+    return db.put_activity_event(
+        conn, NAME, f"{os.path.realpath(path)}|skill|{parent_id or 'line'}|{index}",
+        session_id=sid, turn_id=turn, raw_name="skill_file",
+        canonical_name="skill.activate", call_id="", parent_call_id=parent_id,
+        started_at=ts, status="success", source_kind="codex_skill_file",
+        confidence="derived", skill_name=name, skill_confidence="derived",
+        event_kind="skill", event_layer="execution")
+
+
 def _scan_rollout_activity(conn, path):
+    """Parse structured Codex completion items, then unmatched request fallbacks.
+
+    Codex writes a model request in response_item and the actual execution in
+    event_msg/item_completed. The latter is authoritative; keeping the two
+    layers separate prevents one invocation from being counted twice.
+    """
+    entries = list(iter_jsonl(path))
     sid = os.path.basename(path)[:-6]
+    for _lineno, obj in entries:
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        if obj.get("type") == "session_meta":
+            sid = str(payload.get("id") or sid)
+            break
+
+    turns = {}
     turn = ""
-    added = updated = 0
-    for lineno, obj in iter_jsonl(path):
-        if not isinstance(obj, dict):
-            continue
+    completed_ids = set()
+    for lineno, obj in entries:
         payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
         kind = obj.get("type")
-        if kind == "session_meta":
-            sid = str(payload.get("id") or sid)
-            continue
         if kind == "turn_context":
             turn = str(payload.get("turn_id") or turn)
-            continue
-        if kind == "event_msg" and payload.get("type") == "task_started":
+        elif kind == "event_msg" and payload.get("type") == "task_started":
             turn = str(payload.get("turn_id") or turn)
+        event_turn = str(payload.get("turn_id") or obj.get("turn_id") or turn)
+        turns[lineno] = event_turn
+        if kind == "event_msg" and payload.get("type") == "item_completed":
+            item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+            item_id = str(item.get("id") or payload.get("item_id") or "")
+            if item_id:
+                completed_ids.add(item_id)
+            for key in ("call_id", "callId"):
+                if item.get(key):
+                    completed_ids.add(str(item[key]))
+
+    added = updated = 0
+    for lineno, obj in entries:
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        if obj.get("type") != "event_msg" or payload.get("type") != "item_completed":
             continue
-        if kind != "response_item":
+        item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        raw_name, event_kind, parent_from_item = _completed_item(item)
+        if not raw_name:
+            continue
+        item_id = str(item.get("id") or payload.get("item_id") or lineno)
+        base_ts = _timestamp(obj.get("timestamp")) or None
+        started = _item_time(payload.get("started_at_ms"), base_ts)
+        ended = _item_time(payload.get("completed_at_ms"), base_ts)
+        started = started or None
+        ended = ended or None
+        call_id = str(item.get("call_id") or item.get("callId") or item_id)
+        parent = parent_from_item or str(payload.get("parent_call_id") or "")
+        if not parent and event_kind == "agent":
+            parent = str(payload.get("thread_id") or "")
+        change = activity.put(
+            conn, NAME, f"{os.path.realpath(path)}|execution|{item_id}", raw_name=raw_name,
+            session_id=sid, turn_id=turns.get(lineno, ""), call_id=call_id,
+            parent_call_id=parent, started_at=started, ended_at=ended,
+            duration_ms=_item_duration(item, started, ended), status=_item_status(item),
+            source_kind="codex_item_completed", confidence="exact", event_kind=event_kind,
+            event_layer="execution")
+        added += change["added"]
+        updated += change["updated"]
+        for index, skill_name in enumerate(_skill_names_from_item(item)):
+            change = _record_derived_skill(
+                conn, path, sid, turns.get(lineno, ""), item_id, started, skill_name, index)
+            added += change["added"]
+            updated += change["updated"]
+
+    for lineno, obj in entries:
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        if obj.get("type") != "response_item":
             continue
         item_type = payload.get("type")
         ts = _timestamp(obj.get("timestamp")) or None
-        call_id = str(payload.get("call_id") or payload.get("id") or "")
+        call_id = str(payload.get("call_id") or payload.get("callId") or payload.get("id") or "")
+        response_id = str(payload.get("id") or call_id or lineno)
         if item_type in _TOOL_CALL_TYPES:
+            if response_id in completed_ids or call_id in completed_ids:
+                continue
             raw_name = payload.get("name")
             if not raw_name:
                 if item_type in ("local_shell_call", "shell_call"):
@@ -332,25 +478,16 @@ def _scan_rollout_activity(conn, path):
                     raw_name = "computer"
             if not raw_name:
                 continue
-            arguments = payload.get("arguments")
-            if arguments is None:
-                arguments = payload.get("input") if "input" in payload else payload.get("action")
-            source_key = f"{os.path.realpath(path)}|response|{payload.get('id') or call_id or lineno}"
+            is_skill = str(raw_name).strip().lower() in ("skill", "skill_view")
             change = activity.put(
-                conn, NAME, source_key, raw_name=str(raw_name), session_id=sid,
-                turn_id=turn, call_id=call_id, started_at=ts,
-                source_kind="codex_rollout", arguments=arguments, allow_skill_path=True)
+                conn, NAME, f"{os.path.realpath(path)}|request|{response_id}",
+                raw_name=str(raw_name), session_id=sid, turn_id=turns.get(lineno, ""),
+                call_id=call_id, started_at=ts, source_kind="codex_request_fallback",
+                confidence="exact" if is_skill else "derived",
+                event_kind="skill" if is_skill else "tool",
+                event_layer="execution" if is_skill else "request_fallback")
             added += change["added"]
             updated += change["updated"]
-            if str(raw_name) == "exec" and isinstance(arguments, str):
-                for index, inner in enumerate(activity.inferred_codex_tools(arguments)):
-                    child = activity.put(
-                        conn, NAME, f"{source_key}|inner|{index}", raw_name=inner,
-                        session_id=sid, turn_id=turn, parent_call_id=call_id,
-                        started_at=ts, source_kind="codex_exec_payload",
-                        confidence="derived")
-                    added += child["added"]
-                    updated += child["updated"]
         elif item_type in _TOOL_OUTPUT_TYPES:
             status = activity.status_from(payload.get("status"))
             output = payload.get("output")

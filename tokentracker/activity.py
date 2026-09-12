@@ -6,7 +6,7 @@ import re
 
 from . import db
 
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 _SKILL_PATH = re.compile(r"(?:^|[/\\])([^/\\]+)[/\\]SKILL\.md(?:$|[\s'\"])", re.I)
 _INNER_TOOL = re.compile(r"(?:await\s+)?tools\.([A-Za-z_$][\w$]*)\s*\(")
 _JS_HELPERS = {"map", "filter", "reduce", "foreach", "find", "some", "every", "sort"}
@@ -63,14 +63,17 @@ def status_from(value) -> str:
 def put(conn, agent: str, src_key: str, *, raw_name: str, session_id="", turn_id="",
         call_id="", parent_call_id="", started_at=None, ended_at=None, duration_ms=None,
         status="unknown", source_kind="", confidence="exact", arguments=None,
-        allow_skill_path=False) -> dict:
+        allow_skill_path=False, event_kind=None, event_layer="execution") -> dict:
     skill_name, skill_confidence = skill_from(raw_name, arguments, allow_path=allow_skill_path)
+    if event_kind is None:
+        event_kind = "skill" if raw_name.strip().lower() in ("skill", "skill_view") else "tool"
     return db.put_activity_event(
         conn, agent, src_key, session_id=session_id, turn_id=turn_id,
         raw_name=raw_name, namespace=namespace(raw_name), call_id=str(call_id or ""),
         parent_call_id=str(parent_call_id or ""), started_at=started_at, ended_at=ended_at,
         duration_ms=duration_ms, status=status, source_kind=source_kind,
-        confidence=confidence, skill_name=skill_name, skill_confidence=skill_confidence)
+        confidence=confidence, skill_name=skill_name, skill_confidence=skill_confidence,
+        event_kind=event_kind, event_layer=event_layer)
 
 
 def inferred_codex_tools(script: str) -> list[str]:

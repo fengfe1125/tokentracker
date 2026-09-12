@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 3
+    public static let schemaVersion: Int32 = 4
     public static let tokenColumns = ["input", "output", "cache_read", "cache_write"]
     public static let tokensExpr = "(input+output+cache_read+cache_write)"
 
@@ -52,6 +52,8 @@ public final class UsageStore {
         id INTEGER PRIMARY KEY, agent TEXT NOT NULL,
         session_id TEXT NOT NULL DEFAULT '', turn_id TEXT NOT NULL DEFAULT '',
         raw_name TEXT NOT NULL, canonical_name TEXT NOT NULL,
+        event_kind TEXT NOT NULL DEFAULT 'tool',
+        event_layer TEXT NOT NULL DEFAULT 'execution',
         namespace TEXT NOT NULL DEFAULT '', call_id TEXT NOT NULL DEFAULT '',
         parent_call_id TEXT NOT NULL DEFAULT '', started_at INTEGER, ended_at INTEGER,
         duration_ms INTEGER, status TEXT NOT NULL DEFAULT 'unknown',
@@ -134,6 +136,32 @@ public final class UsageStore {
                 let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { _ = try conn.execute(trimmed) }
             }
+            if version < 4 {
+                let columns = Set(try conn.query("PRAGMA table_info(agent_activity_events)")
+                    .map { $0.string("name") })
+                if !columns.contains("event_kind") {
+                    _ = try conn.execute(
+                        "ALTER TABLE agent_activity_events ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'tool'")
+                }
+                if !columns.contains("event_layer") {
+                    _ = try conn.execute(
+                        "ALTER TABLE agent_activity_events ADD COLUMN event_layer TEXT NOT NULL DEFAULT 'execution'")
+                }
+                _ = try conn.execute("""
+                    UPDATE agent_activity_events
+                    SET event_kind=CASE WHEN lower(raw_name) IN ('skill','skill_view')
+                                        OR (skill_confidence='exact' AND skill_name!='')
+                                        THEN 'skill' ELSE 'tool' END,
+                        event_layer=CASE WHEN agent='codex'
+                                          AND source_kind IN ('codex_rollout','codex_exec_payload')
+                                          THEN 'request_fallback' ELSE 'execution' END
+                    """)
+            }
+            // v3 tables do not have event_kind until the ALTER block above;
+            // create the new index only after both columns exist.
+            _ = try conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_activity_kind_time "
+                    + "ON agent_activity_events(event_kind, started_at)")
             if legacy && version < 1 {
                 let prices = priceTableForMigration
                 for row in try conn.query(
@@ -184,9 +212,10 @@ public final class UsageStore {
             "duration_ms", "status", "source_kind", "confidence", "skill_name",
             "skill_confidence", "src_key",
         ]
+        let expectedV4 = expected.union(["event_kind", "event_layer"])
         let columns = Set(try conn.query("PRAGMA table_info(agent_activity_events)")
             .map { $0.string("name") })
-        guard columns == expected else {
+        guard columns == expected || columns == expectedV4 else {
             throw SQLiteError(message: "Existing agent_activity_events schema is incompatible")
         }
         var hasIdentityConstraint = false
@@ -241,37 +270,51 @@ public final class UsageStore {
         guard ["success", "error", "denied", "unknown"].contains(event.status),
               ["exact", "derived"].contains(event.confidence),
               event.skillConfidence.isEmpty || ["exact", "derived"].contains(event.skillConfidence),
+              ["tool", "skill", "agent"].contains(event.eventKind.rawValue),
+              ["execution", "request_fallback", "lifecycle"].contains(event.eventLayer.rawValue),
               !event.agent.isEmpty, !event.srcKey.isEmpty, !event.rawName.isEmpty else {
             throw SQLiteError(message: "Invalid activity event")
         }
         let before = try conn.queryOne(
-            "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+            "SELECT status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
             [event.agent, event.srcKey])
         _ = try conn.execute("""
             INSERT INTO agent_activity_events (
-              agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,parent_call_id,
+              agent,session_id,turn_id,raw_name,canonical_name,event_kind,event_layer,namespace,call_id,parent_call_id,
               started_at,ended_at,duration_ms,status,source_kind,confidence,
               skill_name,skill_confidence,src_key
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(agent,src_key) DO UPDATE SET
               session_id=CASE WHEN excluded.session_id!='' THEN excluded.session_id ELSE session_id END,
               turn_id=CASE WHEN excluded.turn_id!='' THEN excluded.turn_id ELSE turn_id END,
+              event_kind=excluded.event_kind,
+              event_layer=excluded.event_layer,
               ended_at=COALESCE(excluded.ended_at,ended_at),
               duration_ms=COALESCE(excluded.duration_ms,duration_ms),
               status=CASE WHEN excluded.status!='unknown' THEN excluded.status ELSE status END,
               skill_name=CASE WHEN excluded.skill_name!='' THEN excluded.skill_name ELSE skill_name END,
               skill_confidence=CASE WHEN excluded.skill_confidence!='' THEN excluded.skill_confidence ELSE skill_confidence END
             """, [event.agent, event.sessionID, event.turnID, event.rawName, event.canonicalName,
-                   event.namespace, event.callID, event.parentCallID, event.startedAt as Any,
+                   event.eventKind.rawValue, event.eventLayer.rawValue, event.namespace, event.callID,
+                   event.parentCallID, event.startedAt as Any,
                    event.endedAt as Any, event.durationMs as Any, event.status, event.sourceKind,
                    event.confidence, event.skillName, event.skillConfidence, event.srcKey])
         let after = try conn.queryOne(
-            "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+            "SELECT status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
             [event.agent, event.srcKey])
         let changed = before != nil && (before?.string("status") != after?.string("status")
             || before?.intOrNil("ended_at") != after?.intOrNil("ended_at")
-            || before?.intOrNil("duration_ms") != after?.intOrNil("duration_ms"))
+            || before?.intOrNil("duration_ms") != after?.intOrNil("duration_ms")
+            || before?.string("event_kind") != after?.string("event_kind")
+            || before?.string("event_layer") != after?.string("event_layer"))
         return (before == nil ? 1 : 0, changed ? 1 : 0)
+    }
+
+    /// Activity metadata is rebuildable; token history remains untouched.
+    @discardableResult
+    public func clearActivityEvents(agent: String) throws -> Int {
+        guard !agent.isEmpty else { return 0 }
+        return try conn.execute("DELETE FROM agent_activity_events WHERE agent=?", [agent])
     }
 
     @discardableResult
@@ -745,6 +788,7 @@ public final class UsageStore {
         public var name: String
         public var calls: Int64
         public var sessions: Int64
+        public var agents: Int64 = 0
         public var success: Int64
         public var errors: Int64
         public var denied: Int64
@@ -755,10 +799,15 @@ public final class UsageStore {
     }
 
     private func activityFilter(rangeKey: String, agent: String?, confidence: String,
-                                sessionID: String?, skill: Bool) throws -> (String, [Any?]) {
+                                sessionID: String?, skill: Bool,
+                                eventKind: ActivityKind? = nil,
+                                status: String? = nil) throws -> (String, [Any?]) {
         guard ["day", "week", "month", "all"].contains(rangeKey),
               ["exact", "derived", "all"].contains(confidence) else {
             throw SQLiteError(message: "Invalid activity filter")
+        }
+        if let status, !["success", "error", "denied", "unknown"].contains(status) {
+            throw SQLiteError(message: "Invalid activity status")
         }
         var clauses: [String] = []
         var args: [Any?] = []
@@ -769,28 +818,40 @@ public final class UsageStore {
         }
         if let agent { clauses.append("agent=?"); args.append(agent) }
         if let sessionID { clauses.append("session_id=?"); args.append(sessionID) }
+        if let eventKind {
+            clauses.append("event_kind=?")
+            args.append(eventKind.rawValue)
+        }
+        if let status {
+            clauses.append("status=?")
+            args.append(status)
+        }
         if confidence != "all" {
             clauses.append((skill ? "skill_confidence" : "confidence") + "=?")
             args.append(confidence)
         }
-        if skill { clauses.append("skill_name!=''") }
+        if skill { clauses.append("event_kind='skill' AND skill_name!=''") }
         return (clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND "), args)
     }
 
     public func activitySummary(rangeKey: String = "all", agent: String? = nil,
                                 group: String = "tool", confidence: String = "all",
-                                sessionID: String? = nil) throws -> [ActivitySummaryRow] {
+                                sessionID: String? = nil,
+                                kind: ActivityKind? = nil) throws -> [ActivitySummaryRow] {
         guard ["agent", "tool", "skill"].contains(group) else {
             throw SQLiteError(message: "Invalid activity group")
         }
         let skill = group == "skill"
+        let defaultKind: ActivityKind? = group == "tool" ? .tool : (skill ? .skill : nil)
         let (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: agent,
-            confidence: confidence, sessionID: sessionID, skill: skill)
+            confidence: confidence, sessionID: sessionID, skill: skill,
+            eventKind: kind ?? defaultKind)
         let name = group == "agent" ? "agent"
             : (skill ? "skill_name" : (agent == nil ? "canonical_name" : "raw_name"))
         let evidence = skill ? "skill_confidence" : "confidence"
         return try conn.query("""
             SELECT \(name) AS name,COUNT(*) AS calls,COUNT(DISTINCT session_id) AS sessions,
+              COUNT(DISTINCT agent) AS agents,
               SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
               SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
               SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
@@ -802,7 +863,8 @@ public final class UsageStore {
             GROUP BY \(name) ORDER BY calls DESC,name
             """, args).map { row in
                 ActivitySummaryRow(name: row.string("name"), calls: row.int("calls"),
-                    sessions: row.int("sessions"), success: row.int("success"),
+                    sessions: row.int("sessions"), agents: row.int("agents"),
+                    success: row.int("success"),
                     errors: row.int("error"), denied: row.int("denied"),
                     unknown: row.int("unknown"), exact: row.int("exact"),
                     derived: row.int("derived"), lastUsed: row.int("last_used"))
@@ -813,10 +875,11 @@ public final class UsageStore {
     public func activityMatrixSummary(rangeKey: String = "all", confidence: String = "all") throws
         -> [String: [ActivitySummaryRow]] {
         let (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: nil,
-            confidence: confidence, sessionID: nil, skill: false)
+            confidence: confidence, sessionID: nil, skill: false, eventKind: .tool)
         let rows = try conn.query("""
             SELECT agent,canonical_name AS name,COUNT(*) AS calls,
               COUNT(DISTINCT session_id) AS sessions,
+              COUNT(DISTINCT agent) AS agents,
               SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
               SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
               SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
@@ -831,7 +894,8 @@ public final class UsageStore {
         for row in rows {
             matrix[row.string("agent"), default: []].append(ActivitySummaryRow(
                 name: row.string("name"), calls: row.int("calls"),
-                sessions: row.int("sessions"), success: row.int("success"),
+                sessions: row.int("sessions"), agents: row.int("agents"),
+                success: row.int("success"),
                 errors: row.int("error"), denied: row.int("denied"),
                 unknown: row.int("unknown"), exact: row.int("exact"),
                 derived: row.int("derived"), lastUsed: row.int("last_used")))
@@ -839,17 +903,58 @@ public final class UsageStore {
         return matrix
     }
 
+    public struct ActivityTimelinePage: Equatable, Sendable {
+        public var rows: [ActivityEvent]
+        public var nextBefore: Int64?
+        public var nextBeforeID: Int64?
+
+        public init(rows: [ActivityEvent] = [], nextBefore: Int64? = nil,
+                    nextBeforeID: Int64? = nil) {
+            self.rows = rows
+            self.nextBefore = nextBefore
+            self.nextBeforeID = nextBeforeID
+        }
+    }
+
     public func activityTimeline(rangeKey: String = "all", agent: String? = nil, sessionID: String? = nil,
                                  confidence: String = "all", limit: Int = 200,
-                                 before: Int64? = nil) throws -> [ActivityEvent] {
+                                 before: Int64? = nil, beforeID: Int64? = nil,
+                                 kind: ActivityKind? = nil, query: String? = nil,
+                                 status: String? = nil) throws -> [ActivityEvent] {
+        try activityTimelinePage(rangeKey: rangeKey, agent: agent, sessionID: sessionID,
+                                 confidence: confidence, limit: limit, before: before,
+                                 beforeID: beforeID, kind: kind, query: query, status: status).rows
+    }
+
+    public func activityTimelinePage(rangeKey: String = "all", agent: String? = nil,
+                                     sessionID: String? = nil, confidence: String = "all",
+                                     limit: Int = 200, before: Int64? = nil,
+                                     beforeID: Int64? = nil,
+                                     kind: ActivityKind? = nil,
+                                     query: String? = nil,
+                                     status: String? = nil) throws -> ActivityTimelinePage {
         var (whereSQL, args) = try activityFilter(rangeKey: rangeKey, agent: agent,
-            confidence: confidence, sessionID: sessionID, skill: false)
-        if let before {
-            whereSQL += " AND COALESCE(started_at,ended_at,0)<?"
-            args.append(before)
+            confidence: confidence, sessionID: sessionID, skill: kind == .skill,
+            eventKind: kind, status: status)
+        if let query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pattern = "%\(trimmed)%"
+            whereSQL += " AND (agent LIKE ? OR session_id LIKE ? OR raw_name LIKE ? OR "
+                + "canonical_name LIKE ? OR skill_name LIKE ?)"
+            args.append(contentsOf: Array(repeating: pattern, count: 5))
         }
-        args.append(max(1, min(limit, 1000)))
-        return try conn.query("SELECT * FROM agent_activity_events WHERE \(whereSQL) "
+        if let before {
+            if let beforeID {
+                whereSQL += " AND (COALESCE(started_at,ended_at,0)<? OR (COALESCE(started_at,ended_at,0)=? AND id<?))"
+                args.append(contentsOf: [before, before, beforeID])
+            } else {
+                whereSQL += " AND COALESCE(started_at,ended_at,0)<?"
+                args.append(before)
+            }
+        }
+        let safeLimit = max(1, min(limit, 1000))
+        args.append(safeLimit)
+        let rows = try conn.query("SELECT * FROM agent_activity_events WHERE \(whereSQL) "
             + "ORDER BY COALESCE(started_at,ended_at,0) DESC,id DESC LIMIT ?", args).map { row in
             ActivityEvent(agent: row.string("agent"), sessionID: row.string("session_id"),
                 turnID: row.string("turn_id"), rawName: row.string("raw_name"),
@@ -859,8 +964,17 @@ public final class UsageStore {
                 durationMs: row.intOrNil("duration_ms"), status: row.string("status"),
                 sourceKind: row.string("source_kind"), confidence: row.string("confidence"),
                 skillName: row.string("skill_name"), skillConfidence: row.string("skill_confidence"),
-                srcKey: row.string("src_key"))
+                srcKey: row.string("src_key"),
+                eventKind: ActivityKind(rawValue: row.string("event_kind")) ?? .tool,
+                eventLayer: ActivityLayer(rawValue: row.string("event_layer")) ?? .execution)
         }
+        guard rows.count == safeLimit, let last = rows.last else {
+            return ActivityTimelinePage(rows: rows)
+        }
+        let timestamp = last.startedAt ?? last.endedAt ?? 0
+        let id = try conn.queryOne("SELECT id FROM agent_activity_events WHERE agent=? AND src_key=?",
+                                   [last.agent, last.srcKey])?.int("id")
+        return ActivityTimelinePage(rows: rows, nextBefore: timestamp, nextBeforeID: id)
     }
 
     public struct ObservationInterval: Equatable, Sendable {

@@ -13,6 +13,13 @@ struct ActivityRefreshRequest: Equatable, Sendable {
     let filter: ActivityFilter
 }
 
+struct ActivityAgentCoverage: Equatable, Sendable {
+    var capability: ActivityCapability
+    var calls: Int64
+    var exact: Int64
+    var derived: Int64
+}
+
 struct ActivityDashboardSnapshot: Equatable, Sendable {
     var exactRows: [UsageStore.ActivitySummaryRow] = []
     var derivedRows: [UsageStore.ActivitySummaryRow] = []
@@ -21,6 +28,7 @@ struct ActivityDashboardSnapshot: Equatable, Sendable {
     var exactSkillRows: [UsageStore.ActivitySummaryRow] = []
     var timelineRows: [ActivityEvent] = []
     var matrixRows: [String: [UsageStore.ActivitySummaryRow]] = [:]
+    var skillCoverage: [String: ActivityAgentCoverage] = [:]
     var lastScan: ScanSchedulerStatus.Last?
 
     static let empty = ActivityDashboardSnapshot()
@@ -31,7 +39,7 @@ struct ActivityDashboardSnapshot: Equatable, Sendable {
 final class ActivityPageState: ObservableObject {
     @Published var range = "week"
     @Published var agent: String?
-    @Published var confidence = "exact"
+    @Published var confidence = "all"
     @Published private(set) var snapshot = ActivityDashboardSnapshot.empty
     private(set) var isLoading = false
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 
+from .. import activity, db
+
 ALL = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"]
 
 
@@ -42,7 +44,14 @@ def run_all(conn, prices, tools=None, full: bool = False) -> dict:
             # connections, not only the in-process scheduler.
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")
-            results[name] = mod.scan(conn, prices, full=full)
+            cursor = db.get_scan_cursor(conn, name)
+            effective_full = full
+            if activity.needs_backfill(cursor):
+                # Activity metadata is rebuildable.  Reparse it from the
+                # source at the new parser version without touching tokens.
+                db.clear_activity_events(conn, name)
+                effective_full = True
+            results[name] = mod.scan(conn, prices, full=effective_full)
             if results[name].get("error"):
                 conn.rollback()
             else:

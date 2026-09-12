@@ -1,6 +1,6 @@
 # Agent 工具与 Skill 使用统计可行性调研
 
-> 日期：2026-09-08
+> 调研日期：2026-09-08；Agent Activity v2 落地：2026-09-12
 >
 > 范围：TokenTracker 已支持的 Claude Code、Kimi Code、Codex、DSH、Pi、opencode、Hermes Agent。
 >
@@ -15,9 +15,19 @@
 - **应将“Skill 被发现/可用”、“Skill 文件被加载”、“Skill 被实际采用”分开。** Agent Skills 规范只定义目录和渐进加载，没有统一的运行时 invocation telemetry。
 - **建议 MVP 不先装 hook、不代理 MCP、不保存工具参数/输出正文。** 先被动解析现有本地日志，只存名称、时间、状态、关联 ID 和来源置信度，隐私风险和对 agent 行为的影响最小。
 
-## 当前 TokenTracker 的差距
+## v2 落地结果
 
-当前 schema v2 只有 `usage_events`、累计快照、扫描游标和会话标题，没有 agent activity 表（`tokentracker/db.py:19-50`）。
+Agent Activity v2 已在 Python/Swift 共用数据库和 macOS SwiftUI 页面落地：
+
+- schema v4 增加 `event_kind`（tool/skill/agent）与 `event_layer`（execution/request_fallback/lifecycle）；旧 v3 库会备份、事务迁移，活动解析器版本变化只重建对应 Agent 的活动元数据，不删除 Token ledger、会话标题或用户历史。
+- Codex 以 `event_msg.item_completed` 为权威事实源，按一次实际执行计数；`response_item` 只作为未确认 fallback，并保留未知完成结构；`SKILL.md` 读取只生成 `derived` Skill 事件。
+- Kimi 适配 `skill.activated` 与 `subagent.*`；所有 Agent 的 Skill 能力在页面显示为 exact/derived/unknown/unavailable，未知能力不显示成 0 次。
+- Activity 主页保留 Top 10/Top 7 概览并标注总数；独立详情窗口提供全量 Skill/Tool/Agent 时间线、状态/证据/Session/关键词筛选与 `before + beforeID` 分页。
+- 仍保持本地、被动、metadata-only：不保存 Prompt、原始参数、命令全文、Tool output 或主机路径。
+
+## v2 之前的差距
+
+以下是 v2 实施前的基线，保留在这里用于解释迁移动机；当前实现已由上节覆盖。
 
 现有扫描器也刻意只取 token/cost：
 
@@ -59,8 +69,10 @@ CREATE TABLE agent_activity_events (
     agent TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT '',
     turn_id TEXT NOT NULL DEFAULT '',
-    event_kind TEXT NOT NULL,       -- tool_call | skill_use
-    name TEXT NOT NULL,
+    raw_name TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    event_kind TEXT NOT NULL,       -- tool | skill | agent
+    event_layer TEXT NOT NULL,      -- execution | request_fallback | lifecycle
     namespace TEXT NOT NULL DEFAULT '', -- MCP server / built-in / skill provider
     call_id TEXT NOT NULL DEFAULT '',
     parent_call_id TEXT NOT NULL DEFAULT '',
@@ -70,14 +82,12 @@ CREATE TABLE agent_activity_events (
     status TEXT NOT NULL DEFAULT 'unknown', -- success | error | denied | unknown
     source_kind TEXT NOT NULL,
     confidence TEXT NOT NULL DEFAULT 'exact', -- exact | derived
-    input_hash TEXT NOT NULL DEFAULT '',
-    output_hash TEXT NOT NULL DEFAULT '',
     src_key TEXT NOT NULL,
     UNIQUE(agent, src_key)
 );
 ```
 
-默认不存原始 arguments/result，只存 hash 用于去重和追查。原始参数可包含命令、文件路径、凭据或用户数据；OpenTelemetry 规范也把 tool arguments/result 标为 opt-in 且明确警告敏感性。
+默认不存原始 arguments/result，也不存 hash；只保存规范化名称、关联 ID、时间、状态和证据等级。原始参数可包含命令、文件路径、凭据或用户数据；OpenTelemetry 规范也把 tool arguments/result 标为 opt-in 且明确警告敏感性。
 
 ### 建议的归一化层
 
@@ -95,20 +105,21 @@ CREATE TABLE agent_activity_events (
 - 为七个平台各制作一组脱敏 fixture：单工具、并行工具、失败/拒绝、缺失结果、一次 skill、重复扫描。
 - 先用命令行导出 JSON 验证数字，暂不动 SwiftUI。
 
-### Phase 1：被动扫描 MVP
+### Phase 1：被动扫描 MVP（已完成）
 
-- schema v3 + `agent_activity_events`。
+- schema v4 + `agent_activity_events`，并完成 Python/Swift 差分契约。
 - 优先做 Claude、opencode、Kimi、DSH：字段最直接，tool 与 skill 都有精确事件。
 - 第二批做 Hermes、Pi、Codex；Codex 外层/inner tool 分层并保留 `derived` 标记。
 - CLI 增加 `tt activity --range week --group tool|skill|agent`。
 
-### Phase 2：可视化原型
+### Phase 2：可视化原型（已完成）
 
-按项目的 UI 习惯，先做单文件 HTML MVP，确认以下信息架构后再进 SwiftUI：
+当前直接在 SwiftUI 中提供以下信息架构：
 
 - 工具榜：调用数、成功/失败/未知、去重会话数、趋势。
 - Skill 榜：调用数、使用 agent、最近使用、`exact/derived/unknown` 徽标。
 - 会话详情：token/cost 与 tool/skill 时间线并排，不展示原始参数。
+- 独立 Agent Activity 详情窗口：全量记录、状态/证据/Session/关键词筛选、稳定游标分页和 Agent Skill 能力覆盖。
 
 ### Phase 3：可选实时采集
 

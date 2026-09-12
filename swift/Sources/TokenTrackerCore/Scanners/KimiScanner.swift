@@ -38,6 +38,17 @@ public struct KimiScanner: ScannerAdapter {
         return 0
     }
 
+    /// Extract only the public Skill identifier; event arguments/content never
+    /// enter the metadata store.
+    private func skillName(_ payload: [String: Any]) -> String {
+        var value: Any? = payload["skill"]
+        if let skill = value as? [String: Any] {
+            value = skill["name"] ?? skill["skillName"] ?? skill["id"]
+        }
+        return jsonIdentifier(payload["skillName"], payload["name"], value,
+                              payload["skill_name"])
+    }
+
     private func jsonlFiles(under base: String, matching predicate: (String) -> Bool) -> [String] {
         var out: [String] = []
         if let enumerator = FileManager.default.enumerator(atPath: base) {
@@ -71,7 +82,35 @@ public struct KimiScanner: ScannerAdapter {
                 let payload = envelope["payload"] as? [String: Any] ?? [:]
                 let eventType = envelope["type"] as? String ?? ""
                 let activityTS = parseTS(jsonOrAny(envelope["timestamp"], obj["time"]))
-                if kind == "event" && eventType == "tool.call.started" {
+                if kind == "event" && eventType == "skill.activated" {
+                    let name = skillName(payload)
+                    if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let callID = jsonIdentifier(payload["id"], payload["skillCallId"], obj["seq"])
+                        let change = try store.recordActivity(
+                            agent: self.name,
+                            srcKey: "\(sessionID)|skill|\(callID)", rawName: "Skill",
+                            sessionID: sessionID, turnID: payload["turnId"] as? String ?? "",
+                            callID: callID, startedAt: activityTS == 0 ? nil : activityTS,
+                            sourceKind: "kimi_skill_activated", confidence: "exact",
+                            arguments: ["skill": name], eventKind: .skill)
+                        outcome.activityAdded += change.added
+                        outcome.activityUpdated += change.updated
+                    }
+                } else if kind == "event" && eventType.hasPrefix("subagent.") {
+                    let callID = jsonIdentifier(payload["id"], payload["agentId"], obj["seq"])
+                    let parent = jsonOrString(payload["parentId"], payload["parentAgentId"])
+                    let change = try store.recordActivity(
+                        agent: self.name,
+                        srcKey: "\(sessionID)|agent|\(callID)",
+                        rawName: jsonOrString(payload["name"], eventType),
+                        sessionID: sessionID, turnID: payload["turnId"] as? String ?? "",
+                        callID: callID, parentCallID: parent,
+                        startedAt: activityTS == 0 ? nil : activityTS,
+                        sourceKind: "kimi_subagent", eventKind: .agent,
+                        eventLayer: .lifecycle)
+                    outcome.activityAdded += change.added
+                    outcome.activityUpdated += change.updated
+                } else if kind == "event" && eventType == "tool.call.started" {
                     let call = payload["toolCall"] as? [String: Any] ?? payload
                     let rawName = jsonOrString(call["name"], call["toolName"], call["tool"])
                     let callID = jsonOrString(call["id"], call["toolCallId"], payload["toolCallId"])

@@ -16,10 +16,12 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
+_ACTIVITY_KINDS = {"tool", "skill", "agent"}
+_ACTIVITY_LAYERS = {"execution", "request_fallback", "lifecycle"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_events (
     id INTEGER PRIMARY KEY, tool TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '',
@@ -55,6 +57,8 @@ CREATE TABLE IF NOT EXISTS agent_activity_events (
     turn_id TEXT NOT NULL DEFAULT '',
     raw_name TEXT NOT NULL,
     canonical_name TEXT NOT NULL,
+    event_kind TEXT NOT NULL DEFAULT 'tool',
+    event_layer TEXT NOT NULL DEFAULT 'execution',
     namespace TEXT NOT NULL DEFAULT '',
     call_id TEXT NOT NULL DEFAULT '',
     parent_call_id TEXT NOT NULL DEFAULT '',
@@ -91,8 +95,8 @@ def _upgrade(conn, path):
         backup_path = f"{path}.v{version}.backup-{time.time_ns()}.db"
         with closing(sqlite3.connect(backup_path)) as backup:
             conn.backup(backup)
-    if version < 3:
-        _validate_residual_activity_table(conn)
+        if version < 3:
+            _validate_residual_activity_table(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
         if legacy and version < 1:
@@ -107,6 +111,28 @@ def _upgrade(conn, path):
         for statement in SCHEMA.split(";"):
             if statement.strip():
                 conn.execute(statement)
+        if version < 4:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_activity_events)")}
+            if "event_kind" not in columns:
+                conn.execute("ALTER TABLE agent_activity_events ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'tool'")
+            if "event_layer" not in columns:
+                conn.execute("ALTER TABLE agent_activity_events ADD COLUMN event_layer TEXT NOT NULL DEFAULT 'execution'")
+            # Rows created by v3's Codex parser were request observations, not
+            # authoritative executions. Exact Skill tool rows are the only
+            # legacy rows that can safely be reclassified without reparsing.
+            conn.execute("""
+                UPDATE agent_activity_events
+                SET event_kind=CASE WHEN lower(raw_name) IN ('skill','skill_view')
+                                    OR (skill_confidence='exact' AND skill_name!='')
+                                    THEN 'skill' ELSE 'tool' END,
+                    event_layer=CASE WHEN agent='codex'
+                                      AND source_kind IN ('codex_rollout','codex_exec_payload')
+                                      THEN 'request_fallback' ELSE 'execution' END
+            """)
+        # v3 tables do not have event_kind yet, so this must run after the
+        # ALTER TABLE block above. New databases take the same path.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_kind_time "
+                     "ON agent_activity_events(event_kind, started_at)")
         if legacy and version < 1:
             from .pricing import cost_for, load_prices
             prices = load_prices()
@@ -143,8 +169,9 @@ def _validate_residual_activity_table(conn):
         "duration_ms", "status", "source_kind", "confidence", "skill_name",
         "skill_confidence", "src_key",
     }
+    expected_v4 = expected | {"event_kind", "event_layer"}
     columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_activity_events)")}
-    if columns != expected:
+    if columns not in (expected, expected_v4):
         raise RuntimeError("Existing agent_activity_events schema is incompatible")
     has_identity = False
     for index in conn.execute("PRAGMA index_list(agent_activity_events)"):
@@ -210,7 +237,8 @@ def put_activity_event(conn, agent: str, src_key: str, *, session_id: str = "",
                        started_at: int | None = None, ended_at: int | None = None,
                        duration_ms: int | None = None, status: str = "unknown",
                        source_kind: str = "", confidence: str = "exact",
-                       skill_name: str = "", skill_confidence: str = "") -> dict:
+                       skill_name: str = "", skill_confidence: str = "",
+                       event_kind: str | None = None, event_layer: str = "execution") -> dict:
     """Insert one metadata-only tool invocation, or enrich its result fields."""
     if status not in _ACTIVITY_STATUSES:
         raise ValueError(f"Unknown activity status: {status}")
@@ -218,34 +246,50 @@ def put_activity_event(conn, agent: str, src_key: str, *, session_id: str = "",
         raise ValueError(f"Unknown activity confidence: {confidence}")
     if skill_confidence and skill_confidence not in _ACTIVITY_CONFIDENCE:
         raise ValueError(f"Unknown skill confidence: {skill_confidence}")
+    event_kind = event_kind or (
+        "skill" if raw_name.strip().lower() in ("skill", "skill_view") else "tool")
+    if event_kind not in _ACTIVITY_KINDS:
+        raise ValueError(f"Unknown activity kind: {event_kind}")
+    if event_layer not in _ACTIVITY_LAYERS:
+        raise ValueError(f"Unknown activity layer: {event_layer}")
     if not agent or not src_key or not raw_name:
         raise ValueError("agent, src_key and raw_name are required")
     canonical_name = canonical_name or canonical_tool_name(raw_name)
     before = conn.execute(
-        "SELECT id,status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+        "SELECT id,status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
         (agent, src_key)).fetchone()
     conn.execute("""
         INSERT INTO agent_activity_events (
-            agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,parent_call_id,
+            agent,session_id,turn_id,raw_name,canonical_name,event_kind,event_layer,namespace,call_id,parent_call_id,
             started_at,ended_at,duration_ms,status,source_kind,confidence,
             skill_name,skill_confidence,src_key
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(agent,src_key) DO UPDATE SET
             session_id=CASE WHEN excluded.session_id!='' THEN excluded.session_id ELSE session_id END,
             turn_id=CASE WHEN excluded.turn_id!='' THEN excluded.turn_id ELSE turn_id END,
+            event_kind=excluded.event_kind,
+            event_layer=excluded.event_layer,
             ended_at=COALESCE(excluded.ended_at,ended_at),
             duration_ms=COALESCE(excluded.duration_ms,duration_ms),
             status=CASE WHEN excluded.status!='unknown' THEN excluded.status ELSE status END,
             skill_name=CASE WHEN excluded.skill_name!='' THEN excluded.skill_name ELSE skill_name END,
             skill_confidence=CASE WHEN excluded.skill_confidence!='' THEN excluded.skill_confidence ELSE skill_confidence END
-        """, (agent, session_id, turn_id, raw_name, canonical_name, namespace, call_id,
+        """, (agent, session_id, turn_id, raw_name, canonical_name, event_kind, event_layer,
+              namespace, call_id,
               parent_call_id, started_at, ended_at, duration_ms, status, source_kind,
               confidence, skill_name, skill_confidence, src_key))
     after = conn.execute(
-        "SELECT status,ended_at,duration_ms FROM agent_activity_events WHERE agent=? AND src_key=?",
+        "SELECT status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
         (agent, src_key)).fetchone()
     return {"added": 0 if before else 1,
             "updated": 1 if before and tuple(before)[1:] != tuple(after) else 0}
+
+
+def clear_activity_events(conn, agent: str) -> int:
+    """Remove only rebuildable activity metadata for one Agent."""
+    if not agent:
+        return 0
+    return conn.execute("DELETE FROM agent_activity_events WHERE agent=?", (agent,)).rowcount
 
 
 def complete_activity_event(conn, agent: str, call_id: str, *, status="success",
@@ -598,11 +642,13 @@ def sessions(conn, range_key="all", tool=None, limit=300, q=None):
 
 
 def _activity_filter(range_key="all", agent=None, confidence="all", session_id=None,
-                     *, skill=False):
+                     *, skill=False, event_kind=None, query=None, status=None):
     if range_key not in ("day", "week", "month", "all"):
         raise ValueError("invalid range")
     if confidence not in ("exact", "derived", "all"):
         raise ValueError("invalid confidence")
+    if status is not None and status not in _ACTIVITY_STATUSES:
+        raise ValueError("invalid activity status")
     where, args = [], []
     if range_key != "all":
         lo, hi = _range_bounds(range_key)
@@ -614,11 +660,24 @@ def _activity_filter(range_key="all", agent=None, confidence="all", session_id=N
     if session_id is not None:
         where.append("session_id=?")
         args.append(session_id)
+    if query and query.strip():
+        pattern = f"%{query.strip()}%"
+        where.append("(agent LIKE ? OR session_id LIKE ? OR raw_name LIKE ? OR "
+                    "canonical_name LIKE ? OR skill_name LIKE ?)")
+        args.extend([pattern] * 5)
+    if event_kind is not None:
+        if event_kind not in _ACTIVITY_KINDS:
+            raise ValueError("invalid activity kind")
+        where.append("event_kind=?")
+        args.append(event_kind)
+    if status is not None:
+        where.append("status=?")
+        args.append(status)
     if confidence != "all":
         where.append(("skill_confidence" if skill else "confidence") + "=?")
         args.append(confidence)
     if skill:
-        where.append("skill_name!=''")
+        where.append("event_kind='skill' AND skill_name!=''")
     return " AND ".join(where) or "1=1", args
 
 
@@ -627,7 +686,11 @@ def activity_summary(conn, range_key="all", agent=None, group="tool", confidence
     if group not in ("agent", "tool", "skill"):
         raise ValueError("invalid group")
     skill = group == "skill"
-    where, args = _activity_filter(range_key, agent, confidence, session_id, skill=skill)
+    # "agent" remains the provider grouping used by the dashboard; only the
+    # tool and Skill rankings restrict the event kind.
+    kind = {"agent": None, "tool": "tool", "skill": "skill"}[group]
+    where, args = _activity_filter(range_key, agent, confidence, session_id,
+                                    skill=skill, event_kind=kind)
     # A single Agent keeps its native spelling. Cross-Agent totals use the
     # canonical name so aliases such as Bash/shell are not split.
     name = {"agent": "agent", "tool": "raw_name" if agent else "canonical_name",
@@ -636,6 +699,7 @@ def activity_summary(conn, range_key="all", agent=None, group="tool", confidence
     sql = f"""
         SELECT {name} AS name,COUNT(*) AS calls,
           COUNT(DISTINCT session_id) AS sessions,
+          COUNT(DISTINCT agent) AS agents,
           SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
           SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error,
           SUM(CASE WHEN status='denied' THEN 1 ELSE 0 END) AS denied,
@@ -650,8 +714,10 @@ def activity_summary(conn, range_key="all", agent=None, group="tool", confidence
 
 
 def activity_timeline(conn, *, range_key="all", agent=None, session_id=None, confidence="all",
-                      limit=200, before=None, before_id=None):
-    where, args = _activity_filter(range_key, agent, confidence, session_id)
+                      limit=200, before=None, before_id=None, event_kind=None, query=None,
+                      status=None):
+    where, args = _activity_filter(range_key, agent, confidence, session_id,
+                                    event_kind=event_kind, query=query, status=status)
     if before is not None:
         if before_id is None:
             where += " AND COALESCE(started_at,ended_at,0)<?"
@@ -673,11 +739,11 @@ def activity_timeline(conn, *, range_key="all", agent=None, session_id=None, con
 
 def activity_capabilities():
     return {
-        "claude": {"tools": "exact", "skills": "exact"},
-        "kimi": {"tools": "exact", "skills": "exact"},
-        "dsh": {"tools": "exact", "skills": "exact"},
-        "opencode": {"tools": "exact", "skills": "exact"},
-        "hermes": {"tools": "exact", "skills": "exact"},
-        "pi": {"tools": "exact", "skills": "unknown"},
-        "codex": {"tools": "exact+derived", "skills": "derived"},
+        "claude": {"tools": "exact", "skills": "exact", "agents": "unknown"},
+        "kimi": {"tools": "exact", "skills": "exact", "agents": "exact"},
+        "dsh": {"tools": "exact", "skills": "exact", "agents": "unknown"},
+        "opencode": {"tools": "exact", "skills": "exact", "agents": "unknown"},
+        "hermes": {"tools": "exact", "skills": "exact", "agents": "unknown"},
+        "pi": {"tools": "exact", "skills": "unknown", "agents": "unknown"},
+        "codex": {"tools": "exact", "skills": "derived", "agents": "exact"},
     }

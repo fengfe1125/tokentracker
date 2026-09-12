@@ -82,6 +82,7 @@ final class DifferentialScanTests: XCTestCase {
         try store.conn.query(
             "SELECT agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,"
                 + "parent_call_id,started_at,ended_at,duration_ms,status,source_kind,confidence,"
+                + "event_kind,event_layer,"
                 + "skill_name,skill_confidence,src_key FROM agent_activity_events ORDER BY agent,src_key"
         ).map { row in
             ExpectedActivity(agent: row.string("agent"), sessionID: row.string("session_id"),
@@ -91,6 +92,7 @@ final class DifferentialScanTests: XCTestCase {
                 startedAt: row.intOrNil("started_at"), endedAt: row.intOrNil("ended_at"),
                 durationMs: row.intOrNil("duration_ms"), status: row.string("status"),
                 sourceKind: row.string("source_kind"), confidence: row.string("confidence"),
+                eventKind: row.string("event_kind"), eventLayer: row.string("event_layer"),
                 skillName: row.string("skill_name"), skillConfidence: row.string("skill_confidence"),
                 srcKey: row.string("src_key"))
         }

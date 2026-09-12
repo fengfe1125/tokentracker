@@ -109,6 +109,39 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(try store.activityTimeline(rangeKey: "all").count, 2)
     }
 
+    func testKindFilterHasStableCursorAndDoesNotTruncateSkillSummary() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        for index in 0..<12 {
+            _ = try store.recordActivity(
+                agent: "claude", srcKey: "skill-\(index)", rawName: "Skill",
+                sessionID: "session-\(index % 2)", callID: "skill-call-\(index)",
+                startedAt: 100, status: "success",
+                arguments: ["skill": "skill-\(index)"])
+        }
+        _ = try store.recordActivity(
+            agent: "codex", srcKey: "ordinary-tool", rawName: "exec", startedAt: 100,
+            arguments: ["path": "/skills/accidental/SKILL.md"], eventKind: .tool)
+
+        XCTAssertEqual(try store.activitySummary(group: "skill").count, 12)
+        XCTAssertEqual(try store.activitySummary(group: "tool").count, 1)
+        var page = try store.activityTimelinePage(
+            confidence: "all", limit: 5, kind: .skill)
+        var seen = page.rows
+        while let before = page.nextBefore {
+            page = try store.activityTimelinePage(
+                confidence: "all", limit: 5, before: before,
+                beforeID: page.nextBeforeID, kind: .skill)
+            seen.append(contentsOf: page.rows)
+        }
+        XCTAssertEqual(Set(seen.map(\.srcKey)).count, 12)
+        XCTAssertEqual(try store.activityTimelinePage(
+            confidence: "all", limit: 100, kind: .skill, query: "skill-11").rows
+            .map(\.skillName), ["skill-11"])
+        XCTAssertEqual(activityCapability(agent: "pi", category: "skills"), .unknown)
+        XCTAssertEqual(activityCapability(agent: "missing", category: "skills"), .unavailable)
+    }
+
     func testV2MarkerPreservesCompatibleResidualActivityRows() throws {
         let temp = try TempDir()
         do {
@@ -120,7 +153,7 @@ final class ActivityTests: XCTestCase {
         }
 
         let reopened = try temp.store()
-        XCTAssertEqual(try reopened.conn.scalarInt("PRAGMA user_version"), 3)
+        XCTAssertEqual(try reopened.conn.scalarInt("PRAGMA user_version"), 4)
         XCTAssertEqual(try reopened.activityTimeline().map(\.srcKey), ["kept"])
     }
 
@@ -140,5 +173,40 @@ final class ActivityTests: XCTestCase {
         }
         let raw = try SQLiteConnection(path: temp.path("usage.db"))
         XCTAssertEqual(try raw.scalarInt("PRAGMA user_version"), 2)
+    }
+
+    func testV3ActivityTableAddsKindAndLayerAfterExistingRows() throws {
+        let temp = try TempDir()
+        let raw = try SQLiteConnection(path: temp.path("usage.db"))
+        _ = try raw.execute("""
+            CREATE TABLE agent_activity_events(
+              id INTEGER PRIMARY KEY, agent TEXT NOT NULL,
+              session_id TEXT NOT NULL DEFAULT '', turn_id TEXT NOT NULL DEFAULT '',
+              raw_name TEXT NOT NULL, canonical_name TEXT NOT NULL,
+              namespace TEXT NOT NULL DEFAULT '', call_id TEXT NOT NULL DEFAULT '',
+              parent_call_id TEXT NOT NULL DEFAULT '', started_at INTEGER, ended_at INTEGER,
+              duration_ms INTEGER, status TEXT NOT NULL DEFAULT 'unknown',
+              source_kind TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'exact',
+              skill_name TEXT NOT NULL DEFAULT '', skill_confidence TEXT NOT NULL DEFAULT '',
+              src_key TEXT NOT NULL, UNIQUE(agent, src_key))
+            """)
+        _ = try raw.execute(
+            "INSERT INTO agent_activity_events(agent,raw_name,canonical_name,source_kind,src_key) "
+                + "VALUES (?,?,?,?,?)",
+            ["codex", "exec", "exec", "codex_rollout", "old-tool"])
+        _ = try raw.execute(
+            "INSERT INTO agent_activity_events(agent,raw_name,canonical_name,skill_name,"
+                + "skill_confidence,src_key) VALUES (?,?,?,?,?,?)",
+            ["claude", "Skill", "skill.activate", "research", "exact", "old-skill"])
+        _ = try raw.execute("PRAGMA user_version=3")
+        try raw.commit()
+
+        let upgraded = try temp.store()
+        let rows = try upgraded.conn.query(
+            "SELECT raw_name,event_kind,event_layer FROM agent_activity_events ORDER BY id")
+        XCTAssertEqual(rows.map { ($0.string("raw_name"), $0.string("event_kind"), $0.string("event_layer")) }.count, 2)
+        XCTAssertEqual(rows[0].string("event_kind"), "tool")
+        XCTAssertEqual(rows[0].string("event_layer"), "request_fallback")
+        XCTAssertEqual(rows[1].string("event_kind"), "skill")
     }
 }

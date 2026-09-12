@@ -91,12 +91,15 @@ final class AppState: ObservableObject {
     var onTokensChanged: (() -> Void)?
     /// 会话详情面板（AppDelegate 注入；参数 true = 用户显式打开）
     var onSessionDetail: ((Bool) -> Void)?
+    /// Agent Activity 详情窗口（始终独立于主表，避免压缩主视图）
+    var onActivityDetail: (() -> Void)?
     var onPublishHistory: (() -> Void)?
 
     /// 单击选中：面板已开才跟着更新，用户关过就不再自动弹
     func autoShowSessionDetail() { onSessionDetail?(false) }
     /// 双击 / ⌘I / 右键「查看详情」：无条件打开
     func showSessionDetail() { onSessionDetail?(true) }
+    func showActivityDetail() { onActivityDetail?() }
     func showPublishHistory() { onPublishHistory?() }
 
     init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService()) {
@@ -446,10 +449,21 @@ final class AppState: ObservableObject {
                     confidence: filter.confidence, limit: 80)
                 let matrix = try store.activityMatrixSummary(
                     rangeKey: filter.range, confidence: filter.confidence)
+                var skillCoverage: [String: ActivityAgentCoverage] = [:]
+                for agent in ScannerRegistry.all {
+                    let rows = try store.activitySummary(
+                        rangeKey: filter.range, agent: agent, group: "skill", confidence: "all")
+                    skillCoverage[agent] = ActivityAgentCoverage(
+                        capability: activityCapability(agent: agent, category: "skills"),
+                        calls: rows.reduce(0) { $0 + $1.calls },
+                        exact: rows.reduce(0) { $0 + $1.exact },
+                        derived: rows.reduce(0) { $0 + $1.derived })
+                }
                 let snapshot = ActivityDashboardSnapshot(
                     exactRows: exact, derivedRows: derived, toolRows: tools,
                     skillRows: skills, exactSkillRows: exactSkills,
-                    timelineRows: timeline, matrixRows: matrix, lastScan: scan)
+                    timelineRows: timeline, matrixRows: matrix,
+                    skillCoverage: skillCoverage, lastScan: scan)
                 DispatchQueue.main.async {
                     if let next = self.activityPage.finish(request, snapshot: snapshot) {
                         self.performActivityRefresh(next)
@@ -463,6 +477,55 @@ final class AppState: ObservableObject {
                         self.performActivityRefresh(next)
                     }
                 }
+            }
+        }
+    }
+
+    /// 详情窗口使用的稳定游标分页查询；只返回规范化活动元数据。
+    func activityTimelinePage(range: String, agent: String?, sessionID: String?,
+                              confidence: String, status: String?, limit: Int, before: Int64?,
+                              beforeID: Int64?, kind: ActivityKind?, query: String?) async
+        -> UsageStore.ActivityTimelinePage? {
+        let store = readStore
+        return await withCheckedContinuation { continuation in
+            queryQueue.async {
+                continuation.resume(returning: try? store.activityTimelinePage(
+                    rangeKey: range, agent: agent, sessionID: sessionID,
+                    confidence: confidence, limit: limit, before: before,
+                    beforeID: beforeID, kind: kind, query: query, status: status))
+            }
+        }
+    }
+
+    /// 详情窗口的 Skill 能力覆盖，区分「没有调用」与「日志无法判断」。
+    func activitySkillCoverage(range: String, agent: String?) async
+        -> [String: ActivityAgentCoverage] {
+        let store = readStore
+        return await withCheckedContinuation { continuation in
+            queryQueue.async {
+                var result: [String: ActivityAgentCoverage] = [:]
+                let agents = agent.map { [$0] } ?? ScannerRegistry.all
+                for name in agents {
+                    let rows = (try? store.activitySummary(
+                        rangeKey: range, agent: name, group: "skill", confidence: "all")) ?? []
+                    result[name] = ActivityAgentCoverage(
+                        capability: activityCapability(agent: name, category: "skills"),
+                        calls: rows.reduce(0) { $0 + $1.calls },
+                        exact: rows.reduce(0) { $0 + $1.exact },
+                        derived: rows.reduce(0) { $0 + $1.derived })
+                }
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    func activitySkillSummary(range: String, agent: String?, confidence: String) async
+        -> [UsageStore.ActivitySummaryRow] {
+        let store = readStore
+        return await withCheckedContinuation { continuation in
+            queryQueue.async {
+                continuation.resume(returning: (try? store.activitySummary(
+                    rangeKey: range, agent: agent, group: "skill", confidence: confidence)) ?? [])
             }
         }
     }

@@ -1,5 +1,5 @@
 {
-  "format_version": 2,
+  "format_version": 3,
   "events": [
     {
       "tool": "claude",
@@ -324,6 +324,8 @@
       "status": "success",
       "source_kind": "claude_jsonl",
       "confidence": "exact",
+      "event_kind": "skill",
+      "event_layer": "execution",
       "skill_name": "research",
       "skill_confidence": "exact",
       "src_key": "s-claude-1|tool|claude-call-1"
@@ -341,30 +343,13 @@
       "ended_at": 1787619600000,
       "duration_ms": 0,
       "status": "success",
-      "source_kind": "codex_rollout",
-      "confidence": "exact",
-      "skill_name": "research",
-      "skill_confidence": "derived",
-      "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|response|codex-tool-1"
-    },
-    {
-      "agent": "codex",
-      "session_id": "codex-sess-1",
-      "turn_id": "turn-1",
-      "raw_name": "read_file",
-      "canonical_name": "file.read",
-      "namespace": "built-in",
-      "call_id": "",
-      "parent_call_id": "codex-call-1",
-      "started_at": 1787619600000,
-      "ended_at": null,
-      "duration_ms": null,
-      "status": "unknown",
-      "source_kind": "codex_exec_payload",
+      "source_kind": "codex_request_fallback",
       "confidence": "derived",
+      "event_kind": "tool",
+      "event_layer": "request_fallback",
       "skill_name": "",
       "skill_confidence": "",
-      "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|response|codex-tool-1|inner|0"
+      "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|request|codex-tool-1"
     },
     {
       "agent": "dsh",
@@ -381,6 +366,8 @@
       "status": "success",
       "source_kind": "dsh_zstd",
       "confidence": "exact",
+      "event_kind": "tool",
+      "event_layer": "execution",
       "skill_name": "",
       "skill_confidence": "",
       "src_key": "dsh-sess-1|tool|dsh-call-1"
@@ -400,6 +387,8 @@
       "status": "success",
       "source_kind": "hermes_messages",
       "confidence": "exact",
+      "event_kind": "skill",
+      "event_layer": "execution",
       "skill_name": "research",
       "skill_confidence": "exact",
       "src_key": "/private/tmp/tt_diff_corpus/hermes/state.db|message|1|hermes-call-1"
@@ -419,6 +408,8 @@
       "status": "success",
       "source_kind": "kimi_journal",
       "confidence": "exact",
+      "event_kind": "skill",
+      "event_layer": "execution",
       "skill_name": "prototype",
       "skill_confidence": "exact",
       "src_key": "kimi-1|tool|kimi-call-1"
@@ -438,6 +429,8 @@
       "status": "success",
       "source_kind": "opencode_part",
       "confidence": "exact",
+      "event_kind": "skill",
+      "event_layer": "execution",
       "skill_name": "prototype",
       "skill_confidence": "exact",
       "src_key": "/private/tmp/tt_diff_corpus/opencode/opencode.db|part|part-1"
@@ -457,6 +450,8 @@
       "status": "success",
       "source_kind": "pi_jsonl",
       "confidence": "exact",
+      "event_kind": "tool",
+      "event_layer": "execution",
       "skill_name": "",
       "skill_confidence": "",
       "src_key": "/private/tmp/tt_diff_corpus/pi/sessions/webapp/pi-sess-1.jsonl|tool|pi-call-1"
@@ -511,7 +506,7 @@
       "added": 4,
       "updated": 0,
       "files": 3,
-      "activity_added": 2,
+      "activity_added": 1,
       "activity_updated": 1
     },
     "opencode": {

@@ -86,6 +86,50 @@ final class CodexScannerPortTests: XCTestCase {
         XCTAssertEqual(row.double("cost"), 0.56, accuracy: 1e-9)
     }
 
+    func testItemCompletedIsAuthoritativeAndDeduplicated() throws {
+        func completed(_ item: [String: Any], _ itemID: String,
+                       start: Int64 = fixtureTSMs + 10,
+                       end: Int64 = fixtureTSMs + 35) -> [String: Any] {
+            ["type": "event_msg", "timestamp": fixtureTS,
+             "payload": ["type": "item_completed", "turn_id": "turn-a",
+                          "started_at_ms": start, "completed_at_ms": end,
+                          "item": ["id": itemID] .merging(item) { _, value in value }]]
+        }
+
+        rollout([
+            ["type": "response_item", "timestamp": fixtureTS,
+             "payload": ["type": "custom_tool_call", "id": "cmd-1", "call_id": "call-1",
+                          "name": "exec", "input": "await tools.read_file({path: '/skills/research/SKILL.md'})"]],
+            completed(["type": "CommandExecution", "status": "completed", "exit_code": 0,
+                       "duration": ["secs": 0, "nanos": 25_000_000],
+                       "parsed_cmd": [["type": "read", "cmd": "/workspace/skills/research/SKILL.md"]]], "cmd-1"),
+            completed(["type": "FileChange", "status": "completed", "changes": [:]], "edit-1"),
+            completed(["type": "McpToolCall", "server": "browser", "tool": "search",
+                       "status": "completed", "duration": ["secs": 0, "nanos": 8_000_000]], "mcp-1"),
+            completed(["type": "CollabAgentToolCall", "tool": "spawn_agent", "status": "completed",
+                       "sender_thread_id": "session-a", "receiver_thread_ids": ["child"]], "agent-1"),
+        ])
+
+        _ = try scan()
+        let events = try store.activityTimeline(agent: "codex", confidence: "all", limit: 100)
+        let tools = events.filter { $0.eventKind == .tool }
+        let skills = events.filter { $0.eventKind == .skill }
+        let agents = events.filter { $0.eventKind == .agent }
+        XCTAssertEqual(tools.count, 3)
+        XCTAssertEqual(skills.count, 1)
+        XCTAssertEqual(agents.count, 1)
+        let command = try XCTUnwrap(tools.first { $0.rawName == "Read" })
+        XCTAssertEqual(command.confidence, "exact")
+        XCTAssertEqual(command.status, "success")
+        XCTAssertEqual(command.durationMs, 25)
+        XCTAssertEqual(command.eventLayer, .execution)
+        XCTAssertEqual(skills.first?.skillName, "research")
+        XCTAssertEqual(skills.first?.skillConfidence, "derived")
+        XCTAssertEqual(skills.first?.parentCallID, "cmd-1")
+        XCTAssertEqual(agents.first?.rawName, "spawn_agent")
+        XCTAssertEqual(agents.first?.parentCallID, "session-a")
+    }
+
     func testRolloutCumulativeDeltaAndRepeatedNotifications() throws {
         rollout([tokenEvent(fixtureUsage()), tokenEvent(fixtureUsage()),
                  tokenEvent(fixtureUsage(150, 15, 30), turn: "turn-b",

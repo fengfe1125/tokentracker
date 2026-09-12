@@ -102,7 +102,7 @@ case "activity":
     }
     let range = option("--range", default: "all")
     let group = option("--group", default: "tool")
-    let confidence = option("--confidence", default: "exact")
+    let confidence = option("--confidence", default: "all")
     let agent: String? = {
         guard let index = args.firstIndex(of: "--agent"), args.indices.contains(index + 1) else {
             return nil
@@ -114,6 +114,7 @@ case "activity":
     if args.contains("--json") {
         let encodedRows: [[String: Any]] = rows.map {
             ["name": $0.name, "calls": $0.calls, "sessions": $0.sessions,
+             "agents": $0.agents,
              "success": $0.success, "error": $0.errors, "denied": $0.denied,
              "unknown": $0.unknown, "exact": $0.exact, "derived": $0.derived,
              "last_used": $0.lastUsed]
@@ -126,10 +127,10 @@ case "activity":
         print(String(data: data, encoding: .utf8) ?? "{}")
     } else {
         print("范围: \(range)  分组: \(group)  证据: \(confidence)")
-        print("名称\t调用\t会话\t成功\t失败\t拒绝\t未知\t推断")
+        print("名称\t调用\t会话\tAgent\t成功\t失败\t拒绝\t未知\t推断")
         for row in rows {
-            print("\(row.name)\t\(row.calls)\t\(row.sessions)\t\(row.success)\t"
-                  + "\(row.errors)\t\(row.denied)\t\(row.unknown)\t\(row.derived)")
+            print("\(row.name)\t\(row.calls)\t\(row.sessions)\t\(row.agents)\t"
+                  + "\(row.success)\t\(row.errors)\t\(row.denied)\t\(row.unknown)\t\(row.derived)")
         }
     }
 case "export-public":

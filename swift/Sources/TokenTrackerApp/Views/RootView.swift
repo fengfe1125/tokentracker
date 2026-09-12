@@ -48,7 +48,8 @@ struct RootView: View {
             case .sessions:
                 SessionsView(state: state, toolFilter: nil)
             case .activity:
-                ActivityView(state: state.activityPage, refresh: state.refreshActivity)
+                ActivityView(state: state.activityPage, refresh: state.refreshActivity,
+                             openDetail: state.showActivityDetail)
                     .equatable()
             case .tool(let id):
                 SessionsView(state: state, toolFilter: id)

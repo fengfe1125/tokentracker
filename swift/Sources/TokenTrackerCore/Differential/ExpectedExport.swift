@@ -3,7 +3,7 @@
 //  TokenTrackerCore
 //
 //  差分测试对照模型：对应 tests/differential/export_python.py 的输出格式
-//  （format_version=1）。Phase 1 中 Swift 扫描器将产出同一结构并逐字段比对。
+//  （format_version=3）。Swift 扫描器将产出同一结构并逐字段比对。
 //
 
 import Foundation
@@ -67,6 +67,8 @@ public struct ExpectedActivity: Codable, Equatable, Sendable {
     public var status: String
     public var sourceKind: String
     public var confidence: String
+    public var eventKind: String
+    public var eventLayer: String
     public var skillName: String
     public var skillConfidence: String
     public var srcKey: String
@@ -76,7 +78,8 @@ public struct ExpectedActivity: Codable, Equatable, Sendable {
         case sessionID = "session_id", turnID = "turn_id", rawName = "raw_name"
         case canonicalName = "canonical_name", callID = "call_id"
         case parentCallID = "parent_call_id", startedAt = "started_at", endedAt = "ended_at"
-        case durationMs = "duration_ms", sourceKind = "source_kind", skillName = "skill_name"
+        case durationMs = "duration_ms", sourceKind = "source_kind"
+        case eventKind = "event_kind", eventLayer = "event_layer", skillName = "skill_name"
         case skillConfidence = "skill_confidence", srcKey = "src_key"
     }
 }

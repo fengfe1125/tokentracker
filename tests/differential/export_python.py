@@ -94,6 +94,7 @@ def export() -> dict:
         activities = [dict(r) for r in conn.execute(
             "SELECT agent,session_id,turn_id,raw_name,canonical_name,namespace,call_id,"
             "parent_call_id,started_at,ended_at,duration_ms,status,source_kind,confidence,"
+            "event_kind,event_layer,"
             "skill_name,skill_confidence,src_key FROM agent_activity_events "
             "ORDER BY agent,src_key")]
         meta = [dict(r) for r in conn.execute(
@@ -136,7 +137,7 @@ def export() -> dict:
     finally:
         conn.close()
         tmp.cleanup()
-    return {"format_version": 2, "events": events, "activities": activities,
+    return {"format_version": 3, "events": events, "activities": activities,
             "session_meta": meta,
             "scan_results": scan_results, "snapshots": snapshots}
 

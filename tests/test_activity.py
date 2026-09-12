@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tokentracker import db
@@ -49,9 +50,12 @@ class ActivityCase(unittest.TestCase):
         self.assertFalse(columns & {"arguments", "input", "output", "prompt", "result"})
         self.assertEqual(len(self.activities()), 1)
         self.assertEqual(self.activities()[0]["status"], "success")
+        db.put_activity_event(self.conn, "claude", "skill-one", raw_name="Skill",
+                              call_id="skill-1", confidence="exact", status="success",
+                              skill_name="research", skill_confidence="exact")
         self.assertEqual(db.activity_summary(self.conn, group="tool", confidence="exact")[0]["calls"], 1)
-        self.assertEqual(db.activity_summary(self.conn, group="skill", confidence="derived")[0]["name"], "research")
-        self.assertEqual(db.activity_summary(self.conn, group="skill", confidence="exact"), [])
+        self.assertEqual(db.activity_summary(self.conn, group="skill", confidence="exact")[0]["name"], "research")
+        self.assertEqual(db.activity_summary(self.conn, group="skill", confidence="derived"), [])
 
     def test_cross_agent_names_are_canonical_and_timeline_cursor_keeps_timestamp_ties(self):
         for index, (agent, raw) in enumerate((("claude", "Bash"), ("codex", "shell"),
@@ -82,7 +86,7 @@ class ActivityCase(unittest.TestCase):
             legacy.executescript("CREATE TABLE usage_events(id INTEGER PRIMARY KEY,tool TEXT NOT NULL,session_id TEXT NOT NULL DEFAULT '',project TEXT NOT NULL DEFAULT '',ts INTEGER NOT NULL,model TEXT NOT NULL DEFAULT '',input INTEGER NOT NULL DEFAULT 0,output INTEGER NOT NULL DEFAULT 0,cache_read INTEGER NOT NULL DEFAULT 0,cache_write INTEGER NOT NULL DEFAULT 0,cost REAL,src_key TEXT NOT NULL,time_quality TEXT NOT NULL DEFAULT 'exact',interval_start INTEGER,cost_source TEXT NOT NULL DEFAULT 'estimate',source_kind TEXT NOT NULL DEFAULT '',source_scope TEXT NOT NULL DEFAULT '',UNIQUE(tool,src_key)); PRAGMA user_version=2;")
         upgraded = db.connect(path)
         try:
-            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 4)
             self.assertIsNotNone(upgraded.execute("SELECT 1 FROM sqlite_master WHERE name='agent_activity_events'").fetchone())
         finally:
             upgraded.close()
@@ -99,7 +103,7 @@ class ActivityCase(unittest.TestCase):
 
         upgraded = db.connect(path)
         try:
-            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 4)
             self.assertEqual(upgraded.execute(
                 "SELECT COUNT(*) FROM agent_activity_events WHERE src_key='kept'"
             ).fetchone()[0], 1)
@@ -119,6 +123,91 @@ class ActivityCase(unittest.TestCase):
             db.connect(path)
         with closing(sqlite3.connect(path)) as unchanged:
             self.assertEqual(unchanged.execute("PRAGMA user_version").fetchone()[0], 2)
+
+    def test_v3_activity_table_migrates_kind_and_layer(self):
+        path = str(self.root / "residual-v3.db")
+        with closing(sqlite3.connect(path)) as legacy, legacy:
+            legacy.executescript("""
+                CREATE TABLE agent_activity_events(
+                    id INTEGER PRIMARY KEY, agent TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT '', turn_id TEXT NOT NULL DEFAULT '',
+                    raw_name TEXT NOT NULL, canonical_name TEXT NOT NULL,
+                    namespace TEXT NOT NULL DEFAULT '', call_id TEXT NOT NULL DEFAULT '',
+                    parent_call_id TEXT NOT NULL DEFAULT '', started_at INTEGER,
+                    ended_at INTEGER, duration_ms INTEGER,
+                    status TEXT NOT NULL DEFAULT 'unknown', source_kind TEXT NOT NULL DEFAULT '',
+                    confidence TEXT NOT NULL DEFAULT 'exact', skill_name TEXT NOT NULL DEFAULT '',
+                    skill_confidence TEXT NOT NULL DEFAULT '', src_key TEXT NOT NULL,
+                    UNIQUE(agent, src_key));
+                INSERT INTO agent_activity_events(agent,raw_name,canonical_name,src_key,
+                    skill_name,skill_confidence,source_kind)
+                    VALUES ('codex','exec','exec','old-tool','','','codex_rollout');
+                INSERT INTO agent_activity_events(agent,raw_name,canonical_name,src_key,
+                    skill_name,skill_confidence)
+                    VALUES ('claude','Skill','skill.activate','old-skill','research','exact');
+                PRAGMA user_version=3;
+            """)
+        upgraded = db.connect(path)
+        try:
+            columns = {row[1] for row in upgraded.execute(
+                "PRAGMA table_info(agent_activity_events)")}
+            self.assertTrue({"event_kind", "event_layer"} <= columns)
+            rows = upgraded.execute(
+                "SELECT raw_name,event_kind,event_layer FROM agent_activity_events ORDER BY id"
+            ).fetchall()
+            self.assertEqual([(row[0], row[1], row[2]) for row in rows], [
+                ("exec", "tool", "request_fallback"),
+                ("Skill", "skill", "execution"),
+            ])
+        finally:
+            upgraded.close()
+
+    def test_kind_filter_and_large_skill_summary_are_not_truncated(self):
+        for index in range(12):
+            db.put_activity_event(
+                self.conn, "claude", f"skill-{index}", raw_name="Skill",
+                session_id=f"session-{index % 2}", call_id=f"skill-call-{index}",
+                started_at=TS_MS, status="success", skill_name=f"skill-{index}",
+                skill_confidence="exact", event_kind="skill")
+        # A path-looking ordinary tool must stay a tool, not become a Skill row.
+        db.put_activity_event(
+            self.conn, "codex", "tool-path", raw_name="exec", started_at=TS_MS,
+            skill_name="accidental", skill_confidence="derived", event_kind="tool")
+        self.assertEqual(len(db.activity_summary(self.conn, group="skill")), 12)
+        self.assertEqual(len(db.activity_summary(self.conn, group="tool")), 1)
+        page = db.activity_timeline(self.conn, event_kind="skill", limit=5)
+        self.assertEqual(len(page["rows"]), 5)
+        seen = list(page["rows"])
+        while page["next_before"] is not None:
+            page = db.activity_timeline(self.conn, event_kind="skill", limit=5,
+                                        before=page["next_before"],
+                                        before_id=page["next_before_id"])
+            seen.extend(page["rows"])
+        self.assertEqual(len({row["src_key"] for row in seen}), 12)
+        filtered = db.activity_timeline(self.conn, event_kind="skill", query="skill-11")
+        self.assertEqual([row["skill_name"] for row in filtered["rows"]], ["skill-11"])
+
+    def test_activity_parser_backfill_rebuilds_one_agent_without_touching_tokens(self):
+        db.put_event(self.conn, "claude", "token-1", ts=TS_MS, input=7)
+        db.put_activity_event(self.conn, "claude", "stale", raw_name="Bash")
+        db.set_scan_cursor(self.conn, "claude", {"activity_parser_version": 1})
+        seen_full = []
+
+        def fake_scan(conn, _prices, full=False):
+            seen_full.append(full)
+            db.put_activity_event(conn, "claude", "fresh", raw_name="Read")
+            return {"added": 0, "updated": 0, "files": 0,
+                    "activity_added": 1, "activity_updated": 0}
+
+        fake = SimpleNamespace(detect=lambda: True, scan=fake_scan)
+        with patch("tokentracker.scanners.load", return_value=fake):
+            from tokentracker.scanners import run_all
+            run_all(self.conn, PRICES, tools=["claude"])
+        self.assertEqual(seen_full, [True])
+        self.assertEqual([row["src_key"] for row in self.activities("claude")], ["fresh"])
+        self.assertEqual(self.conn.execute(
+            "SELECT input FROM usage_events WHERE tool='claude' AND src_key='token-1'"
+        ).fetchone()[0], 7)
 
     def test_claude_exact_skill_result_and_upgrade_backfill(self):
         base = self.root / "claude"
@@ -195,11 +284,67 @@ class ActivityCase(unittest.TestCase):
              patch.object(codex, "legacy_dir", return_value=str(sessions)):
             codex.scan(self.conn, PRICES)
         rows = self.activities("codex")
-        self.assertEqual([(r["raw_name"], r["confidence"]) for r in rows],
-                         [("exec", "exact"), ("read_file", "derived"), ("web_search", "derived")])
-        self.assertEqual((rows[0]["skill_name"], rows[0]["skill_confidence"], rows[0]["status"]),
-                         ("research", "derived", "success"))
-        self.assertTrue(all(r["parent_call_id"] == "c1" for r in rows[1:]))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["raw_name"], rows[0]["confidence"], rows[0]["event_layer"]),
+                         ("exec", "derived", "request_fallback"))
+        self.assertEqual((rows[0]["skill_name"], rows[0]["skill_confidence"]), ("", ""))
+
+    def test_codex_item_completed_is_authoritative_and_deduplicated(self):
+        sessions = self.root / "codex-structured"
+        sessions.mkdir()
+
+        def completed(item, item_id, start=TS_MS + 10, end=TS_MS + 35):
+            return {"type": "event_msg", "timestamp": TS,
+                    "payload": {"type": "item_completed", "turn_id": "t",
+                                "started_at_ms": start, "completed_at_ms": end,
+                                "item": {"id": item_id, **item}}}
+
+        write_jsonl(sessions / "s.jsonl", [
+            {"type": "session_meta", "timestamp": TS, "payload": {"id": "s"}},
+            {"type": "turn_context", "timestamp": TS, "payload": {"turn_id": "t"}},
+            {"type": "response_item", "timestamp": TS,
+             "payload": {"type": "custom_tool_call", "id": "cmd-1", "call_id": "c1",
+                          "name": "exec", "input": "await tools.read_file({path: '/skills/research/SKILL.md'})"}},
+            completed({"type": "CommandExecution", "status": "completed", "exit_code": 0,
+                       "duration": {"secs": 0, "nanos": 25_000_000},
+                       "parsed_cmd": [{"type": "read", "cmd": "/workspace/skills/research/SKILL.md"}]}, "cmd-1"),
+            completed({"type": "FileChange", "status": "completed", "changes": {}}, "edit-1"),
+            completed({"type": "McpToolCall", "server": "browser", "tool": "search",
+                       "status": "completed", "duration": {"secs": 0, "nanos": 8_000_000}}, "mcp-1"),
+            completed({"type": "CollabAgentToolCall", "tool": "spawn_agent", "status": "completed",
+                       "sender_thread_id": "s", "receiver_thread_ids": ["child"]}, "agent-1"),
+        ])
+        with patch.object(codex, "sqlite_path", return_value=str(self.root / "missing.db")), \
+             patch.object(codex, "legacy_dir", return_value=str(sessions)):
+            codex.scan(self.conn, PRICES)
+
+        rows = self.activities("codex")
+        tools = [r for r in rows if r["event_kind"] == "tool"]
+        skills = [r for r in rows if r["event_kind"] == "skill"]
+        agents = [r for r in rows if r["event_kind"] == "agent"]
+        self.assertEqual(len(tools), 3)
+        self.assertEqual(len(skills), 1)
+        self.assertEqual(len(agents), 1)
+        command = next(r for r in tools if r["raw_name"] == "Read")
+        self.assertEqual((command["confidence"], command["event_layer"], command["status"], command["duration_ms"]),
+                         ("exact", "execution", "success", 25))
+        self.assertEqual((skills[0]["skill_name"], skills[0]["skill_confidence"], skills[0]["parent_call_id"]),
+                         ("research", "derived", "cmd-1"))
+        self.assertEqual((agents[0]["raw_name"], agents[0]["parent_call_id"]), ("spawn_agent", "s"))
+
+    def test_kimi_explicit_skill_activation_is_recorded(self):
+        root = self.root / "kimi-explicit"
+        write_jsonl(root / "session_s.jsonl", [
+            {"kind": "event", "seq": 1, "envelope": {"type": "skill.activated", "timestamp": TS,
+             "payload": {"name": "diagram", "skill": {"name": "diagram"}, "turnId": "turn-1"}}},
+        ])
+        with patch.object(kimi, "journal_dir", return_value=str(root)), \
+             patch.object(kimi, "cli_dir", return_value=str(self.root / "missing")):
+            kimi.scan(self.conn, PRICES)
+        rows = self.activities("kimi")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["event_kind"], rows[0]["skill_name"], rows[0]["skill_confidence"]),
+                         ("skill", "diagram", "exact"))
 
     def test_opencode_and_hermes_sqlite_activity(self):
         op_path = self.root / "opencode.db"

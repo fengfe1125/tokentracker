@@ -124,7 +124,7 @@ swift build -c release --package-path swift
 swift/.build/release/tt-swift detect
 swift/.build/release/tt-swift scan --full
 swift/.build/release/tt-swift stats --range week
-swift/.build/release/tt-swift activity --range week --group tool --confidence exact
+swift/.build/release/tt-swift activity --range week --group tool --confidence all
 swift/.build/release/tt-swift quotas
 ```
 
@@ -134,7 +134,7 @@ swift/.build/release/tt-swift quotas
 ./tt detect
 ./tt scan --full
 ./tt stats --range week
-./tt activity --range week --group tool --confidence exact
+./tt activity --range week --group tool --confidence all
 ./tt quotas
 ```
 

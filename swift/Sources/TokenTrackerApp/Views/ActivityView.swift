@@ -5,16 +5,25 @@ import TokenTrackerCore
 struct ActivityView: View, @MainActor Equatable {
     @ObservedObject var state: ActivityPageState
     let refresh: () -> Void
+    let openDetail: () -> Void
 
     private var snapshot: ActivityDashboardSnapshot { state.snapshot }
     private var exactCalls: Int64 { snapshot.exactRows.reduce(0) { $0 + $1.calls } }
     private var derivedCalls: Int64 { snapshot.derivedRows.reduce(0) { $0 + $1.calls } }
     private var exactSkillCalls: Int64 { snapshot.exactSkillRows.reduce(0) { $0 + $1.calls } }
+    private var observedSkillCalls: Int64 { snapshot.skillRows.reduce(0) { $0 + $1.calls } }
     private var failures: Int64 {
         snapshot.exactRows.reduce(0) { $0 + $1.errors + $1.denied }
     }
     private var unknownResults: Int64 { snapshot.exactRows.reduce(0) { $0 + $1.unknown } }
-    private var piSkillUnknown: Bool { state.agent == "pi" }
+    private var selectedSkillCapability: ActivityCapability? {
+        state.agent.map { activityCapability(agent: $0, category: "skills") }
+    }
+    private var unknownSkillAgentCount: Int {
+        snapshot.skillCoverage.values.filter {
+            $0.capability == .unknown || $0.capability == .unavailable
+        }.count
+    }
     private var visibleTimelineRows: ArraySlice<ActivityEvent> { snapshot.timelineRows.prefix(30) }
 
     static func == (lhs: ActivityView, rhs: ActivityView) -> Bool {
@@ -30,6 +39,8 @@ struct ActivityView: View, @MainActor Equatable {
                 evidenceNotice
                     .activityListRow()
                 metrics
+                    .activityListRow()
+                skillCoverageCard
                     .activityListRow()
                 HStack(alignment: .top, spacing: 12) {
                     rankingCard(title: "工具榜", rows: snapshot.toolRows, skill: false)
@@ -80,8 +91,8 @@ struct ActivityView: View, @MainActor Equatable {
             .labelsHidden()
             .frame(width: 118)
             Picker("证据", selection: $state.confidence) {
-                Text("只看已确认").tag("exact")
                 Text("包含推断").tag("all")
+                Text("只看已确认").tag("exact")
                 Text("只看推断").tag("derived")
             }
             .labelsHidden()
@@ -115,10 +126,14 @@ struct ActivityView: View, @MainActor Equatable {
 
     private var metrics: some View {
         let values: [(String, String, String, Color)] = [
-            ("已确认工具调用", "\(exactCalls)", "来自 \(snapshot.exactRows.count) 个 Agent", .green),
+                    ("已确认活动", "\(exactCalls)", "来自 \(snapshot.exactRows.count) 个 Agent", .green),
             ("推断调用", "\(derivedCalls)", "不计入确认总数", .orange),
-            ("Skill 使用", piSkillUnknown ? "不可判定" : "\(exactSkillCalls)",
-             piSkillUnknown ? "Pi 没有明确 Skill 事件" : "\(snapshot.exactSkillRows.count) 个不同 Skill", .primary),
+            ("Skill 使用", selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable
+                ? "不可判定" : "\(observedSkillCalls)",
+             selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable
+                ? "该 Agent 没有明确 Skill 事件"
+                : "确认 \(exactSkillCalls) · 推断 \(max(0, observedSkillCalls - exactSkillCalls))",
+             .primary),
             ("错误 / 拒绝", "\(failures)", "\(unknownResults) 次结果未知", .red),
         ]
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
@@ -140,17 +155,64 @@ struct ActivityView: View, @MainActor Equatable {
         }
     }
 
+    private var skillCoverageCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Agent × Skill 能力覆盖").font(.headline)
+                Spacer()
+                if unknownSkillAgentCount > 0 {
+                    Text("\(unknownSkillAgentCount) 个 Agent 无法判定")
+                        .font(.caption2).foregroundStyle(.orange)
+                } else {
+                    Text("已观测调用与日志能力分开").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 8)], spacing: 8) {
+                ForEach(ScannerRegistry.all, id: \.self) { agent in
+                    let item = snapshot.skillCoverage[agent]
+                    let capability = item?.capability ?? activityCapability(agent: agent, category: "skills")
+                    HStack(spacing: 7) {
+                        Circle().fill(toolColor(agent)).frame(width: 7, height: 7)
+                        Text(toolDisplayName(agent)).font(.callout.weight(.medium))
+                        Spacer()
+                        if capability == .unknown || capability == .unavailable {
+                            Text(activityCapabilityLabel(capability))
+                                .font(.caption2).foregroundStyle(.orange)
+                        } else {
+                            Text("\(item?.calls ?? 0) 次")
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(activityCapabilityLabel(capability))
+                                .font(.caption2).foregroundStyle(capability == .derived ? .orange : .green)
+                        }
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .padding(14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+    }
+
     private func rankingCard(title: String, rows: [UsageStore.ActivitySummaryRow], skill: Bool) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text(title).font(.headline)
                 Spacer()
-                Text(skill && piSkillUnknown ? "不可判定" : "\(rows.count) 项")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                if skill && (selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable) {
+                    Text("不可判定").font(.caption2).foregroundStyle(.orange)
+                } else {
+                    Text("Top \(min(10, rows.count)) / 共 \(rows.count) 项")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                Button("查看全部") { openDetail() }
+                    .buttonStyle(.link).font(.caption)
             }
-            if skill && piSkillUnknown {
+            if skill && (selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable) {
                 ContentUnavailableView("Skill 不可判定", systemImage: "questionmark.circle",
-                                       description: Text("Pi 日志没有明确 Skill 事件，不能显示为 0 次。"))
+                                       description: Text("该 Agent 没有明确 Skill 事件，不能显示为 0 次。"))
                     .frame(minHeight: 190)
             } else if rows.isEmpty {
                 ContentUnavailableView("暂无活动", systemImage: "waveform.path.ecg")
@@ -174,13 +236,17 @@ struct ActivityView: View, @MainActor Equatable {
     private var matrixCard: some View {
         let agents = ScannerRegistry.all
         let matrix = canonicalMatrix
-        let tools = matrixTools(matrix)
+        let allTools = matrixTools(matrix)
+        let tools = Array(allTools.prefix(7))
         let maximum = max(1, agents.flatMap { agent in tools.map { matrix[agent]?[$0] ?? 0 } }.max() ?? 1)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Agent × 工具矩阵").font(.headline)
                 Spacer()
-                Text("颜色越深，调用越多").font(.caption2).foregroundStyle(.tertiary)
+                Text("Top \(tools.count) / 共 \(allTools.count) · 颜色越深，调用越多")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Button("查看全部") { openDetail() }
+                    .buttonStyle(.link).font(.caption)
             }
             if tools.isEmpty {
                 ContentUnavailableView("暂无矩阵数据", systemImage: "square.grid.3x3")
@@ -226,7 +292,10 @@ struct ActivityView: View, @MainActor Equatable {
         HStack {
             Text("最近活动").font(.headline)
             Spacer()
-            Text("按会话关联 Tool / Skill").font(.caption2).foregroundStyle(.tertiary)
+            Text("最近 \(visibleTimelineRows.count) 条预览 · 当前已载入 \(snapshot.timelineRows.count) 条")
+                .font(.caption2).foregroundStyle(.tertiary)
+            Button("打开完整详情") { openDetail() }
+                .buttonStyle(.link).font(.caption)
         }
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
@@ -245,7 +314,7 @@ struct ActivityView: View, @MainActor Equatable {
         var totals: [String: Int64] = [:]
         for values in matrix.values { for (tool, count) in values { totals[tool, default: 0] += count } }
         return totals.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
-            .prefix(7).map(\.key)
+            .map(\.key)
     }
 
     private func heatColor(count: Int64, maximum: Int64) -> Color {
@@ -312,7 +381,10 @@ private struct ActivityTimelineRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.skillName.isEmpty ? event.rawName : "Skill · \(event.skillName)")
                     .font(.callout.weight(.medium))
-                Text("\(toolDisplayName(event.agent)) · \(activityStatusLabel(event.status))")
+                let duration = event.durationMs.map { " · \($0)ms" } ?? ""
+                let fallback = event.eventLayer == .requestFallback ? " · 未确认执行" : ""
+                Text("\(activityKindLabel(event.eventKind)) · \(toolDisplayName(event.agent)) · "
+                     + "\(activityStatusLabel(event.status))\(duration)\(fallback)")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
@@ -323,7 +395,7 @@ private struct ActivityTimelineRow: View {
     }
 }
 
-private struct EvidencePill: View {
+struct EvidencePill: View {
     let exact: Int64
     let derived: Int64
 
@@ -348,8 +420,25 @@ private func activityStatusText(_ row: UsageStore.ActivitySummaryRow) -> String 
     "成功 \(row.success) · 错误 \(row.errors) · 拒绝 \(row.denied) · 未知 \(row.unknown)"
 }
 
-private func activityStatusLabel(_ status: String) -> String {
+func activityStatusLabel(_ status: String) -> String {
     ["success": "成功", "error": "错误", "denied": "拒绝", "unknown": "未知"][status] ?? status
+}
+
+private func activityKindLabel(_ kind: ActivityKind) -> String {
+    switch kind {
+    case .tool: return "Tool"
+    case .skill: return "Skill"
+    case .agent: return "Agent"
+    }
+}
+
+func activityCapabilityLabel(_ capability: ActivityCapability) -> String {
+    switch capability {
+    case .exact: return "已确认"
+    case .derived: return "可推断"
+    case .unknown: return "未知"
+    case .unavailable: return "不可用"
+    }
 }
 
 private func activityRelativeTime(_ ms: Int64) -> String {

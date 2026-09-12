@@ -2,7 +2,7 @@
 
 ## 自动升级流程
 
-数据库仍默认位于 `~/.tokentracker/usage.db`，也可由 `TOKENTRACKER_DB` 指定。现使用 `PRAGMA user_version=1` 管理 schema；首次打开旧库时自动执行：
+数据库仍默认位于 `~/.tokentracker/usage.db`，也可由 `TOKENTRACKER_DB` 指定。现使用 `PRAGMA user_version=4` 管理 schema；首次打开旧库或 v3 Agent Activity 库时自动执行：
 
 1. 使用 SQLite 备份接口创建同目录一致性备份：`usage.db.v0.backup-<时间戳>.db`。它包含 WAL 中已提交的数据，不是直接复制主文件。
 2. 在单个事务中增加时间质量、来源与成本依据字段，以及 `aggregate_snapshots`、`migration_history` 表。
@@ -10,6 +10,7 @@
 4. 修正旧 Codex 含缓存的输入口径，按当前价格表重算估算费用；原计数和费用保存在 `migration_history.original_json`。修正缓存重复统计可能降低旧界面曾显示的数值，不意味着删除了真实用量。
 5. 旧 Codex JSONL 的不可靠时间先标为未分配；源日志仍在时，通过稳定键重解析、原位修正。无法恢复的旧记录保留，不运行清空重建。
 6. 成功才更新版本号并提交；异常回滚数据与 schema。重复打开不会再次迁移，也不会重复扣除缓存。
+7. v3 的 `agent_activity_events` 增加 `event_kind` 与 `event_layer`；旧的精确 Skill 行会标记为 `skill`，旧 Codex 请求观察标记为 `request_fallback`。活动解析器版本变化时，只清理并重建对应 Agent 的活动元数据，不删除 Token ledger、会话标题或用户历史。
 
 迁移受线程锁与文件锁保护。备份失败会中止升级；请保留足够磁盘空间，并保证数据库目录可写。程序拒绝打开比自身支持版本更高的数据库。
 
@@ -24,6 +25,8 @@ Hermes 的 profile 使用源数据库路径隔离身份。旧库全局键可能�
 ## 安全验证与恢复
 
 本次迁移测试使用虚构 v0 数据库、其 SQLite 备份副本和临时新库，覆盖总量保留、原始值留档、失败回滚、重复迁移与快照认领；未对真实用户用量库试错。
+
+Agent Activity v2 另有 Python/Swift v3→v4 迁移、同毫秒分页游标、结构化 Codex/Kimi fixture 和差分导出回归；活动表的重建与 Token ledger 保持分离。
 
 如果需要在自己的数据上预演，请先退出 App 和其他扫描进程，用 SQLite 备份接口另建副本，给副本设置 `TOKENTRACKER_DB`，再启动新版本。不要使用 `scan --reset` 代替迁移。
 

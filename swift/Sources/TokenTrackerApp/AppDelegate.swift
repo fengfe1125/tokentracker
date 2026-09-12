@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
     private var detailWindow: SessionDetailWindowController?
+    private var activityDetailWindow: ActivityDetailWindowController?
     private var publishHistoryWindow: PublishHistoryWindowController?
     private var tickTimer: Timer?
     private var wasScanning = false
@@ -41,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let detail = SessionDetailWindowController(appState: appState)
         appState.onSessionDetail = { explicit in explicit ? detail.show() : detail.autoShow() }
         detailWindow = detail
+        let activityDetail = ActivityDetailWindowController(appState: appState)
+        appState.onActivityDetail = { activityDetail.show() }
+        activityDetailWindow = activityDetail
         let history = PublishHistoryWindowController(appState: appState)
         appState.onPublishHistory = { history.show() }
         publishHistoryWindow = history

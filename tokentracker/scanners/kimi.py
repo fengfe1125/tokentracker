@@ -43,6 +43,15 @@ def _parse_ts(ts_raw) -> int:
     return 0
 
 
+def _skill_name(payload):
+    """Extract only the public Skill identifier, never its arguments/content."""
+    skill = payload.get("skill")
+    if isinstance(skill, dict):
+        skill = skill.get("name") or skill.get("skillName") or skill.get("id")
+    return (payload.get("skillName") or payload.get("name") or skill
+            or payload.get("skill_name") or "")
+
+
 def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
     base = journal_dir()
     if not os.path.isdir(base):
@@ -72,7 +81,30 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                 payload = env.get("payload") or {}
                 event_type = env.get("type")
                 ts = _parse_ts(env.get("timestamp") or obj.get("time"))
-                if kind == "event" and event_type == "tool.call.started":
+                if kind == "event" and event_type == "skill.activated":
+                    skill_name = _skill_name(payload)
+                    if isinstance(skill_name, str) and skill_name.strip():
+                        call_id = payload.get("id") or payload.get("skillCallId") or obj.get("seq")
+                        change = activity.put(
+                            conn, NAME, f"{session_id}|skill|{call_id}", raw_name="Skill",
+                            session_id=session_id, turn_id=str(payload.get("turnId") or ""),
+                            call_id=str(call_id or ""), started_at=ts,
+                            source_kind="kimi_skill_activated", confidence="exact",
+                            arguments={"skill": skill_name}, event_kind="skill")
+                        activity_added += change["added"]
+                        activity_updated += change["updated"]
+                elif kind == "event" and isinstance(event_type, str) and event_type.startswith("subagent."):
+                    call_id = payload.get("id") or payload.get("agentId") or obj.get("seq")
+                    parent = payload.get("parentId") or payload.get("parentAgentId") or ""
+                    change = activity.put(
+                        conn, NAME, f"{session_id}|agent|{call_id}",
+                        raw_name=str(payload.get("name") or event_type),
+                        session_id=session_id, turn_id=str(payload.get("turnId") or ""),
+                        call_id=str(call_id or ""), parent_call_id=str(parent or ""),
+                        started_at=ts, source_kind="kimi_subagent", event_kind="agent")
+                    activity_added += change["added"]
+                    activity_updated += change["updated"]
+                elif kind == "event" and event_type == "tool.call.started":
                     call = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else payload
                     raw_name = call.get("name") or call.get("toolName") or call.get("tool")
                     call_id = call.get("id") or call.get("toolCallId") or payload.get("toolCallId")

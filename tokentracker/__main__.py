@@ -101,10 +101,10 @@ def cmd_activity(args) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     print(f"范围: {args.range}  分组: {args.group}  证据: {args.confidence}")
-    print(f"{'名称':<28} {'调用':>8} {'会话':>8} {'成功':>8} {'失败':>8} {'未知':>8} {'推断':>8}")
+    print(f"{'名称':<28} {'调用':>8} {'会话':>8} {'Agent':>8} {'成功':>8} {'失败':>8} {'未知':>8} {'推断':>8}")
     for row in rows:
         print(f"{row['name'][:28]:<28} {row['calls']:>8} {row['sessions']:>8} "
-              f"{row['success']:>8} {row['error'] + row['denied']:>8} "
+              f"{row['agents']:>8} {row['success']:>8} {row['error'] + row['denied']:>8} "
               f"{row['unknown']:>8} {row['derived']:>8}")
     return 0
 
@@ -156,7 +156,7 @@ def main(argv=None) -> int:
     pa.add_argument("--range", default="all", choices=["day", "week", "month", "all"])
     pa.add_argument("--group", default="tool", choices=["agent", "tool", "skill"])
     pa.add_argument("--agent", choices=["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"])
-    pa.add_argument("--confidence", default="exact", choices=["exact", "derived", "all"])
+    pa.add_argument("--confidence", default="all", choices=["exact", "derived", "all"])
     pa.add_argument("--json", action="store_true")
 
     pq = sub.add_parser("quotas", help="查看订阅配额进度（官方数据优先，本地估算兜底）")

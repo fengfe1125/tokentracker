@@ -115,7 +115,15 @@ public struct ScanRunner {
             }
             do {
                 if !store.conn.inTransaction { try store.conn.beginImmediate() }
-                let outcome = try adapter.scan(store, prices, full: full)
+                var effectiveFull = full
+                let cursor = try store.getScanCursor(tool: name)
+                if activityNeedsBackfill(cursor) {
+                    // Activity metadata is rebuildable. Keep token history and
+                    // session metadata, but reparse this Agent from source.
+                    _ = try store.clearActivityEvents(agent: name)
+                    effectiveFull = true
+                }
+                let outcome = try adapter.scan(store, prices, full: effectiveFull)
                 if outcome.error != nil {
                     try store.conn.rollback()
                 } else {
