@@ -13,11 +13,12 @@ final class PublishTests: XCTestCase {
 
     // ------------------------------------------------------ 三道闸 ----
 
-    private func decide(enabled: Bool = true, configured: Bool = true,
+    private func decide(trigger: PublishTrigger = .automatic,
+                        enabled: Bool = true, configured: Bool = true,
                         lastHash: String = "old", newHash: String = "new",
                         lastOkAt: Double = 0, failures: Int = 0,
                         now: Double = 1_000_000) -> PublishDecision {
-        publishDecision(enabled: enabled, configured: configured,
+        publishDecision(trigger: trigger, enabled: enabled, configured: configured,
                         lastHash: lastHash, newHash: newHash,
                         lastOkAt: lastOkAt, failures: failures, now: now)
     }
@@ -70,6 +71,24 @@ final class PublishTests: XCTestCase {
         XCTAssertEqual(decide(lastOkAt: now - 1000, failures: 3, now: now), .publish)
     }
 
+    func testManualIgnoresAutomaticToggleButKeepsGates() {
+        XCTAssertEqual(decide(trigger: .manual, enabled: false), .publish)
+        XCTAssertEqual(decide(trigger: .manual, enabled: false,
+                              lastHash: "same", newHash: "same"), .skipUnchanged)
+        XCTAssertEqual(decide(trigger: .manual, enabled: false,
+                              lastOkAt: 999_950), .skipThrottled)
+        XCTAssertEqual(decide(trigger: .manual, enabled: false,
+                              lastOkAt: 999_950, failures: 2), .skipBackoff)
+    }
+
+    func testForcedBypassesClientGatesButNeverConfiguration() {
+        XCTAssertEqual(decide(trigger: .forced, enabled: false,
+                              lastHash: "same", newHash: "same",
+                              lastOkAt: 999_999, failures: 10), .publish)
+        XCTAssertEqual(decide(trigger: .forced, enabled: false, configured: false),
+                       .skipUnconfigured)
+    }
+
     // ------------------------------------------------ 内容哈希去重 ----
 
     /// generated_at 必须被剔除后再算哈希，否则每次载荷都不同，去重形同虚设。
@@ -107,6 +126,21 @@ final class PublishTests: XCTestCase {
         XCTAssertEqual(effective["publish_endpoint"] as? String, "https://tt.sakuramu.edu.kg")
         XCTAssertEqual(effective["publish_handle"] as? String, "sakuramu")
         XCTAssertEqual((effective["publish_days"] as? NSNumber)?.intValue, 730)
+    }
+
+    func testPublishSettingsBatchSaveIsAllOrNothing() throws {
+        let dir = try TempDir()
+        let store = SettingsStore(path: dir.path("settings.json"))
+        XCTAssertTrue(store.set(values: [
+            "publish_endpoint": "https://tt.example.com",
+            "publish_handle": "tester",
+            "publish_days": NSNumber(value: 365),
+        ]))
+        XCTAssertFalse(store.set(values: [
+            "publish_endpoint": "http://unsafe.example.com",
+            "publish_handle": "changed",
+        ]))
+        XCTAssertEqual(store.effectiveString("publish_handle"), "tester")
     }
 
     func testPublishSettingsDefaultsAreSafe() {
@@ -196,6 +230,7 @@ final class PublishTests: XCTestCase {
         var state = PublishState()
         state.lastHash = "deadbeef"
         state.lastOkAt = 1_700_000_000
+        state.lastSuccessAt = 1_699_999_000
         state.lastError = "HTTP 429"
         state.consecutiveFailures = 2
         state.tzFirstSeen = "Asia/Shanghai"
@@ -205,6 +240,57 @@ final class PublishTests: XCTestCase {
         // 密钥类邻居，必须 0600
         let perms = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(perms?.int16Value, 0o600)
+    }
+
+    func testPublishHistoryKeepsNewestFiftyAndClears() throws {
+        let dir = try TempDir()
+        let history = PublishHistoryStore(path: dir.path("publish_history.json"))
+        for index in 0..<55 {
+            history.append(PublishAttempt(timestamp: Double(index), trigger: .manual,
+                                          succeeded: index % 2 == 0, status: 200,
+                                          bytes: index, error: ""))
+        }
+        let rows = history.load()
+        XCTAssertEqual(rows.count, 50)
+        XCTAssertEqual(rows.first?.timestamp, 54)
+        XCTAssertEqual(rows.last?.timestamp, 5)
+        let perms = try FileManager.default
+            .attributesOfItem(atPath: history.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(perms?.int16Value, 0o600)
+        history.clear()
+        XCTAssertTrue(history.load().isEmpty)
+    }
+
+    func testPublishHistorySanitizesAndTruncatesErrors() throws {
+        let dir = try TempDir()
+        let history = PublishHistoryStore(path: dir.path("publish_history.json"))
+        history.append(PublishAttempt(timestamp: 1, trigger: .forced,
+                                      succeeded: false, status: 500, bytes: 10,
+                                      error: "line one\nline two\t" + String(repeating: "x", count: 500)))
+        let error = try XCTUnwrap(history.load().first?.error)
+        XCTAssertFalse(error.contains("\n"))
+        XCTAssertFalse(error.contains("\t"))
+        XCTAssertLessThanOrEqual(error.count, 240)
+    }
+
+    func testSkippedAndMissingTokenDoNotCreateUploadRecords() throws {
+        let dir = try TempDir()
+        let settings = SettingsStore(path: dir.path("settings.json"))
+        settings.set(key: "publish_endpoint", value: "https://tt.example.com")
+        settings.set(key: "publish_handle", value: "tester")
+        let history = PublishHistoryStore(path: dir.path("history.json"))
+        let store = try dir.store()
+        let publisher = PublicStatsPublisher(
+            settings: settings, statePath: dir.path("state.json"),
+            tokens: KeychainPublishTokenStore(fallbackPath: dir.path("missing-token")),
+            history: history, http: { _, _, _, _ in XCTFail("不应发请求"); return (500, [:]) })
+
+        XCTAssertEqual(publisher.publishIfNeeded(store: store, trigger: .automatic).decision,
+                       .skipDisabled)
+        XCTAssertTrue(history.load().isEmpty)
+        let missing = publisher.publishIfNeeded(store: store, trigger: .manual)
+        XCTAssertTrue(missing.error.contains("token"))
+        XCTAssertTrue(history.load().isEmpty)
     }
 
     /// 发布失败绝不能抛错、绝不能阻塞扫描。
@@ -224,15 +310,21 @@ final class PublishTests: XCTestCase {
         let publisher = PublicStatsPublisher(
             settings: settings, statePath: dir.path("publish_state.json"),
             tokens: KeychainPublishTokenStore(fallbackPath: dir.path("token")),
+            history: PublishHistoryStore(path: dir.path("history.json")),
             http: { _, _, _, _ in (503, ["error": "upstream_down"]) },
             now: { 2_000_000 })
-        let outcome = publisher.publishIfNeeded(store: store, force: true)
+        let outcome = publisher.publishIfNeeded(store: store)
         XCTAssertEqual(outcome.status, 503)
         XCTAssertTrue(outcome.error.contains("503"))
 
         let state = PublishState.load(path: dir.path("publish_state.json"))
         XCTAssertEqual(state.consecutiveFailures, 1)
+        XCTAssertEqual(state.lastSuccessAt, 0)
         XCTAssertTrue(state.lastHash.isEmpty, "失败不得推进内容哈希，否则下次会被误判为未变化")
+        let attempt = try XCTUnwrap(PublishHistoryStore(path: dir.path("history.json")).load().first)
+        XCTAssertEqual(attempt.trigger, .automatic)
+        XCTAssertFalse(attempt.succeeded)
+        XCTAssertEqual(attempt.status, 503)
     }
 
     func testPublisherSuccessRecordsHashAndClearsError() throws {
@@ -252,12 +344,13 @@ final class PublishTests: XCTestCase {
         let publisher = PublicStatsPublisher(
             settings: settings, statePath: dir.path("publish_state.json"),
             tokens: KeychainPublishTokenStore(fallbackPath: dir.path("token")),
+            history: PublishHistoryStore(path: dir.path("history.json")),
             http: { url, headers, _, method in
                 seen.value = [url, method, headers["authorization"] ?? ""]
                 return (200, ["ok": true])
             },
             now: { 2_000_000 })
-        let outcome = publisher.publishIfNeeded(store: store, force: true)
+        let outcome = publisher.publishIfNeeded(store: store)
         XCTAssertTrue(outcome.error.isEmpty)
         XCTAssertGreaterThan(outcome.bytes, 0)
         XCTAssertEqual(seen.value[0], "https://tt.example.com/v1/stats/tester")
@@ -268,7 +361,12 @@ final class PublishTests: XCTestCase {
         XCTAssertFalse(state.lastHash.isEmpty)
         XCTAssertEqual(state.consecutiveFailures, 0)
         XCTAssertTrue(state.lastError.isEmpty)
+        XCTAssertEqual(state.lastSuccessAt, 2_000_000)
         XCTAssertEqual(state.tzFirstSeen, TimeZone.current.identifier)
+        let attempt = try XCTUnwrap(PublishHistoryStore(path: dir.path("history.json")).load().first)
+        XCTAssertTrue(attempt.succeeded)
+        XCTAssertEqual(attempt.status, 200)
+        XCTAssertGreaterThan(attempt.bytes, 0)
 
         // 第二次同样内容 → 去重跳过，不再发请求
         seen.value = []

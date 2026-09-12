@@ -116,6 +116,17 @@ public struct SettingsStore {
         return true
     }
 
+    /// 一次校验并原子保存多个设置，避免表单保存到一半时被 5 秒轮询读到。
+    @discardableResult
+    public func set(values: [String: Any]) -> Bool {
+        guard values.allSatisfy({ SettingsStore.isValid(key: $0.key, value: $0.value) })
+        else { return false }
+        var prefs = load()
+        for (key, value) in values { prefs[key] = value }
+        save(prefs)
+        return true
+    }
+
     // 便捷读取
     public func effectiveString(_ key: String) -> String? { effective()[key] as? String }
     public func effectiveBool(_ key: String) -> Bool {

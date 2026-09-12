@@ -146,11 +146,13 @@ struct OverviewView: View {
 
     private var detailGrid: some View {
         let t = state.statTotal
-        let cards: [(title: String, value: Int64, icon: String, tint: Color)] = [
-            ("新增输入", t.input, "arrow.down.to.line", .blue),
-            ("模型输出", t.output, "arrow.up.to.line", .purple),
-            ("缓存创建", t.cacheWrite, "internaldrive", .secondary),
-            ("缓存命中", t.cacheRead, "sparkles", .indigo),
+        let cards: [(title: String, value: Int64, detail: String?, icon: String, tint: Color)] = [
+            ("输入总量", t.inputSideTokens,
+             "非缓存 \(UIFormat.overviewTokens(t.input, yi: yi)) · 读取 \(UIFormat.overviewTokens(t.cacheRead, yi: yi)) · 创建 \(UIFormat.overviewTokens(t.cacheWrite, yi: yi))",
+             "arrow.down.to.line", .blue),
+            ("模型输出", t.output, nil, "arrow.up.to.line", .purple),
+            ("缓存创建", t.cacheWrite, nil, "internaldrive", .secondary),
+            ("缓存命中", t.cacheRead, nil, "sparkles", .indigo),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
                                    GridItem(.flexible(), spacing: 12)],
@@ -170,9 +172,11 @@ struct OverviewView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
-                    Text(UIFormat.overviewTokens(card.value, yi: yi))
+                    Text(card.detail ?? UIFormat.overviewTokens(card.value, yi: yi))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -271,7 +275,7 @@ struct OverviewView: View {
     private var trendLegend: some View {
         let items: [(name: String, color: Color)] = [
             ("成本", .red), ("缓存创建", .orange), ("缓存命中", .purple),
-            ("输入", .blue), ("输出", .green),
+            ("非缓存输入", .blue), ("输出", .green),
         ]
         return HStack(spacing: 14) {
             ForEach(items, id: \.name) { item in

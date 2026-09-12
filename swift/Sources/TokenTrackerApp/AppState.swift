@@ -49,6 +49,13 @@ final class AppState: ObservableObject {
     @Published var activeCodexAccountID: String?
     @Published var accountOpMessage: String?            // 操作结果 / 错误提示
 
+    // 公开统计上报（设置页 + 独立记录窗口）
+    @Published var publishState = PublishState()
+    @Published var publishHistory: [PublishAttempt] = []
+    @Published var publishBusy = false
+    @Published var publishMessage: String?
+    @Published var publishTokenConfigured = false
+
     // 设置（effective = 默认值 + 校验后的已存值）
     @Published var settings: [String: Any] = [:]
 
@@ -73,7 +80,9 @@ final class AppState: ObservableObject {
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
     /// 上报独占一条队列：网络最长阻塞 12 秒，不能占着查询队列。
     private let publishQueue = DispatchQueue(label: "tokentracker.publish")
-    private let publisher = PublicStatsPublisher()
+    private let publishTokenStore: KeychainPublishTokenStore
+    private let publishHistoryStore: PublishHistoryStore
+    private let publisher: PublicStatsPublisher
     private var pollTimer: Timer?
     private var refreshTimer: Timer?
     private var settingsFingerprint: String = ""
@@ -82,11 +91,13 @@ final class AppState: ObservableObject {
     var onTokensChanged: (() -> Void)?
     /// 会话详情面板（AppDelegate 注入；参数 true = 用户显式打开）
     var onSessionDetail: ((Bool) -> Void)?
+    var onPublishHistory: (() -> Void)?
 
     /// 单击选中：面板已开才跟着更新，用户关过就不再自动弹
     func autoShowSessionDetail() { onSessionDetail?(false) }
     /// 双击 / ⌘I / 右键「查看详情」：无条件打开
     func showSessionDetail() { onSessionDetail?(true) }
+    func showPublishHistory() { onPublishHistory?() }
 
     init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService()) {
         let env = ProcessInfo.processInfo.environment
@@ -103,12 +114,23 @@ final class AppState: ObservableObject {
             priceTable = FileManager.default.fileExists(atPath: repoPrices)
                 ? PriceTable.load(from: repoPrices) : .default
         }
-        settingsStore = SettingsStore()
+        let settingsStore = SettingsStore()
+        let tokenStore = KeychainPublishTokenStore()
+        let historyStore = PublishHistoryStore()
+        self.settingsStore = settingsStore
+        publishTokenStore = tokenStore
+        publishHistoryStore = historyStore
+        publisher = PublicStatsPublisher(settings: settingsStore, tokens: tokenStore,
+                                         history: historyStore)
         scanRoots = ScanRoots()
         accountSwitcher = CodexAccountSwitcher()
         self.officialQuotaService = officialQuotaService
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
+        publishState = PublishState.load(path: NSHomeDirectory() + "/.tokentracker/publish_state.json")
+        publishHistory = historyStore.load()
+        let handle = settings["publish_handle"] as? String ?? ""
+        publishTokenConfigured = tokenStore.read(handle: handle) != nil
         reloadCodexAccounts()
     }
 
@@ -117,6 +139,8 @@ final class AppState: ObservableObject {
         let path = dbPath ?? readStore.path
         let prices = priceTable
         let roots = scanRoots
+        let publisher = publisher
+        let publishQueue = publishQueue
         scheduler = ScanScheduler(
             scan: { tools, full in
                 let writeStore = try UsageStore(path: path)
@@ -135,9 +159,9 @@ final class AppState: ObservableObject {
             // 上报另开只读连接：与 scan 另开 writeStore 同一纪律，
             // 绝不从后台线程序列化 readStore。三道闸在 publishIfNeeded 内部，
             // 关闭时会在碰数据库之前就返回。
-            self?.publishQueue.async {
+            publishQueue.async {
                 guard let store = try? UsageStore(path: path) else { return }
-                self?.publisher.publishIfNeeded(store: store)
+                publisher.publishIfNeeded(store: store, trigger: .automatic)
             }
         }
         scheduler.startAuto()
@@ -147,6 +171,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 self?.pollScanStatus()
                 self?.reloadSettingsIfChanged()
+                if self?.selection == .settings { self?.refreshPublishInfo(refreshToken: false) }
             }
         }
         // 60s 数据刷新
@@ -184,6 +209,8 @@ final class AppState: ObservableObject {
             settingsFingerprint = fp
             settings = effective
             scheduler?.setInterval(Double(scanIntervalSeconds))
+            let handle = settings["publish_handle"] as? String ?? ""
+            publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
         }
     }
 
@@ -192,6 +219,114 @@ final class AppState: ObservableObject {
             settings = settingsStore.effective()
             settingsFingerprint = Self.fingerprint(settings)
             scheduler?.setInterval(Double(scanIntervalSeconds))
+        }
+    }
+
+    // ------------------------------------------------------ 公开统计 ----
+
+    var publishConfigurationReady: Bool {
+        let endpoint = settings["publish_endpoint"] as? String ?? ""
+        let handle = settings["publish_handle"] as? String ?? ""
+        return SettingsStore.isValid(key: "publish_endpoint", value: endpoint)
+            && !endpoint.isEmpty
+            && SettingsStore.isValid(key: "publish_handle", value: handle)
+            && !handle.isEmpty
+            && publishTokenConfigured
+    }
+
+    var publicStatsURL: URL? {
+        guard publishConfigurationReady else { return nil }
+        let endpoint = (settings["publish_endpoint"] as? String ?? "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let handle = settings["publish_handle"] as? String ?? ""
+        return URL(string: endpoint + "/v1/stats/" + handle)
+    }
+
+    func savePublishConfiguration(endpoint: String, handle: String, days: Int, token: String) {
+        let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let handle = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let values: [String: Any] = [
+            "publish_endpoint": endpoint,
+            "publish_handle": handle,
+            "publish_days": NSNumber(value: days),
+        ]
+        guard values.allSatisfy({ SettingsStore.isValid(key: $0.key, value: $0.value) })
+        else {
+            publishMessage = "保存失败：请检查 HTTPS 地址、用户名和公开天数"
+            return
+        }
+        let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanToken.isEmpty,
+           publishTokenStore.writeReportingLocation(handle: handle, token: cleanToken) == nil {
+            publishMessage = "保存失败：无法写入发布 Token"
+            return
+        }
+        guard settingsStore.set(values: values) else {
+            publishMessage = "保存失败：配置校验未通过"
+            return
+        }
+        settings = settingsStore.effective()
+        settingsFingerprint = Self.fingerprint(settings)
+        publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
+        publishMessage = publishTokenConfigured ? "公开统计配置已保存" : "配置已保存，请填写发布 Token"
+    }
+
+    func setPublishEnabled(_ enabled: Bool) {
+        if enabled && !publishConfigurationReady {
+            publishMessage = "请先保存完整的服务地址、用户名和发布 Token"
+            return
+        }
+        updateSetting(key: "publish_enabled", value: enabled)
+        publishMessage = enabled ? "自动上传已开启" : "自动上传已关闭"
+    }
+
+    func performPublish(trigger: PublishTrigger) {
+        guard trigger != .automatic, publishConfigurationReady, !publishBusy else { return }
+        publishBusy = true
+        publishMessage = trigger == .forced ? "正在强制上传…" : "正在按规则检查并上传…"
+        let path = readStore.path
+        let publisher = publisher
+        publishQueue.async { [weak self] in
+            guard let store = try? UsageStore(path: path) else {
+                DispatchQueue.main.async {
+                    self?.publishBusy = false
+                    self?.publishMessage = "无法打开本地统计数据库"
+                }
+                return
+            }
+            let outcome = publisher.publishIfNeeded(store: store, trigger: trigger)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.publishBusy = false
+                self.publishMessage = Self.publishOutcomeText(outcome)
+                self.refreshPublishInfo()
+            }
+        }
+    }
+
+    func refreshPublishInfo(refreshToken: Bool = true) {
+        publishState = PublishState.load(path: NSHomeDirectory() + "/.tokentracker/publish_state.json")
+        publishHistory = publishHistoryStore.load()
+        if refreshToken {
+            let handle = settings["publish_handle"] as? String ?? ""
+            publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
+        }
+    }
+
+    func clearPublishHistory() {
+        publishHistoryStore.clear()
+        publishHistory = []
+    }
+
+    private static func publishOutcomeText(_ outcome: PublishOutcome) -> String {
+        switch outcome.decision {
+        case .publish:
+            return outcome.error.isEmpty ? "上传成功（\(outcome.bytes) 字节）" : "上传失败：\(outcome.error)"
+        case .skipDisabled: return "自动上传未开启"
+        case .skipUnconfigured: return "服务地址或用户名未配置"
+        case .skipUnchanged: return "公开数据没有变化，无需重复上传"
+        case .skipThrottled: return "距离上次上传不足 15 分钟"
+        case .skipBackoff: return "服务暂不可用，当前处于失败退避期"
         }
     }
 

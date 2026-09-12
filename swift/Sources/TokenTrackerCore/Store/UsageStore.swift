@@ -612,8 +612,11 @@ public final class UsageStore {
         public var cost: Double = 0
 
         /// 缓存命中只属于输入侧；模型输出不能进入命中率分母。
+        public var inputSideTokens: Int64 { input + cacheRead + cacheWrite }
+
+        /// 缓存命中只属于输入侧；模型输出不能进入命中率分母。
         public var cacheHitRate: Double? {
-            let inputSide = input + cacheRead + cacheWrite
+            let inputSide = inputSideTokens
             guard inputSide > 0 else { return nil }
             return Double(cacheRead) / Double(inputSide) * 100
         }

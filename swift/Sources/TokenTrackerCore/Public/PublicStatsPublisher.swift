@@ -40,11 +40,13 @@ public enum PublishThrottle {
 }
 
 /// 纯函数：无时钟、无网络、无 IO，全部分支可单测。
-public func publishDecision(enabled: Bool, configured: Bool,
+public func publishDecision(trigger: PublishTrigger = .automatic,
+                            enabled: Bool, configured: Bool,
                             lastHash: String, newHash: String,
                             lastOkAt: Double, failures: Int, now: Double) -> PublishDecision {
-    if !enabled { return .skipDisabled }
+    if trigger == .automatic && !enabled { return .skipDisabled }
     if !configured { return .skipUnconfigured }
+    if trigger == .forced { return .publish }
     if failures > 0 {
         // 退避从「上次尝试」起算；lastOkAt 在失败时也会被推进
         if now - lastOkAt < PublishThrottle.backoff(failures: failures) { return .skipBackoff }
@@ -61,10 +63,14 @@ public func publishDecision(enabled: Bool, configured: Bool,
 /// AppState 每 5 秒轮询设置文件并 diff 指纹，每次发布都变的哈希会让 UI 空转。
 public struct PublishState: Equatable, Sendable {
     public var lastHash = ""
+    /// 历史字段名保留兼容；实际语义是“上次尝试时间”，失败时也会推进。
     public var lastOkAt: Double = 0
+    public var lastSuccessAt: Double = 0
     public var lastError = ""
     public var consecutiveFailures = 0
     public var tzFirstSeen = ""
+
+    public init() {}
 
     public static func load(path: String) -> PublishState {
         guard let data = FileManager.default.contents(atPath: path),
@@ -74,6 +80,8 @@ public struct PublishState: Equatable, Sendable {
         state.lastHash = obj["last_hash"] as? String ?? ""
         state.lastOkAt = (obj["last_ok_at"] as? NSNumber)?.doubleValue ?? 0
         state.lastError = obj["last_error"] as? String ?? ""
+        state.lastSuccessAt = (obj["last_success_at"] as? NSNumber)?.doubleValue
+            ?? (state.lastError.isEmpty ? state.lastOkAt : 0)
         state.consecutiveFailures = (obj["consecutive_failures"] as? NSNumber)?.intValue ?? 0
         state.tzFirstSeen = obj["tz_first_seen"] as? String ?? ""
         return state
@@ -81,9 +89,10 @@ public struct PublishState: Equatable, Sendable {
 
     public func save(path: String) {
         atomicWriteJSON(path, [
-            "version": 1,
+            "version": 2,
             "last_hash": lastHash,
             "last_ok_at": lastOkAt,
+            "last_success_at": lastSuccessAt,
             "last_error": lastError,
             "consecutive_failures": consecutiveFailures,
             "tz_first_seen": tzFirstSeen,
@@ -199,17 +208,20 @@ public final class PublicStatsPublisher: @unchecked Sendable {
     let statePath: String
     let settings: SettingsStore
     let tokens: PublishTokenStore
+    let history: PublishHistoryStore
     let http: BillingHTTP
     let now: () -> Double
 
     public init(settings: SettingsStore = SettingsStore(),
                 statePath: String = NSHomeDirectory() + "/.tokentracker/publish_state.json",
                 tokens: PublishTokenStore = KeychainPublishTokenStore(),
+                history: PublishHistoryStore = PublishHistoryStore(),
                 http: @escaping BillingHTTP = BillingNet.httpJSON,
                 now: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         self.settings = settings
         self.statePath = statePath
         self.tokens = tokens
+        self.history = history
         self.http = http
         self.now = now
     }
@@ -228,7 +240,7 @@ public final class PublicStatsPublisher: @unchecked Sendable {
 
     /// 绝不抛错、绝不阻塞扫描：所有失败归到 publish_state.json.last_error。
     @discardableResult
-    public func publishIfNeeded(store: UsageStore, force: Bool = false) -> PublishOutcome {
+    public func publishIfNeeded(store: UsageStore, trigger: PublishTrigger = .automatic) -> PublishOutcome {
         let config = settings.effective()
         let enabled = (config["publish_enabled"] as? NSNumber)?.boolValue ?? false
         let endpoint = (config["publish_endpoint"] as? String ?? "")
@@ -237,14 +249,21 @@ public final class PublicStatsPublisher: @unchecked Sendable {
         let days = (config["publish_days"] as? NSNumber)?.intValue ?? 365
         var state = PublishState.load(path: statePath)
 
+        if trigger == .automatic && !enabled {
+            return PublishOutcome(decision: .skipDisabled)
+        }
+        guard !endpoint.isEmpty, !handle.isEmpty else {
+            return PublishOutcome(decision: .skipUnconfigured)
+        }
+
         guard let payload = try? PublicStatsBuilder.build(store: store, days: days) else {
             state.lastError = "载荷生成失败"
             state.save(path: statePath)
-            return PublishOutcome(decision: .skipDisabled, error: state.lastError)
+            return PublishOutcome(decision: .publish, error: state.lastError)
         }
         let hash = Self.contentHash(payload)
-        let decision = force ? .publish : publishDecision(
-            enabled: enabled, configured: !endpoint.isEmpty && !handle.isEmpty,
+        let decision = publishDecision(
+            trigger: trigger, enabled: enabled, configured: true,
             lastHash: state.lastHash, newHash: hash,
             lastOkAt: state.lastOkAt, failures: state.consecutiveFailures, now: now())
         guard decision == .publish else { return PublishOutcome(decision: decision) }
@@ -269,10 +288,14 @@ public final class PublicStatsPublisher: @unchecked Sendable {
         if status == 200 {
             state.lastHash = hash
             state.lastOkAt = now()
+            state.lastSuccessAt = state.lastOkAt
             state.lastError = ""
             state.consecutiveFailures = 0
             if state.tzFirstSeen.isEmpty { state.tzFirstSeen = payload.tz }
             state.save(path: statePath)
+            history.append(PublishAttempt(timestamp: now(), trigger: trigger,
+                                           succeeded: true, status: status,
+                                           bytes: body.count, error: ""))
             return PublishOutcome(decision: .publish, status: status, bytes: body.count)
         }
 
@@ -282,6 +305,9 @@ public final class PublicStatsPublisher: @unchecked Sendable {
         state.consecutiveFailures += 1
         state.lastOkAt = now()
         state.save(path: statePath)
+        history.append(PublishAttempt(timestamp: now(), trigger: trigger,
+                                       succeeded: false, status: status,
+                                       bytes: body.count, error: state.lastError))
         return PublishOutcome(decision: .publish, status: status, error: state.lastError,
                               bytes: body.count)
     }

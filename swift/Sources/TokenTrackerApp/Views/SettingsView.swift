@@ -20,6 +20,11 @@ struct SettingsPanelView: View {
     @State private var captureName = ""
     @State private var renameTarget: CodexAccount?
     @State private var renameName = ""
+    @State private var publishEndpoint = ""
+    @State private var publishHandle = ""
+    @State private var publishDays = 365
+    @State private var publishToken = ""
+    @State private var showForceConfirmation = false
 
     private var provider: String {
         state.settings["menubar_provider"] as? String ?? MenuBarFmt.defaultProvider
@@ -85,10 +90,11 @@ struct SettingsPanelView: View {
                                                              withIntermediateDirectories: true)
                     NSWorkspace.shared.open(URL(fileURLWithPath: path))
                 }
-                Text("用量日志在本机读取和保存，不上传。设置保存在 ~/.tokentracker/settings.json。")
+                Text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            publishSection
             Section("关于") {
                 HStack {
                     Text("TokenTracker")
@@ -96,11 +102,16 @@ struct SettingsPanelView: View {
                     Text("v\(TokenTrackerCore.version)")
                         .foregroundStyle(.secondary)
                 }
+                Link("作者主页", destination: URL(string: "https://sakuramu.edu.kg/")!)
                 updateRow
             }
         }
         // .grouped 自带内边距，外面不再叠 .padding()（此前是双份）
         .formStyle(.grouped)
+        .onAppear {
+            loadPublishDrafts()
+            state.refreshPublishInfo()
+        }
         .alert("保存当前登录账号", isPresented: $showCaptureSheet) {
             TextField("备注名（留空则用邮箱）", text: $captureName)
             Button("保存") {
@@ -119,6 +130,114 @@ struct SettingsPanelView: View {
             }
             Button("取消", role: .cancel) { renameTarget = nil }
         }
+        .alert("确认强制上传？", isPresented: $showForceConfirmation) {
+            Button("强制上传", role: .destructive) {
+                state.performPublish(trigger: .forced)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。")
+        }
+    }
+
+    // -------------------------------------------------------- 公开统计 ----
+
+    @ViewBuilder
+    private var publishSection: some View {
+        Section("公开统计") {
+            Toggle("扫描后自动上传", isOn: Binding(
+                get: { (state.settings["publish_enabled"] as? NSNumber)?.boolValue ?? false },
+                set: { state.setPublishEnabled($0) }
+            ))
+            TextField("HTTPS 服务地址", text: $publishEndpoint,
+                      prompt: Text("https://tt.example.com"))
+                .textFieldStyle(.roundedBorder)
+            TextField("用户名", text: $publishHandle, prompt: Text("your-handle"))
+                .textFieldStyle(.roundedBorder)
+            Picker("公开时间范围", selection: $publishDays) {
+                Text("90 天").tag(90)
+                Text("365 天").tag(365)
+                Text("730 天").tag(730)
+            }
+            HStack(spacing: 8) {
+                SecureField("发布 Token（留空保持现有）", text: $publishToken)
+                    .textFieldStyle(.roundedBorder)
+                Label(state.publishTokenConfigured ? "已配置" : "未配置",
+                      systemImage: state.publishTokenConfigured
+                        ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(state.publishTokenConfigured ? .green : .secondary)
+            }
+            HStack {
+                Button("保存配置") {
+                    state.savePublishConfiguration(endpoint: publishEndpoint,
+                                                   handle: publishHandle,
+                                                   days: publishDays,
+                                                   token: publishToken)
+                    publishToken = ""
+                    loadPublishDrafts()
+                }
+                Spacer()
+                if let url = state.publicStatsURL {
+                    Link("打开公开数据 →", destination: url).font(.caption)
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button("按规则上传") { state.performPublish(trigger: .manual) }
+                    .disabled(!state.publishConfigurationReady || state.publishBusy)
+                Button("强制上传…") { showForceConfirmation = true }
+                    .disabled(!state.publishConfigurationReady || state.publishBusy)
+                Spacer()
+                Button("查看上传记录…") { state.showPublishHistory() }
+            }
+            if state.publishBusy {
+                ProgressView().controlSize(.small)
+            }
+            if let message = state.publishMessage, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(message.contains("失败") ? .red : .secondary)
+            }
+            publishStatus
+            Text(publishPrivacyText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var publishStatus: some View {
+        let snapshot = state.publishState
+        VStack(alignment: .leading, spacing: 3) {
+            if snapshot.lastSuccessAt > 0 {
+                Text("上次成功：\(Date(timeIntervalSince1970: snapshot.lastSuccessAt).formatted(date: .abbreviated, time: .shortened))")
+            } else {
+                Text("上次成功：从未")
+            }
+            if !snapshot.lastError.isEmpty {
+                Text("上次错误：\(snapshot.lastError)").foregroundStyle(.red)
+                    .lineLimit(2).help(snapshot.lastError)
+            }
+            Text("本机上传记录：\(state.publishHistory.count) 条")
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+
+    private var publishPrivacyText: String {
+        let enabled = (state.settings["publish_enabled"] as? NSNumber)?.boolValue ?? false
+        return enabled
+            ? "自动上传已开启。只发送聚合数字；项目路径、会话、提示词、模型名和账号信息不会上传。"
+            : "自动上传已关闭。手动上传仍可使用；原始日志和敏感信息不会离开本机。"
+    }
+
+    private func loadPublishDrafts() {
+        publishEndpoint = state.settings["publish_endpoint"] as? String ?? ""
+        publishHandle = state.settings["publish_handle"] as? String ?? ""
+        publishDays = (state.settings["publish_days"] as? NSNumber)?.intValue ?? 365
     }
 
     // ---------------------------------------------------- Codex 账号 ----

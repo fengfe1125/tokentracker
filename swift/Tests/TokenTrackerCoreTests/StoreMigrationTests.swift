@@ -45,6 +45,17 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stats.cacheHitRate), 60, accuracy: 1e-9)
     }
 
+    /// 概览的“输入总量”必须包含三类输入侧 token。完全命中缓存时，
+    /// 非缓存 input 可以为 0，但用户实际送入模型的上下文不能显示成 0。
+    func testInputSideTokensIncludesCachedInputWhenFreshInputIsZero() {
+        var stats = UsageStore.ToolStats()
+        stats.input = 0
+        stats.output = 50
+        stats.cacheRead = 9_000
+        stats.cacheWrite = 1_000
+        XCTAssertEqual(stats.inputSideTokens, 10_000)
+    }
+
     private func makeOldDatabase(at path: String, fail: Bool = false) throws {
         let conn = try SQLiteConnection(path: path)
         for statement in oldSchema.split(separator: ";") {

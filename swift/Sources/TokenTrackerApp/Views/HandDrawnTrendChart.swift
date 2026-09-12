@@ -37,7 +37,7 @@ struct HandDrawnTrendChart: View {
 
     fileprivate static let seriesList: [Series] = [
         Series(name: "缓存命中", color: .purple, width: 2.0, dashed: false, value: \.cacheRead),
-        Series(name: "输入", color: .blue, width: 1.6, dashed: false, value: \.input),
+        Series(name: "非缓存输入", color: .blue, width: 1.6, dashed: false, value: \.input),
         Series(name: "输出", color: .green, width: 1.6, dashed: false, value: \.output),
         Series(name: "缓存创建", color: .orange, width: 1.6, dashed: false, value: \.cacheWrite),
         Series(name: "成本", color: .red, width: 1.4, dashed: true, value: \.cost),

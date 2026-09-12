@@ -198,7 +198,7 @@ case "publish":
         print("端点      \(config["publish_endpoint"] as? String ?? "（未设置）")")
         print("用户名    \(config["publish_handle"] as? String ?? "（未设置）")")
         print("窗口      \((config["publish_days"] as? NSNumber)?.intValue ?? 365) 天")
-        print("上次成功  \(state.lastOkAt > 0 ? UIDate(state.lastOkAt) : "从未")")
+        print("上次成功  \(state.lastSuccessAt > 0 ? UIDate(state.lastSuccessAt) : "从未")")
         print("连续失败  \(state.consecutiveFailures)")
         if !state.lastError.isEmpty { print("上次错误  \(state.lastError)") }
         exit(0)
@@ -225,7 +225,7 @@ case "publish":
     }
 
     let outcome = PublicStatsPublisher(settings: settings, statePath: statePath)
-        .publishIfNeeded(store: store, force: args.contains("--force"))
+        .publishIfNeeded(store: store, trigger: args.contains("--force") ? .forced : .manual)
     switch outcome.decision {
     case .publish:
         if outcome.error.isEmpty {
@@ -273,7 +273,7 @@ default:
       tt-swift publish [--dry-run|--force|--status]
                                  上报公开统计到配置的服务
       tt-swift publish --config handle=<名> endpoint=<https://…> enabled=true
-      tt-swift publish --set-token   从 stdin 读 token 写入钥匙串
+      tt-swift publish --set-token   从 stdin 读 token 写入 0600 文件
     环境变量: TOKENTRACKER_DB / TOKENTRACKER_PRICES / TOKENTRACKER_QUOTAS 等
     """)
 }
