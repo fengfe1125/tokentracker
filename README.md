@@ -5,8 +5,12 @@
 <h1 align="center">TokenTracker</h1>
 
 <p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <strong>Know what your AI coding agents cost — without sending their logs anywhere.</strong><br>
-  一眼看清 7 种 AI 编程工具的 Token、成本、订阅配额与 Agent 活动，数据默认留在本机。
+  Track tokens, costs, subscription quotas, and agent activity across seven AI coding tools from one native macOS app.
 </p>
 
 <p align="center">
@@ -18,35 +22,35 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/fengfe1125/tokentracker/releases/latest"><strong>下载最新版</strong></a>
+  <a href="https://github.com/fengfe1125/tokentracker/releases/latest"><strong>Download the latest release</strong></a>
   ·
-  <a href="#从源码运行">从源码运行</a>
+  <a href="#build-from-source">Build from source</a>
   ·
-  <a href="#命令行工具">CLI</a>
+  <a href="#command-line-tools">CLI</a>
   ·
-  <a href="#隐私与数据">隐私说明</a>
+  <a href="#privacy-and-data">Privacy</a>
 </p>
 
-> 如果 TokenTracker 帮你弄清了 AI 编程成本，欢迎点一个 **Star**。它会让更多同时使用多个 Agent 的开发者发现这个项目。
+> If TokenTracker helps you understand your AI coding costs, consider giving it a **Star**. It helps other developers who work with multiple agents discover the project.
 
-## 为什么需要 TokenTracker？
+## Why TokenTracker?
 
-Claude Code、Codex、Kimi Code 等工具各自记录用量，但格式、价格和配额入口并不统一。TokenTracker 会直接读取它们留在 Mac 上的本地记录，把分散的信息整理成一个原生 macOS App：
+Claude Code, Codex, Kimi Code, and other coding agents all record usage differently. Their logs, pricing, and quota information live in separate places. TokenTracker reads those records directly from your Mac and turns them into one clear, native dashboard.
 
-| 一个总览 | 本地优先 | 不止 Token |
+| One overview | Local-first | Beyond token counts |
 |---|---|---|
-| 跨工具比较今日、趋势、模型、会话与成本 | 用量日志在本机读取和保存，默认不公开 | 同时查看订阅配额、工具调用、Skill 活动与 Agent × 工具关系 |
+| Compare daily usage, trends, models, sessions, and costs across tools | Usage logs are read and stored locally and are private by default | Inspect subscription quotas, tool calls, Skill activity, and agent-to-tool relationships |
 
-适合这些场景：
+TokenTracker is useful if you:
 
-- 同时使用多个 AI 编程 CLI，想知道钱和 Token 花到了哪里；
-- 想比较不同模型、工具或会话的实际使用量；
-- 需要观察 Agent 调用了哪些工具和 Skill，但不想保存提示词与输出正文；
-- 喜欢一个常驻菜单栏、无需浏览器和云端仪表盘的原生工具。
+- use several AI coding CLIs and want to know where your tokens and money go;
+- want to compare real usage across models, tools, or individual sessions;
+- need visibility into agent tools and Skills without storing prompts or output content;
+- prefer a native menu bar utility instead of another browser-based cloud dashboard.
 
-## 支持的 AI 编程工具
+## Supported AI coding tools
 
-| 工具 | Token / 成本 | 订阅配额 | Agent 活动 |
+| Tool | Tokens / cost | Subscription quota | Agent activity |
 |---|:---:|:---:|:---:|
 | Claude Code | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ | ✓ |
@@ -56,32 +60,32 @@ Claude Code、Codex、Kimi Code 等工具各自记录用量，但格式、价格
 | opencode | ✓ | — | ✓ |
 | Hermes Agent | ✓ | — | ✓ |
 
-> 配额能力取决于对应服务可用的官方接口或本地登录状态；Token 与成本统计不依赖统一云端账户。
+> Quota availability depends on the official interfaces and local login state provided by each service. Token and cost tracking does not require a shared cloud account.
 
-## 你会得到什么
+## What you get
 
-- **菜单栏实时摘要**：随时查看今日用量和订阅配额；
-- **原生数据面板**：概览、手绘趋势、模型排行、会话列表和独立详情窗口；
-- **Agent Activity**：工具与 Skill 总览、榜单、时间线和 Agent × 工具矩阵；
-- **可追溯成本**：按工具、模型、日期和会话拆分 Token 与估算费用；
-- **会话继续**：从详情页在 Terminal、iTerm2、WezTerm 或 Ghostty 中恢复会话；
-- **日常可用性**：自动扫描、手动刷新、开机启动、应用内更新和 Codex 多账号切换。
+- **Live menu bar summary** — see today's usage and subscription quotas at a glance.
+- **Native analytics** — overview, hand-drawn trends, model rankings, session lists, and separate detail windows.
+- **Agent Activity** — tool and Skill summaries, rankings, timelines, and an agent × tool matrix.
+- **Traceable costs** — break down tokens and estimated spend by tool, model, date, and session.
+- **Resume sessions** — continue a session in Terminal, iTerm2, WezTerm, or Ghostty from its detail view.
+- **Built for daily use** — automatic scans, manual refresh, launch at login, in-app updates, and local Codex account switching.
 
-## 快速开始
+## Quick start
 
-### 安装 macOS App
+### Install the macOS app
 
-1. 打开 [Latest Release](https://github.com/fengfe1125/tokentracker/releases/latest)。
-2. 下载 `TokenTracker-*.dmg`，把 TokenTracker 拖入“应用程序”。
-3. 启动 App，它会自动发现本机已支持工具的日志。
+1. Open the [latest release](https://github.com/fengfe1125/tokentracker/releases/latest).
+2. Download `TokenTracker-*.dmg` and drag TokenTracker into Applications.
+3. Launch the app. It automatically discovers logs from supported tools on your Mac.
 
-要求 **macOS 14 Sonoma 或更高版本**。当前发行包使用 ad-hoc 签名；如果 macOS 提示无法验证开发者，请在 Finder 中按住 Control 点击 App，选择“打开”。
+TokenTracker requires **macOS 14 Sonoma or later**. Current release builds use an ad-hoc signature. If macOS cannot verify the developer, Control-click the app in Finder and choose **Open**.
 
-在 macOS 26 Tahoe 上，首次使用还可能需要前往“系统设置 → 菜单栏”允许 TokenTracker。排障方式见[状态栏说明](docs/menubar-visibility-plan.md)。
+On macOS 26 Tahoe, you may also need to allow TokenTracker under System Settings → Menu Bar the first time you use it. See the [menu bar troubleshooting notes](docs/menubar-visibility-plan.md).
 
-### 从源码运行
+### Build from source
 
-需要 Xcode Command Line Tools 与 Swift 6：
+You need Xcode Command Line Tools and Swift 6:
 
 ```bash
 git clone https://github.com/fengfe1125/tokentracker.git
@@ -90,30 +94,30 @@ cd tokentracker
 open dist/TokenTracker.app
 ```
 
-制作本地 DMG：
+To create a local DMG:
 
 ```bash
 ./scripts/release_swift.sh
 ```
 
-Developer ID 签名与公证要求见发布脚本说明。
+See the release script for Developer ID signing and notarization requirements.
 
-## 隐私与数据
+## Privacy and data
 
-TokenTracker 的默认边界很简单：**扫描本机，保存在本机，不上传用量日志。**
+TokenTracker has a simple default boundary: **scan locally, store locally, and never upload usage logs.**
 
-- 数据库：`~/.tokentracker/usage.db`
-- 设置：`~/.tokentracker/settings.json`
-- 官方配额缓存：`~/.tokentracker/official_cache.json`
-- 本地价格与配额配置：`prices.json`、`quotas.json`
+- Database: `~/.tokentracker/usage.db`
+- Settings: `~/.tokentracker/settings.json`
+- Official quota cache: `~/.tokentracker/official_cache.json`
+- Local pricing and quota configuration: `prices.json` and `quotas.json`
 
-只有查询官方订阅配额、刷新对应服务登录状态时，才会访问该服务。可选的公开统计功能默认关闭；即使主动启用，也只允许发布基础聚合指标和成本，不包含项目路径、会话 ID、标题、提示词、模型名、主机名或账户信息。
+Network access is used only when querying official subscription quotas or refreshing the login state for the corresponding service. Optional public statistics are disabled by default. When explicitly enabled, the allowlisted payload contains only basic aggregate usage and cost metrics — never project paths, session IDs, titles, prompts, model names, hostnames, or account information.
 
-Agent Activity 只保存工具名、会话、时间、状态和证据等级等元数据，不保存工具参数、命令、提示词或输出正文。完整计算规则见[指标口径](docs/metrics.md)，数据库兼容与恢复方式见[迁移说明](docs/migrations.md)。
+Agent Activity stores metadata such as tool name, session, timestamp, status, and evidence level. It does not store tool arguments, commands, prompts, or output content. See [Metrics](docs/metrics.md) for calculation details and [Migrations](docs/migrations.md) for database compatibility and recovery.
 
-## 命令行工具
+## Command-line tools
 
-原生 Swift CLI 与 App 共用同一个数据库：
+The native Swift CLI shares its database with the app:
 
 ```bash
 swift build -c release --package-path swift
@@ -124,7 +128,7 @@ swift/.build/release/tt-swift activity --range week --group tool --confidence ex
 swift/.build/release/tt-swift quotas
 ```
 
-过渡期保留 Python CLI，用于完整参数兼容和 Swift 差分测试：
+The Python CLI remains available during the transition for full argument compatibility and Swift differential testing:
 
 ```bash
 ./tt detect
@@ -134,37 +138,37 @@ swift/.build/release/tt-swift quotas
 ./tt quotas
 ```
 
-## 数据来源
+## Data sources
 
-| 工具 | 默认位置 | 统计来源 |
+| Tool | Default location | Usage source |
 |---|---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | assistant usage |
-| Codex | `~/.codex/sessions/**/*.jsonl`、`~/.codex/logs_*.sqlite` | token_count 与 turn 遥测 |
+| Codex | `~/.codex/sessions/**/*.jsonl`, `~/.codex/logs_*.sqlite` | token_count and turn telemetry |
 | Kimi Code | `~/.kimi-code/server/events/session_*.jsonl` | turn.step.completed |
-| DSH | `~/.dsh/sessions/**/session.jsonl.zstd` | usage 事件 |
+| DSH | `~/.dsh/sessions/**/session.jsonl.zstd` | usage events |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | message usage |
-| opencode | `~/.local/share/opencode/opencode.db` | 会话累计量 |
+| opencode | `~/.local/share/opencode/opencode.db` | cumulative session usage |
 | Hermes Agent | `~/.hermes/**/*.db` | session_model_usage |
 
-数据源路径可以通过环境变量覆盖，完整列表以各扫描器和 `ScanRoots` 为准。
+Environment variables can override the data source paths. See the individual scanners and `ScanRoots` for the complete list.
 
-## 项目结构
+## Project structure
 
 ```text
 swift/
-  Sources/TokenTrackerCore/       扫描、存储、计价、配额、恢复与更新
-  Sources/TokenTrackerApp/        SwiftUI / AppKit macOS App
-  Sources/tt-swift/               原生 CLI
-  Tests/                          Swift 测试
-tokentracker/                      过渡期 Python CLI 与差分 oracle
-tests/differential/               跨实现固定语料与基线
-assets/                            App 图标源文件与 ICNS
-scripts/                           构建、发布和图标验证
+  Sources/TokenTrackerCore/       Scanning, storage, pricing, quotas, resume, and updates
+  Sources/TokenTrackerApp/        Native SwiftUI / AppKit macOS app
+  Sources/tt-swift/               Native CLI
+  Tests/                          Swift tests
+tokentracker/                      Transitional Python CLI and differential oracle
+tests/differential/               Cross-implementation fixtures and frozen baselines
+assets/                            App icon sources and ICNS
+scripts/                           Build, release, and icon verification
 ```
 
-SwiftUI 重构过程和模块映射见[迁移记录](docs/swiftui-migration-plan.md)，图标来源与离线验证见[图标说明](docs/icon-design.md)。
+See the [SwiftUI migration notes](docs/swiftui-migration-plan.md) for module mapping and the [icon documentation](docs/icon-design.md) for asset provenance and offline verification.
 
-## 开发与测试
+## Development and testing
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -172,11 +176,11 @@ swift test --package-path swift
 python3 scripts/check_icon.py
 ```
 
-Swift 差分测试使用 `tests/differential/expected_python.json` 作为冻结基线；首次生成虚构语料需要系统安装 `zstd`。
+Swift differential tests use `tests/differential/expected_python.json` as a frozen baseline. The system `zstd` binary is required when generating the synthetic fixtures for the first time.
 
 ---
 
 <p align="center">
   Built for developers who want the benefits of AI coding agents without losing sight of usage, cost, or privacy.<br>
-  <a href="https://github.com/fengfe1125/tokentracker/stargazers"><strong>觉得有用？给 TokenTracker 一个 Star ★</strong></a>
+  <a href="https://github.com/fengfe1125/tokentracker/stargazers"><strong>Useful? Give TokenTracker a Star ★</strong></a>
 </p>
