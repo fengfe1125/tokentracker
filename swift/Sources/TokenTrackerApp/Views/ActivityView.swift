@@ -3,6 +3,7 @@ import TokenTrackerCore
 
 @MainActor
 struct ActivityView: View, @MainActor Equatable {
+    @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: ActivityPageState
     let refresh: () -> Void
     let openDetail: () -> Void
@@ -32,7 +33,7 @@ struct ActivityView: View, @MainActor Equatable {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: "Agent 活动", subtitle: "工具与 Skill 使用 · 仅保存活动元数据") {
+            PanelHeader(title: L10n.text("Agent 活动"), subtitle: L10n.text("工具与 Skill 使用 · 仅保存活动元数据")) {
                 filters
             }
             List {
@@ -43,8 +44,8 @@ struct ActivityView: View, @MainActor Equatable {
                 skillCoverageCard
                     .activityListRow()
                 HStack(alignment: .top, spacing: 12) {
-                    rankingCard(title: "工具榜", rows: snapshot.toolRows, skill: false)
-                    rankingCard(title: "Skill 榜", rows: snapshot.skillRows, skill: true)
+                    rankingCard(title: L10n.text("工具榜"), rows: snapshot.toolRows, skill: false)
+                    rankingCard(title: L10n.text("Skill 榜"), rows: snapshot.skillRows, skill: true)
                 }
                 .activityListRow()
                 matrixCard
@@ -52,7 +53,7 @@ struct ActivityView: View, @MainActor Equatable {
                 timelineHeader
                     .activityListRow(bottom: 2)
                 if snapshot.timelineRows.isEmpty {
-                    ContentUnavailableView("暂无活动", systemImage: "clock")
+                    ContentUnavailableView(L10n.text("暂无活动"), systemImage: "clock")
                         .frame(height: 130)
                         .activityTimelineListRow(bottom: 12)
                 } else {
@@ -66,7 +67,7 @@ struct ActivityView: View, @MainActor Equatable {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
-        .navigationTitle("Agent 活动")
+        .navigationTitle(L10n.text("Agent 活动"))
         .onChange(of: state.range) { _, _ in refresh() }
         .onChange(of: state.agent) { _, _ in refresh() }
         .onChange(of: state.confidence) { _, _ in refresh() }
@@ -74,26 +75,26 @@ struct ActivityView: View, @MainActor Equatable {
 
     private var filters: some View {
         HStack(spacing: 8) {
-            Picker("范围", selection: $state.range) {
-                Text("今天").tag("day")
-                Text("最近 7 天").tag("week")
-                Text("本月").tag("month")
-                Text("全部").tag("all")
+            Picker(L10n.text("范围"), selection: $state.range) {
+                Text(L10n.text("今天")).tag("day")
+                Text(L10n.text("最近 7 天")).tag("week")
+                Text(L10n.text("本月")).tag("month")
+                Text(L10n.text("全部")).tag("all")
             }
             .labelsHidden()
             .frame(width: 96)
             Picker("Agent", selection: $state.agent) {
-                Text("全部 Agent").tag(String?.none)
+                Text(L10n.text("全部 Agent")).tag(String?.none)
                 ForEach(ScannerRegistry.all, id: \.self) { agent in
                     Text(toolDisplayName(agent)).tag(Optional(agent))
                 }
             }
             .labelsHidden()
             .frame(width: 118)
-            Picker("证据", selection: $state.confidence) {
-                Text("包含推断").tag("all")
-                Text("只看已确认").tag("exact")
-                Text("只看推断").tag("derived")
+            Picker(L10n.text("证据"), selection: $state.confidence) {
+                Text(L10n.text("包含推断")).tag("all")
+                Text(L10n.text("只看已确认")).tag("exact")
+                Text(L10n.text("只看推断")).tag("derived")
             }
             .labelsHidden()
             .frame(width: 118)
@@ -105,14 +106,14 @@ struct ActivityView: View, @MainActor Equatable {
             HStack(spacing: 5) {
                 Image(systemName: "shield.lefthalf.filled")
                 if derivedCalls > 0 {
-                    Text("有 \(derivedCalls) 次保守推断，始终与 \(exactCalls) 次确认调用分开。")
+                    Text(L10n.text("有 \(derivedCalls) 次保守推断，始终与 \(exactCalls) 次确认调用分开。"))
                 } else {
-                    Text("当前范围没有推断调用；确认数据不会混入推断结果。")
+                    Text(L10n.text("当前范围没有推断调用；确认数据不会混入推断结果。"))
                 }
             }
             Spacer()
             if let last = snapshot.lastScan, last.done {
-                Text("最近扫描：Token +\(last.added) · 活动 +\(last.activityAdded) / 补全 \(last.activityUpdated)")
+                Text(L10n.text("最近扫描：Token +\(last.added) · 活动 +\(last.activityAdded) / 补全 \(last.activityUpdated)"))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -126,15 +127,15 @@ struct ActivityView: View, @MainActor Equatable {
 
     private var metrics: some View {
         let values: [(String, String, String, Color)] = [
-                    ("已确认活动", "\(exactCalls)", "来自 \(snapshot.exactRows.count) 个 Agent", .green),
-            ("推断调用", "\(derivedCalls)", "不计入确认总数", .orange),
-            ("Skill 使用", selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable
-                ? "不可判定" : "\(observedSkillCalls)",
+                    (L10n.text("已确认活动"), "\(exactCalls)", L10n.text("来自 \(snapshot.exactRows.count) 个 Agent"), .green),
+            (L10n.text("推断调用"), "\(derivedCalls)", L10n.text("不计入确认总数"), .orange),
+            (L10n.text("Skill 使用"), selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable
+                ? L10n.text("不可判定") : "\(observedSkillCalls)",
              selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable
-                ? "该 Agent 没有明确 Skill 事件"
-                : "确认 \(exactSkillCalls) · 推断 \(max(0, observedSkillCalls - exactSkillCalls))",
+                ? L10n.text("该 Agent 没有明确 Skill 事件")
+                : L10n.text("确认 \(exactSkillCalls) · 推断 \(max(0, observedSkillCalls - exactSkillCalls))"),
              .primary),
-            ("错误 / 拒绝", "\(failures)", "\(unknownResults) 次结果未知", .red),
+            (L10n.text("错误 / 拒绝"), "\(failures)", L10n.text("\(unknownResults) 次结果未知"), .red),
         ]
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, item in
@@ -158,13 +159,13 @@ struct ActivityView: View, @MainActor Equatable {
     private var skillCoverageCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Agent × Skill 能力覆盖").font(.headline)
+                Text(L10n.text("Agent × Skill 能力覆盖")).font(.headline)
                 Spacer()
                 if unknownSkillAgentCount > 0 {
-                    Text("\(unknownSkillAgentCount) 个 Agent 无法判定")
+                    Text(L10n.text("\(unknownSkillAgentCount) 个 Agent 无法判定"))
                         .font(.caption2).foregroundStyle(.orange)
                 } else {
-                    Text("已观测调用与日志能力分开").font(.caption2).foregroundStyle(.tertiary)
+                    Text(L10n.text("已观测调用与日志能力分开")).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 8)], spacing: 8) {
@@ -179,7 +180,7 @@ struct ActivityView: View, @MainActor Equatable {
                             Text(activityCapabilityLabel(capability))
                                 .font(.caption2).foregroundStyle(.orange)
                         } else {
-                            Text("\(item?.calls ?? 0) 次")
+                            Text(L10n.text("\(item?.calls ?? 0) 次"))
                                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             Text(activityCapabilityLabel(capability))
                                 .font(.caption2).foregroundStyle(capability == .derived ? .orange : .green)
@@ -202,20 +203,20 @@ struct ActivityView: View, @MainActor Equatable {
                 Text(title).font(.headline)
                 Spacer()
                 if skill && (selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable) {
-                    Text("不可判定").font(.caption2).foregroundStyle(.orange)
+                    Text(L10n.text("不可判定")).font(.caption2).foregroundStyle(.orange)
                 } else {
-                    Text("Top \(min(10, rows.count)) / 共 \(rows.count) 项")
+                    Text(L10n.text("Top \(min(10, rows.count)) / 共 \(rows.count) 项"))
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
-                Button("查看全部") { openDetail() }
+                Button(L10n.text("查看全部")) { openDetail() }
                     .buttonStyle(.link).font(.caption)
             }
             if skill && (selectedSkillCapability == .unknown || selectedSkillCapability == .unavailable) {
-                ContentUnavailableView("Skill 不可判定", systemImage: "questionmark.circle",
-                                       description: Text("该 Agent 没有明确 Skill 事件，不能显示为 0 次。"))
+                ContentUnavailableView(L10n.text("Skill 不可判定"), systemImage: "questionmark.circle",
+                                       description: Text(L10n.text("该 Agent 没有明确 Skill 事件，不能显示为 0 次。")))
                     .frame(minHeight: 190)
             } else if rows.isEmpty {
-                ContentUnavailableView("暂无活动", systemImage: "waveform.path.ecg")
+                ContentUnavailableView(L10n.text("暂无活动"), systemImage: "waveform.path.ecg")
                     .frame(minHeight: 190)
             } else {
                 LazyVStack(spacing: 0) {
@@ -241,15 +242,15 @@ struct ActivityView: View, @MainActor Equatable {
         let maximum = max(1, agents.flatMap { agent in tools.map { matrix[agent]?[$0] ?? 0 } }.max() ?? 1)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Agent × 工具矩阵").font(.headline)
+                Text(L10n.text("Agent × 工具矩阵")).font(.headline)
                 Spacer()
-                Text("Top \(tools.count) / 共 \(allTools.count) · 颜色越深，调用越多")
+                Text(L10n.text("Top \(tools.count) / 共 \(allTools.count) · 颜色越深，调用越多"))
                     .font(.caption2).foregroundStyle(.tertiary)
-                Button("查看全部") { openDetail() }
+                Button(L10n.text("查看全部")) { openDetail() }
                     .buttonStyle(.link).font(.caption)
             }
             if tools.isEmpty {
-                ContentUnavailableView("暂无矩阵数据", systemImage: "square.grid.3x3")
+                ContentUnavailableView(L10n.text("暂无矩阵数据"), systemImage: "square.grid.3x3")
                     .frame(height: 150)
             } else {
                 ScrollView(.horizontal) {
@@ -290,11 +291,11 @@ struct ActivityView: View, @MainActor Equatable {
 
     private var timelineHeader: some View {
         HStack {
-            Text("最近活动").font(.headline)
+            Text(L10n.text("最近活动")).font(.headline)
             Spacer()
-            Text("最近 \(visibleTimelineRows.count) 条预览 · 当前已载入 \(snapshot.timelineRows.count) 条")
+            Text(L10n.text("最近 \(visibleTimelineRows.count) 条预览 · 当前已载入 \(snapshot.timelineRows.count) 条"))
                 .font(.caption2).foregroundStyle(.tertiary)
-            Button("打开完整详情") { openDetail() }
+            Button(L10n.text("打开完整详情")) { openDetail() }
                 .buttonStyle(.link).font(.caption)
         }
         .padding(14)
@@ -350,6 +351,7 @@ private extension View {
 }
 
 private struct ActivityRankingRow: View {
+    @ObservedObject private var language = LanguageManager.shared
     let row: UsageStore.ActivitySummaryRow
     let skill: Bool
 
@@ -357,12 +359,12 @@ private struct ActivityRankingRow: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name).font(.callout.weight(.medium)).lineLimit(1)
-                Text(skill ? "最近 \(activityRelativeTime(row.lastUsed))" : activityStatusText(row))
+                Text(skill ? L10n.text("最近 \(activityRelativeTime(row.lastUsed))") : activityStatusText(row))
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
             Spacer()
             Text("\(row.calls)").font(.callout.monospacedDigit())
-            Text("\(row.sessions) 会话").font(.caption2).foregroundStyle(.secondary)
+            Text(L10n.text("\(row.sessions) 会话")).font(.caption2).foregroundStyle(.secondary)
             EvidencePill(exact: row.exact, derived: row.derived)
         }
         .padding(.vertical, 7)
@@ -370,6 +372,7 @@ private struct ActivityRankingRow: View {
 }
 
 private struct ActivityTimelineRow: View {
+    @ObservedObject private var language = LanguageManager.shared
     let event: ActivityEvent
 
     var body: some View {
@@ -382,7 +385,7 @@ private struct ActivityTimelineRow: View {
                 Text(event.skillName.isEmpty ? event.rawName : "Skill · \(event.skillName)")
                     .font(.callout.weight(.medium))
                 let duration = event.durationMs.map { " · \($0)ms" } ?? ""
-                let fallback = event.eventLayer == .requestFallback ? " · 未确认执行" : ""
+                let fallback = event.eventLayer == .requestFallback ? L10n.text(" · 未确认执行") : ""
                 Text("\(activityKindLabel(event.eventKind)) · \(toolDisplayName(event.agent)) · "
                      + "\(activityStatusLabel(event.status))\(duration)\(fallback)")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -396,13 +399,14 @@ private struct ActivityTimelineRow: View {
 }
 
 struct EvidencePill: View {
+    @ObservedObject private var language = LanguageManager.shared
     let exact: Int64
     let derived: Int64
 
     var body: some View {
         HStack(spacing: 3) {
-            if exact > 0 { pill("已确认", color: .green) }
-            if derived > 0 { pill("推断", color: .orange) }
+            if exact > 0 { pill(L10n.text("已确认"), color: .green) }
+            if derived > 0 { pill(L10n.text("推断"), color: .orange) }
         }
     }
 
@@ -417,11 +421,11 @@ struct EvidencePill: View {
 }
 
 private func activityStatusText(_ row: UsageStore.ActivitySummaryRow) -> String {
-    "成功 \(row.success) · 错误 \(row.errors) · 拒绝 \(row.denied) · 未知 \(row.unknown)"
+    L10n.text("成功 \(row.success) · 错误 \(row.errors) · 拒绝 \(row.denied) · 未知 \(row.unknown)")
 }
 
 func activityStatusLabel(_ status: String) -> String {
-    ["success": "成功", "error": "错误", "denied": "拒绝", "unknown": "未知"][status] ?? status
+    ["success": L10n.text("成功"), "error": L10n.text("错误"), "denied": L10n.text("拒绝"), "unknown": L10n.text("未知")][status] ?? status
 }
 
 private func activityKindLabel(_ kind: ActivityKind) -> String {
@@ -434,18 +438,18 @@ private func activityKindLabel(_ kind: ActivityKind) -> String {
 
 func activityCapabilityLabel(_ capability: ActivityCapability) -> String {
     switch capability {
-    case .exact: return "已确认"
-    case .derived: return "可推断"
-    case .unknown: return "未知"
-    case .unavailable: return "不可用"
+    case .exact: return L10n.text("已确认")
+    case .derived: return L10n.text("可推断")
+    case .unknown: return L10n.text("未知")
+    case .unavailable: return L10n.text("不可用")
     }
 }
 
 private func activityRelativeTime(_ ms: Int64) -> String {
     guard ms > 0 else { return "—" }
     let seconds = max(0, Int(Date().timeIntervalSince1970 - Double(ms) / 1000))
-    if seconds < 60 { return "刚刚" }
-    if seconds < 3600 { return "\(seconds / 60) 分钟前" }
-    if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
-    return "\(seconds / 86_400) 天前"
+    if seconds < 60 { return L10n.text("刚刚") }
+    if seconds < 3600 { return L10n.text("\(seconds / 60) 分钟前") }
+    if seconds < 86_400 { return L10n.text("\(seconds / 3600) 小时前") }
+    return L10n.text("\(seconds / 86_400) 天前")
 }

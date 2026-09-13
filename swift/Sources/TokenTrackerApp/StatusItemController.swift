@@ -116,13 +116,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         item.isVisible = true
         let initialSegments = MenuBarFmt.fmtSegments(
             today: appState.today, entries: appState.quotaEntries,
-            provider: provider, compact: compact, yi: yi, ring: ring)
+            provider: provider, compact: compact, yi: (yi && !L10n.isEnglish), ring: ring)
         let initialTitle = initialSegments.map(\.text).joined()
         item.button?.title = initialTitle
 
         let menu = NSMenu()
         menu.delegate = self
-        let today = NSMenuItem(title: "今日暂无数据", action: nil, keyEquivalent: "")
+        let today = NSMenuItem(title: L10n.text("今日暂无数据"), action: nil, keyEquivalent: "")
         today.isEnabled = false
         menu.addItem(today)
         todayItem = today
@@ -136,19 +136,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             quotaItems.append(it)
         }
         menu.addItem(.separator())
-        let display = NSMenuItem(title: "状态栏显示", action: nil, keyEquivalent: "")
+        let display = NSMenuItem(title: L10n.text("状态栏显示"), action: nil, keyEquivalent: "")
         display.submenu = NSMenu()
         menu.addItem(display)
         displayItem = display
         menu.addItem(.separator())
-        addAction(menu, title: "打开主面板", action: #selector(openMain))
-        addAction(menu, title: "设置…", action: #selector(openSettings), key: ",")
-        addAction(menu, title: "立即扫描", action: #selector(rescan))
+        addAction(menu, title: L10n.text("打开主面板"), action: #selector(openMain))
+        addAction(menu, title: L10n.text("设置…"), action: #selector(openSettings), key: ",")
+        addAction(menu, title: L10n.text("立即扫描"), action: #selector(rescan))
         menu.addItem(.separator())
-        addAction(menu, title: "退出 TokenTracker", action: #selector(quitApp), key: "q")
+        addAction(menu, title: L10n.text("退出 TokenTracker"), action: #selector(quitApp), key: "q")
         item.menu = menu
         statusItem = item
-        log("状态栏已安装")
+        log(L10n.text("状态栏已安装"))
         render()
         // 首轮 run loop 后再确认一次，避免启动阶段的布局恢复覆盖首次渲染。
         DispatchQueue.main.async { [weak self] in
@@ -173,7 +173,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = statusItem?.button else { return }
         if appState.scanning {
             let frame = spin.map(MenuBarFmt.spinnerFrame) ?? "⟳"
-            let plain = "\(frame) 扫描中…"
+            let plain = L10n.text("\(frame) 扫描中…")
             let key = "\(plain)|\(spin ?? -1)"
             if key != lastAnimKey {
                 lastAnimKey = key
@@ -186,7 +186,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         let segs = MenuBarFmt.fmtSegments(today: appState.today, entries: appState.quotaEntries,
                                           provider: provider, compact: compact,
-                                          yi: yi, ring: ring)
+                                          yi: (yi && !L10n.isEnglish), ring: ring)
         let plain = segs.map(\.text).joined()
         // 圆环模式的标题里已无百分比段，脉冲只作用在圆上
         let textPulse = ring ? nil : pulse
@@ -386,26 +386,26 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let visible = item.isVisible
         let now = Date()
         if visible {
-            if invisibleSince != nil { log("状态栏图标恢复可见") }
+            if invisibleSince != nil { log(L10n.text("状态栏图标恢复可见")) }
             invisibleSince = nil
             healLevel = 0
             return
         }
         guard let since = invisibleSince else {
             invisibleSince = now
-            log("状态栏图标不可见，观察中")
+            log(L10n.text("状态栏图标不可见，观察中"))
             return
         }
         guard now.timeIntervalSince(since) >= Self.healDelay,
               now.timeIntervalSince(lastHeal) >= Self.healBackoff else { return }
         lastHeal = now
         if healLevel == 0 {
-            log("自愈：强制重排状态栏项")
+            log(L10n.text("自愈：强制重排状态栏项"))
             item.isVisible = false
             item.isVisible = true
             healLevel = 1
         } else {
-            log("自愈：重建状态栏项")
+            log(L10n.text("自愈：重建状态栏项"))
             recreateStatusItem()
             healLevel = 0
         }
@@ -442,18 +442,34 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // ------------------------------------------------------------ 菜单 ----
 
+    func languageDidChange() {
+        guard let menu = statusItem?.menu else { return }
+        displayItem?.title = L10n.text("状态栏显示")
+        for item in menu.items {
+            switch item.action {
+            case #selector(openMain): item.title = L10n.text("打开主面板")
+            case #selector(openSettings): item.title = L10n.text("设置…")
+            case #selector(rescan): item.title = L10n.text("立即扫描")
+            case #selector(quitApp): item.title = L10n.text("退出 TokenTracker")
+            default: break
+            }
+        }
+        menuNeedsUpdate(menu)
+        render()
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         let risks = appState.insights.risks.filter { $0.level > 0 }
-        riskItem?.title = risks.isEmpty ? "" : "⚠︎ \(risks.count) 项预算 / 配额风险，打开项目查看"
+        riskItem?.title = risks.isEmpty ? "" : L10n.text("⚠︎ \(risks.count) 项预算 / 配额风险，打开项目查看")
         riskItem?.isHidden = risks.isEmpty
         if let todayItem {
             todayItem.attributedTitle = attributed(
-                MenuBarFmt.todayLineSegments(appState.today, yi: yi))
+                MenuBarFmt.todayLineSegments(appState.today, yi: (yi && !L10n.isEnglish)).map { MenuBarSegment(L10n.label($0.text), $0.role) })
         }
         let entries = Array(appState.quotaEntries.prefix(Self.maxQuotaLines))
         for (index, item) in quotaItems.enumerated() {
             if index < entries.count {
-                item.attributedTitle = attributed(MenuBarFmt.quotaLineSegments(entries[index]))
+                item.attributedTitle = attributed(MenuBarFmt.quotaLineSegments(UIFormat.quotaEntry(entries[index])))
                 item.isHidden = false
             } else {
                 item.isHidden = true
@@ -464,7 +480,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private var titlePreview: String {
         let text = MenuBarFmt.fmtTitle(today: appState.today, entries: appState.quotaEntries,
-                                       provider: provider, compact: compact, yi: yi, ring: ring)
+                                       provider: provider, compact: compact, yi: (yi && !L10n.isEnglish), ring: ring)
         guard ring else { return text }
         let glyph = MenuBarFmt.ringGlyph(
             MenuBarFmt.ringSpec(entries: appState.quotaEntries, provider: provider))
@@ -473,16 +489,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func rebuildDisplayMenu() {
         let sub = NSMenu()
-        let preview = NSMenuItem(title: "当前：" + titlePreview, action: nil, keyEquivalent: "")
+        let preview = NSMenuItem(title: L10n.text("当前：") + titlePreview, action: nil, keyEquivalent: "")
         preview.isEnabled = false
         sub.addItem(preview)
         sub.addItem(.separator())
         for entry in appState.quotaEntries {
-            addProviderItem(sub, pid: entry.id, title: "今日用量 + \(entry.name)",
+            addProviderItem(sub, pid: entry.id, title: L10n.text("今日用量 + \(entry.name)"),
                             dot: "dot_\(entry.id)")
         }
         if !appState.quotaEntries.isEmpty { sub.addItem(.separator()) }
-        addProviderItem(sub, pid: "off", title: "仅今日用量", dot: "dot_off")
+        addProviderItem(sub, pid: "off", title: L10n.text("仅今日用量"), dot: "dot_off")
         displayItem?.submenu = sub
     }
 
@@ -508,11 +524,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 动作 ----
 
     @objc private func openMain(_: Any?) {
-        log("菜单动作：打开主面板")
+        log(L10n.text("菜单动作：打开主面板"))
         onOpenMain?()
     }
     @objc private func openSettings(_: Any?) {
-        log("菜单动作：设置")
+        log(L10n.text("菜单动作：设置"))
         onOpenSettings?()
     }
 

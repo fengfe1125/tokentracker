@@ -11,28 +11,29 @@ import SwiftUI
 import TokenTrackerCore
 
 struct OverviewView: View {
+    @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
 
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: "用量概览", subtitle: updatedText) {
-                Picker("时间范围", selection: $state.range) {
-                    Text("今天").tag("day")
-                    Text("近 7 天").tag("week")
-                    Text("本月").tag("month")
-                    Text("全部").tag("all")
+            PanelHeader(title: L10n.text("用量概览"), subtitle: updatedText) {
+                Picker(L10n.text("时间范围"), selection: $state.range) {
+                    Text(L10n.text("今天")).tag("day")
+                    Text(L10n.text("近 7 天")).tag("week")
+                    Text(L10n.text("本月")).tag("month")
+                    Text(L10n.text("全部")).tag("all")
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 260)
                 Menu {
-                    Picker("刷新间隔", selection: intervalSelection) {
+                    Picker(L10n.text("刷新间隔"), selection: intervalSelection) {
                         Text("30s").tag(30)
-                        Text("1分钟").tag(60)
-                        Text("5分钟").tag(300)
-                        Text("10分钟").tag(600)
+                        Text(L10n.text("1分钟")).tag(60)
+                        Text(L10n.text("5分钟")).tag(300)
+                        Text(L10n.text("10分钟")).tag(600)
                     }
                 } label: {
                     Label(intervalLabel, systemImage: "arrow.clockwise")
@@ -43,7 +44,7 @@ struct OverviewView: View {
                 Button {
                     state.requestScan()
                 } label: {
-                    Label(state.scanning ? "扫描中…" : "扫描",
+                    Label(state.scanning ? L10n.text("扫描中…") : L10n.text("扫描"),
                           systemImage: state.scanning
                               ? "arrow.triangle.2.circlepath" : "magnifyingglass")
                 }
@@ -62,12 +63,12 @@ struct OverviewView: View {
                 .padding(20)
             }
         }
-        .navigationTitle("用量概览")
+        .navigationTitle(L10n.text("用量概览"))
     }
 
     private var updatedText: String? {
         state.updatedAt.map {
-            "更新于 " + UIFormat.dateTime(ms: Int64($0.timeIntervalSince1970 * 1000))
+            L10n.text("更新于 ") + UIFormat.dateTime(ms: Int64($0.timeIntervalSince1970 * 1000))
         }
     }
 
@@ -97,7 +98,7 @@ struct OverviewView: View {
                 .frame(width: 44, height: 44)
                 .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 2) {
-                Text("真实消耗 Tokens")
+                Text(L10n.text("真实消耗 Tokens"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -113,7 +114,7 @@ struct OverviewView: View {
             Spacer()
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("用量记录数")
+                    Text(L10n.text("用量记录数"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("\(total.events)")
@@ -125,11 +126,11 @@ struct OverviewView: View {
                 Divider()
                     .frame(height: 36)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("费用合计")
-                    Text("含估算，非订阅账单").font(.caption2).foregroundStyle(.secondary)
+                    Text(L10n.text("费用合计"))
+                    Text(L10n.text("含估算，非订阅账单")).font(.caption2).foregroundStyle(.secondary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(total.events > 0 && total.unpriced == total.events ? "未计价" : UIFormat.costPrecise(total.cost))
+                    Text(total.events > 0 && total.unpriced == total.events ? L10n.text("未计价") : UIFormat.costPrecise(total.cost))
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.green)
@@ -149,12 +150,12 @@ struct OverviewView: View {
     private var detailGrid: some View {
         let t = state.statTotal
         let cards: [(title: String, value: Int64, detail: String?, icon: String, tint: Color)] = [
-            ("输入总量", t.inputSideTokens,
-             "非缓存 \(UIFormat.overviewTokens(t.input, yi: yi)) · 读取 \(UIFormat.overviewTokens(t.cacheRead, yi: yi)) · 创建 \(UIFormat.overviewTokens(t.cacheWrite, yi: yi))",
+            (L10n.text("输入总量"), t.inputSideTokens,
+             L10n.text("非缓存 \(UIFormat.overviewTokens(t.input, yi: yi)) · 读取 \(UIFormat.overviewTokens(t.cacheRead, yi: yi)) · 创建 \(UIFormat.overviewTokens(t.cacheWrite, yi: yi))"),
              "arrow.down.to.line", .blue),
-            ("模型输出", t.output, nil, "arrow.up.to.line", .purple),
-            ("缓存创建", t.cacheWrite, nil, "internaldrive", .secondary),
-            ("缓存命中", t.cacheRead, nil, "sparkles", .indigo),
+            (L10n.text("模型输出"), t.output, nil, "arrow.up.to.line", .purple),
+            (L10n.text("缓存创建"), t.cacheWrite, nil, "internaldrive", .secondary),
+            (L10n.text("缓存命中"), t.cacheRead, nil, "sparkles", .indigo),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
                                    GridItem(.flexible(), spacing: 12)],
@@ -198,7 +199,7 @@ struct OverviewView: View {
     private var hitRateCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("缓存命中率")
+                Text(L10n.text("缓存命中率"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -249,7 +250,7 @@ struct OverviewView: View {
     private var trendCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("使用趋势")
+                Text(L10n.text("使用趋势"))
                     .font(.headline)
                 Spacer()
                 Text(rangeLabel)
@@ -257,8 +258,8 @@ struct OverviewView: View {
                     .foregroundStyle(.secondary)
             }
             if trendPoints.isEmpty {
-                ContentUnavailableView("暂无数据", systemImage: "chart.xyaxis.line",
-                                       description: Text("点右上角「扫描」"))
+                ContentUnavailableView(L10n.text("暂无数据"), systemImage: "chart.xyaxis.line",
+                                       description: Text(L10n.text("点右上角「扫描」")))
                     .frame(height: 220)
             } else {
                 HandDrawnTrendChart(points: trendPoints,
@@ -271,13 +272,13 @@ struct OverviewView: View {
     }
 
     private var rangeLabel: String {
-        ["day": "今天", "week": "近 7 天", "month": "本月", "all": "全部"][state.range] ?? state.range
+        ["day": L10n.text("今天"), "week": L10n.text("近 7 天"), "month": L10n.text("本月"), "all": L10n.text("全部")][state.range] ?? state.range
     }
 
     private var trendLegend: some View {
         let items: [(name: String, color: Color)] = [
-            ("成本", .red), ("缓存创建", .orange), ("缓存命中", .purple),
-            ("非缓存输入", .blue), ("输出", .green),
+            (L10n.text("成本"), .red), (L10n.text("缓存创建"), .orange), (L10n.text("缓存命中"), .purple),
+            (L10n.text("非缓存输入"), .blue), (L10n.text("输出"), .green),
         ]
         return HStack(spacing: 14) {
             ForEach(items, id: \.name) { item in
@@ -296,10 +297,10 @@ struct OverviewView: View {
 
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("订阅配额")
+            Text(L10n.text("订阅配额"))
                 .font(.headline)
             if state.quotaEntries.isEmpty {
-                Text("未配置配额")
+                Text(L10n.text("未配置配额"))
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } else {
@@ -318,10 +319,10 @@ struct OverviewView: View {
 
     private var modelSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("模型榜")
+            Text(L10n.text("模型榜"))
                 .font(.headline)
             if state.modelRows.isEmpty {
-                Text("暂无数据")
+                Text(L10n.text("暂无数据"))
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } else {
@@ -334,7 +335,7 @@ struct OverviewView: View {
                                 .foregroundStyle(.tertiary)
                                 .frame(width: 20)
                             Circle().fill(toolColor(row.tool)).frame(width: 8, height: 8)
-                            Text(row.model.isEmpty ? "（未知模型）" : row.model)
+                            Text(row.model.isEmpty ? L10n.text("（未知模型）") : row.model)
                                 .font(.callout)
                                 .lineLimit(1)
                             Spacer()
@@ -369,6 +370,7 @@ private struct CardBackground: ViewModifier {
 
 /// 配额卡：品牌色圆环 = 最紧窗口，右侧窗口明细行
 private struct QuotaCard: View {
+    @ObservedObject private var language = LanguageManager.shared
     let entry: MenuBarQuotaEntry
 
     private var tightest: MenuBarQuotaWindow? {
@@ -385,7 +387,7 @@ private struct QuotaCard: View {
                     Text(entry.name)
                         .font(.callout.weight(.medium))
                     Spacer()
-                    Text(entry.windows.contains { $0.source == "official" } ? "官方" : "本地估算")
+                    Text(entry.windows.contains { $0.source == "official" } ? L10n.text("官方") : L10n.text("本地估算"))
                         .font(.caption2)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
@@ -393,7 +395,7 @@ private struct QuotaCard: View {
                 }
                 ForEach(entry.windows, id: \.label) { window in
                     HStack {
-                        Text(window.label)
+                        Text(UIFormat.quotaLabel(window.label))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -422,6 +424,7 @@ private struct QuotaCard: View {
 
 /// 配额圆环（卡片版）：轨道 + 填充角
 private struct RingView: View {
+    @ObservedObject private var language = LanguageManager.shared
     let pct: Double?
     let role: String
     let hasData: Bool

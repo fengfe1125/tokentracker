@@ -16,7 +16,7 @@ struct TokenTrackerApp: App {
         // 主面板窗口由 MainWindowController 手动管理（NSHostingController）。
         // Settings 场景提供系统 ⌘, 入口。
         Settings {
-            SettingsSceneView(state: appDelegate.appState)
+            SettingsSceneView(state: appDelegate.appState).appLanguage()
         }
     }
 }

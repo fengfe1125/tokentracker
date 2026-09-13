@@ -4,6 +4,7 @@ import TokenTrackerCore
 /// Agent Activity 的完整浏览器：独立窗口、稳定游标分页、只读规范化元数据。
 @MainActor
 struct ActivityDetailView: View {
+    @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
 
     @State private var range: String
@@ -37,16 +38,16 @@ struct ActivityDetailView: View {
 
     private var scopeTitle: String {
         switch kind {
-        case .tool: return "Tool 全部调用记录"
-        case .skill: return "Skill 全部调用记录"
-        case .agent: return "Agent / 子 Agent 关系"
-        case nil: return "完整时间线"
+        case .tool: return L10n.text("Tool 全部调用记录")
+        case .skill: return L10n.text("Skill 全部调用记录")
+        case .agent: return L10n.text("Agent / 子 Agent 关系")
+        case nil: return L10n.text("完整时间线")
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: "Agent 活动详情", subtitle: "完整分页 · metadata-only · 不保存 Prompt、参数、输出或主机路径") {
+            PanelHeader(title: L10n.text("Agent 活动详情"), subtitle: L10n.text("完整分页 · metadata-only · 不保存 Prompt、参数、输出或主机路径")) {
                 filters
             }
             ScrollView {
@@ -65,44 +66,44 @@ struct ActivityDetailView: View {
 
     private var filters: some View {
         HStack(spacing: 7) {
-            Picker("范围", selection: $range) {
-                Text("今天").tag("day")
-                Text("最近 7 天").tag("week")
-                Text("本月").tag("month")
-                Text("全部").tag("all")
+            Picker(L10n.text("范围"), selection: $range) {
+                Text(L10n.text("今天")).tag("day")
+                Text(L10n.text("最近 7 天")).tag("week")
+                Text(L10n.text("本月")).tag("month")
+                Text(L10n.text("全部")).tag("all")
             }
             .labelsHidden().frame(width: 92)
             Picker("Agent", selection: $agent) {
-                Text("全部 Agent").tag(String?.none)
+                Text(L10n.text("全部 Agent")).tag(String?.none)
                 ForEach(ScannerRegistry.all, id: \.self) { name in
                     Text(toolDisplayName(name)).tag(Optional(name))
                 }
             }
             .labelsHidden().frame(width: 116)
-            Picker("类型", selection: $kind) {
-                Text("全部类型").tag(ActivityKind?.none)
+            Picker(L10n.text("类型"), selection: $kind) {
+                Text(L10n.text("全部类型")).tag(ActivityKind?.none)
                 Text("Tool").tag(ActivityKind?.some(.tool))
                 Text("Skill").tag(ActivityKind?.some(.skill))
                 Text("Agent").tag(ActivityKind?.some(.agent))
             }
             .labelsHidden().frame(width: 100)
-            Picker("证据", selection: $confidence) {
-                Text("包含推断").tag("all")
-                Text("已确认").tag("exact")
-                Text("只看推断").tag("derived")
+            Picker(L10n.text("证据"), selection: $confidence) {
+                Text(L10n.text("包含推断")).tag("all")
+                Text(L10n.text("已确认")).tag("exact")
+                Text(L10n.text("只看推断")).tag("derived")
             }
             .labelsHidden().frame(width: 98)
-            Picker("状态", selection: $status) {
-                Text("全部状态").tag("all")
-                Text("成功").tag("success")
-                Text("错误").tag("error")
-                Text("拒绝").tag("denied")
-                Text("未知").tag("unknown")
+            Picker(L10n.text("状态"), selection: $status) {
+                Text(L10n.text("全部状态")).tag("all")
+                Text(L10n.text("成功")).tag("success")
+                Text(L10n.text("错误")).tag("error")
+                Text(L10n.text("拒绝")).tag("denied")
+                Text(L10n.text("未知")).tag("unknown")
             }
             .labelsHidden().frame(width: 92)
             TextField("Session ID", text: $sessionID)
                 .textFieldStyle(.roundedBorder).frame(width: 130)
-            TextField("搜索 Agent / Skill / Tool", text: $query)
+            TextField(L10n.text("搜索 Agent / Skill / Tool"), text: $query)
                 .textFieldStyle(.roundedBorder).frame(width: 190)
         }
     }
@@ -110,9 +111,9 @@ struct ActivityDetailView: View {
     private var skillOverview: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Skill 总览").font(.headline)
+                Text(L10n.text("Skill 总览")).font(.headline)
                 Spacer()
-                Text("共 \(skillRows.count) 个已观测 Skill")
+                Text(L10n.text("共 \(skillRows.count) 个已观测 Skill"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 245), spacing: 8)], spacing: 8) {
@@ -127,7 +128,7 @@ struct ActivityDetailView: View {
                             Text(activityCapabilityLabel(capability))
                                 .font(.caption).foregroundStyle(.orange)
                         } else {
-                            Text("\(item?.calls ?? 0) 次")
+                            Text(L10n.text("\(item?.calls ?? 0) 次"))
                                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             Text(activityCapabilityLabel(capability))
                                 .font(.caption).foregroundStyle(capability == .derived ? .orange : .green)
@@ -139,12 +140,12 @@ struct ActivityDetailView: View {
             }
             if !skillRows.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("已观测 Skill").font(.subheadline.weight(.medium))
+                    Text(L10n.text("已观测 Skill")).font(.subheadline.weight(.medium))
                     ForEach(skillRows, id: \.name) { row in
                         HStack {
                             Text(row.name)
                             Spacer()
-                            Text("\(row.calls) 次 · 确认 \(row.exact) · 推断 \(row.derived)")
+                            Text(L10n.text("\(row.calls) 次 · 确认 \(row.exact) · 推断 \(row.derived)"))
                                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 3)
@@ -164,12 +165,12 @@ struct ActivityDetailView: View {
             HStack {
                 Text(scopeTitle).font(.headline)
                 Spacer()
-                Text("当前页 \(rows.count) 条")
+                Text(L10n.text("当前页 \(rows.count) 条"))
                     .font(.caption).foregroundStyle(.secondary)
                 if loading { ProgressView().controlSize(.small) }
             }
             if rows.isEmpty && !loading {
-                ContentUnavailableView("暂无符合条件的活动", systemImage: "clock")
+                ContentUnavailableView(L10n.text("暂无符合条件的活动"), systemImage: "clock")
                     .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 LazyVStack(spacing: 0) {
@@ -179,14 +180,14 @@ struct ActivityDetailView: View {
                     }
                 }
                 if nextBefore != nil {
-                    Button("加载更早 100 条") {
+                    Button(L10n.text("加载更早 100 条")) {
                         Task { await loadMore() }
                     }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 7)
                 } else if !rows.isEmpty {
-                    Text("已到达当前筛选条件的最早记录")
+                    Text(L10n.text("已到达当前筛选条件的最早记录"))
                         .font(.caption).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 5)
@@ -245,6 +246,7 @@ struct ActivityDetailView: View {
 }
 
 private struct ActivityDetailRow: View {
+    @ObservedObject private var language = LanguageManager.shared
     let event: ActivityEvent
 
     var body: some View {
@@ -260,14 +262,14 @@ private struct ActivityDetailRow: View {
                     Text(activityDetailKind(event.eventKind))
                         .font(.caption2).foregroundStyle(.secondary)
                     if event.eventLayer == .requestFallback {
-                        Text("未确认执行")
+                        Text(L10n.text("未确认执行"))
                             .font(.caption2).foregroundStyle(.orange)
                     }
                 }
                 HStack(spacing: 7) {
                     Text("Agent: \(toolDisplayName(event.agent))")
                     if !event.sessionID.isEmpty { Text("Session: \(event.sessionID)") }
-                    if !event.parentCallID.isEmpty { Text("父调用: \(event.parentCallID)") }
+                    if !event.parentCallID.isEmpty { Text(L10n.text("父调用: \(event.parentCallID)")) }
                     Text(activityStatusLabel(event.status))
                     if let duration = event.durationMs { Text("\(duration)ms") }
                 }
@@ -282,9 +284,10 @@ private struct ActivityDetailRow: View {
 }
 
 private func activityDetailDate(_ ms: Int64?) -> String {
-    guard let ms, ms > 0 else { return "未知时间" }
+    guard let ms, ms > 0 else { return L10n.text("未知时间") }
     let formatter = DateFormatter()
-    formatter.dateFormat = "MM-dd HH:mm:ss"
+    formatter.locale = L10n.locale
+    formatter.setLocalizedDateFormatFromTemplate("MMMdHHmmss")
     return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
 }
 

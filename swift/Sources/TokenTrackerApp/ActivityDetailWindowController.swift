@@ -20,9 +20,10 @@ final class ActivityDetailWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makePanel() -> NSPanel {
-        let hosting = NSHostingController(rootView: ActivityDetailView(state: appState))
+        let hosting = NSHostingController(rootView: ActivityDetailView(state: appState).appLanguage())
         let panel = NSPanel(contentViewController: hosting)
-        panel.title = "Agent 活动详情"
+        panel.identifier = NSUserInterfaceItemIdentifier("Agent 活动详情")
+        panel.title = L10n.text("Agent 活动详情")
         panel.styleMask.formUnion([.titled, .closable, .resizable, .utilityWindow])
         panel.setContentSize(NSSize(width: 980, height: 720))
         panel.minSize = NSSize(width: 760, height: 480)

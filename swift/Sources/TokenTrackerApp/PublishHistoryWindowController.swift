@@ -18,9 +18,10 @@ final class PublishHistoryWindowController: NSObject {
 
     func show() {
         if window == nil {
-            let hosting = NSHostingController(rootView: PublishHistoryView(state: appState))
+            let hosting = NSHostingController(rootView: PublishHistoryView(state: appState).appLanguage())
             let window = NSWindow(contentViewController: hosting)
-            window.title = "上传记录"
+            window.identifier = NSUserInterfaceItemIdentifier("上传记录")
+        window.title = L10n.text("上传记录")
             window.setContentSize(NSSize(width: 660, height: 460))
             window.minSize = NSSize(width: 560, height: 320)
             window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])

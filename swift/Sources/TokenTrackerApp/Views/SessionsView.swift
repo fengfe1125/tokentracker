@@ -11,6 +11,7 @@ import SwiftUI
 import TokenTrackerCore
 
 struct SessionsView: View {
+    @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
     let toolFilter: String?
 
@@ -21,13 +22,13 @@ struct SessionsView: View {
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
     private var title: String {
-        toolFilter.map { "\(toolDisplayName($0)) 的会话" } ?? "会话记录"
+        toolFilter.map { L10n.text("\(toolDisplayName($0)) 的会话") } ?? L10n.text("会话记录")
     }
 
     private var subtitle: String {
         let n = state.sessionRows.count
-        if n >= AppState.sessionLimit { return "最近 \(n) 个会话（查询上限）" }
-        return state.sessionSearch.isEmpty ? "共 \(n) 个会话" : "匹配 \(n) 个会话"
+        if n >= AppState.sessionLimit { return L10n.text("最近 \(n) 个会话（查询上限）") }
+        return state.sessionSearch.isEmpty ? L10n.text("共 \(n) 个会话") : L10n.text("匹配 \(n) 个会话")
     }
 
     var body: some View {
@@ -66,7 +67,7 @@ struct SessionsView: View {
             Image(systemName: "magnifyingglass")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            TextField("搜索标题 / 项目 / 会话 / 模型", text: $state.sessionSearch)
+            TextField(L10n.text("搜索标题 / 项目 / 会话 / 模型"), text: $state.sessionSearch)
                 .textFieldStyle(.plain)
                 .frame(width: 210)
             if !state.sessionSearch.isEmpty {
@@ -97,7 +98,7 @@ struct SessionsView: View {
 
     private var tableView: some View {
         Table(sortedRows, selection: $state.selectedSessionID, sortOrder: $sortOrder) {
-            TableColumn("时间", value: \SessionRowModel.sortTs) { row in
+            TableColumn(L10n.text("时间"), value: \SessionRowModel.sortTs) { row in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(row.timeText)
                         .font(.callout.monospacedDigit())
@@ -110,13 +111,13 @@ struct SessionsView: View {
                 }
             }
             .width(min: 76, ideal: 84)
-            TableColumn("会话", value: \.title) { row in
+            TableColumn(L10n.text("会话"), value: \.title) { row in
                 Text(row.title)
                     .font(.callout)
                     .lineLimit(1)
             }
             .width(min: 140, ideal: 240)
-            TableColumn("项目", value: \.projectShort) { row in
+            TableColumn(L10n.text("项目"), value: \.projectShort) { row in
                 Text(row.projectShort)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -125,7 +126,7 @@ struct SessionsView: View {
                     .help(row.project)
             }
             .width(min: 90, ideal: 150)
-            TableColumn("工具", value: \.toolName) { row in
+            TableColumn(L10n.text("工具"), value: \.toolName) { row in
                 // 只给色点上色，文字保持 primary（整条 Label 染色在深色模式下读不清）
                 HStack(spacing: 6) {
                     Circle()
@@ -137,7 +138,7 @@ struct SessionsView: View {
                 }
             }
             .width(min: 84, ideal: 96)
-            TableColumn("模型", value: \.model) { row in
+            TableColumn(L10n.text("模型"), value: \.model) { row in
                 Text(row.model)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -145,9 +146,9 @@ struct SessionsView: View {
                     .truncationMode(.head)
             }
             .width(min: 90, ideal: 150)
-            TableColumn("活动", value: \SessionRowModel.activityExact) { row in
+            TableColumn(L10n.text("活动"), value: \SessionRowModel.activityExact) { row in
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(row.activityExact) 次")
+                    Text(L10n.text("\(row.activityExact) 次"))
                         .font(.callout.monospacedDigit())
                     if row.activityDerived > 0 || row.skills > 0 {
                         Text(activitySubtitle(row))
@@ -164,7 +165,7 @@ struct SessionsView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 78, ideal: 90)
-            TableColumn("成本", value: \SessionRowModel.cost) { row in
+            TableColumn(L10n.text("成本"), value: \SessionRowModel.cost) { row in
                 Text(UIFormat.cost(row.cost))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -174,13 +175,13 @@ struct SessionsView: View {
         }
         .contextMenu(forSelectionType: String.self) { selection in
             if let id = selection.first, let row = rows.first(where: { $0.id == id }) {
-                Button("查看详情") {
+                Button(L10n.text("查看详情")) {
                     state.selectedSessionID = id
                     state.showSessionDetail()
                 }
                 Divider()
-                Button("在 Finder 中打开项目目录") { openInFinder(row.project) }
-                Button("复制会话 ID") {
+                Button(L10n.text("在 Finder 中打开项目目录")) { openInFinder(row.project) }
+                Button(L10n.text("复制会话 ID")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(row.sessionID, forType: .string)
                 }
@@ -194,11 +195,11 @@ struct SessionsView: View {
         .overlay {
             if sortedRows.isEmpty {
                 ContentUnavailableView(
-                    state.sessionSearch.isEmpty ? "暂无会话" : "没有匹配的会话",
+                    state.sessionSearch.isEmpty ? L10n.text("暂无会话") : L10n.text("没有匹配的会话"),
                     systemImage: state.sessionSearch.isEmpty
                         ? "list.bullet.rectangle" : "magnifyingglass",
                     description: Text(state.sessionSearch.isEmpty
-                                      ? "换个时间范围，或到概览点「扫描」" : "试试清空搜索词"))
+                                      ? L10n.text("换个时间范围，或到概览点「扫描」") : L10n.text("试试清空搜索词")))
             }
         }
     }
@@ -258,7 +259,7 @@ struct SessionRowModel: Identifiable {
 
 private func activitySubtitle(_ row: SessionRowModel) -> String {
     var parts: [String] = []
-    if row.activityDerived > 0 { parts.append("推断 \(row.activityDerived)") }
+    if row.activityDerived > 0 { parts.append(L10n.text("推断 \(row.activityDerived)")) }
     if row.skills > 0 { parts.append("Skill \(row.skills)") }
     return parts.joined(separator: " · ")
 }

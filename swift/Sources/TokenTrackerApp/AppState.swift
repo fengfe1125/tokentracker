@@ -53,13 +53,16 @@ final class AppState: ObservableObject {
             insights.refresh()
         }
     }
-    @Published var accountOpMessage: String?            // 操作结果 / 错误提示
+    @Published private var accountNotice: L10n.Template?
+    var accountOpMessage: String? { accountNotice.map(L10n.text) }            // 操作结果 / 错误提示
 
     // 公开统计上报（设置页 + 独立记录窗口）
     @Published var publishState = PublishState()
     @Published var publishHistory: [PublishAttempt] = []
+    @Published private(set) var publishFailed = false
     @Published var publishBusy = false
-    @Published var publishMessage: String?
+    @Published private var publishNotice: L10n.Template?
+    var publishMessage: String? { publishNotice.map(L10n.text) }
     @Published var publishTokenConfigured = false
 
     // 设置（effective = 默认值 + 校验后的已存值）
@@ -92,6 +95,7 @@ final class AppState: ObservableObject {
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
     /// 上报独占一条队列：网络最长阻塞 12 秒，不能占着查询队列。
     private let publishQueue = DispatchQueue(label: "tokentracker.publish")
+    private let isPreview = ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1"
     private let publishTokenStore: KeychainPublishTokenStore
     private let publishHistoryStore: PublishHistoryStore
     private let publisher: PublicStatsPublisher
@@ -134,7 +138,7 @@ final class AppState: ObservableObject {
         let previewHome = (path as NSString).deletingLastPathComponent
         let settingsStore = SettingsStore(path: preview ? previewHome + "/settings.json" : nil)
         let tokenStore = KeychainPublishTokenStore()
-        let historyStore = PublishHistoryStore()
+        let historyStore = PublishHistoryStore(path: preview ? previewHome + "/publish_history.json" : NSHomeDirectory() + "/.tokentracker/publish_history.json")
         self.settingsStore = settingsStore
         publishTokenStore = tokenStore
         publishHistoryStore = historyStore
@@ -145,10 +149,10 @@ final class AppState: ObservableObject {
         self.officialQuotaService = preview ? nil : officialQuotaService
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
-        publishState = PublishState.load(path: NSHomeDirectory() + "/.tokentracker/publish_state.json")
+        publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
         publishHistory = historyStore.load()
         let handle = settings["publish_handle"] as? String ?? ""
-        publishTokenConfigured = tokenStore.read(handle: handle) != nil
+        publishTokenConfigured = !preview && tokenStore.read(handle: handle) != nil
         reloadCodexAccounts()
     }
 
@@ -204,6 +208,7 @@ final class AppState: ObservableObject {
 
         // 更新检查：启动后延迟 30s 的后台一次性请求（对齐 updatecheck.py 注释），
         // 网络失败静默，绝不阻塞启动
+        guard !isPreview else { return }
         let checker = UpdateChecker()
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
             let info = checker.check()
@@ -233,7 +238,7 @@ final class AppState: ObservableObject {
             settings = effective
             scheduler?.setInterval(Double(scanIntervalSeconds))
             let handle = settings["publish_handle"] as? String ?? ""
-            publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
+            publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
         }
     }
 
@@ -275,45 +280,52 @@ final class AppState: ObservableObject {
         ]
         guard values.allSatisfy({ SettingsStore.isValid(key: $0.key, value: $0.value) })
         else {
-            publishMessage = "保存失败：请检查 HTTPS 地址、用户名和公开天数"
+            publishFailed = true
+            publishNotice = L10n.message("保存失败：请检查 HTTPS 地址、用户名和公开天数")
             return
         }
         let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         if !cleanToken.isEmpty,
            publishTokenStore.writeReportingLocation(handle: handle, token: cleanToken) == nil {
-            publishMessage = "保存失败：无法写入发布 Token"
+            publishFailed = true
+            publishNotice = L10n.message("保存失败：无法写入发布 Token")
             return
         }
         guard settingsStore.set(values: values) else {
-            publishMessage = "保存失败：配置校验未通过"
+            publishFailed = true
+            publishNotice = L10n.message("保存失败：配置校验未通过")
             return
         }
+        publishFailed = false
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
-        publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
-        publishMessage = publishTokenConfigured ? "公开统计配置已保存" : "配置已保存，请填写发布 Token"
+        publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
+        publishNotice = publishTokenConfigured ? L10n.message("公开统计配置已保存") : L10n.message("配置已保存，请填写发布 Token")
     }
 
     func setPublishEnabled(_ enabled: Bool) {
         if enabled && !publishConfigurationReady {
-            publishMessage = "请先保存完整的服务地址、用户名和发布 Token"
+            publishNotice = L10n.message("请先保存完整的服务地址、用户名和发布 Token")
             return
         }
+        publishFailed = false
         updateSetting(key: "publish_enabled", value: enabled)
-        publishMessage = enabled ? "自动上传已开启" : "自动上传已关闭"
+        publishNotice = enabled ? L10n.message("自动上传已开启") : L10n.message("自动上传已关闭")
     }
 
     func performPublish(trigger: PublishTrigger) {
         guard trigger != .automatic, publishConfigurationReady, !publishBusy else { return }
+        publishFailed = false
         publishBusy = true
-        publishMessage = trigger == .forced ? "正在强制上传…" : "正在按规则检查并上传…"
+        publishNotice = trigger == .forced ? L10n.message("正在强制上传…") : L10n.message("正在按规则检查并上传…")
         let path = readStore.path
         let publisher = publisher
         publishQueue.async { [weak self] in
             guard let store = try? UsageStore(path: path) else {
                 DispatchQueue.main.async {
                     self?.publishBusy = false
-                    self?.publishMessage = "无法打开本地统计数据库"
+                    self?.publishFailed = true
+                    self?.publishNotice = L10n.message("无法打开本地统计数据库")
                 }
                 return
             }
@@ -321,18 +333,19 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.publishBusy = false
-                self.publishMessage = Self.publishOutcomeText(outcome)
+                self.publishFailed = !outcome.error.isEmpty
+                self.publishNotice = Self.publishOutcomeText(outcome)
                 self.refreshPublishInfo()
             }
         }
     }
 
     func refreshPublishInfo(refreshToken: Bool = true) {
-        publishState = PublishState.load(path: NSHomeDirectory() + "/.tokentracker/publish_state.json")
+        publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
         publishHistory = publishHistoryStore.load()
         if refreshToken {
             let handle = settings["publish_handle"] as? String ?? ""
-            publishTokenConfigured = publishTokenStore.read(handle: handle) != nil
+            publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
         }
     }
 
@@ -341,15 +354,15 @@ final class AppState: ObservableObject {
         publishHistory = []
     }
 
-    private static func publishOutcomeText(_ outcome: PublishOutcome) -> String {
+    private static func publishOutcomeText(_ outcome: PublishOutcome) -> L10n.Template {
         switch outcome.decision {
         case .publish:
-            return outcome.error.isEmpty ? "上传成功（\(outcome.bytes) 字节）" : "上传失败：\(outcome.error)"
-        case .skipDisabled: return "自动上传未开启"
-        case .skipUnconfigured: return "服务地址或用户名未配置"
-        case .skipUnchanged: return "公开数据没有变化，无需重复上传"
-        case .skipThrottled: return "距离上次上传不足 15 分钟"
-        case .skipBackoff: return "服务暂不可用，当前处于失败退避期"
+            return outcome.error.isEmpty ? L10n.message("上传成功（\(outcome.bytes) 字节）") : L10n.message("上传失败：\(outcome.error)")
+        case .skipDisabled: return L10n.message("自动上传未开启")
+        case .skipUnconfigured: return L10n.message("服务地址或用户名未配置")
+        case .skipUnchanged: return L10n.message("公开数据没有变化，无需重复上传")
+        case .skipThrottled: return L10n.message("距离上次上传不足 15 分钟")
+        case .skipBackoff: return L10n.message("服务暂不可用，当前处于失败退避期")
         }
     }
 
@@ -640,7 +653,7 @@ final class AppState: ObservableObject {
         queryQueue.async { [weak self] in
             let accounts: [CodexAccount]
             do { accounts = try switcher.store.loadChecked() } catch {
-                DispatchQueue.main.async { self?.accountOpMessage = String(describing:error) }; return
+                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
             }
             let active = switcher.activeAccountID()
             DispatchQueue.main.async {
@@ -658,15 +671,15 @@ final class AppState: ObservableObject {
                 let account = try switcher.captureCurrent(name: name)
                 let accounts = switcher.store.load()
                 let active = switcher.activeAccountID()
-                let message = "已保存账号「\(account.name)」"
+                let message = L10n.message("已保存账号「\(account.name)」")
                 DispatchQueue.main.async {
                     self?.codexAccounts = accounts
                     self?.activeCodexAccountID = active
-                    self?.accountOpMessage = message
+                    self?.accountNotice = message
                 }
             } catch {
-                let message = "保存失败：\(error)"
-                DispatchQueue.main.async { self?.accountOpMessage = message }
+                let message = L10n.message("保存失败：\(UIFormat.appError(error))")
+                DispatchQueue.main.async { self?.accountNotice = message }
             }
         }
     }
@@ -682,7 +695,7 @@ final class AppState: ObservableObject {
                 DispatchQueue.main.async {
                     self?.codexAccounts = accounts
                     self?.activeCodexAccountID = active
-                    self?.accountOpMessage = "已切换，请重启 Codex 生效"
+                    self?.accountNotice = L10n.message("已切换，请重启 Codex 生效")
                     self?.officialQuotaService = OfficialQuotaService()
                     self?.insights.mutate { store in
                         _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
@@ -692,11 +705,11 @@ final class AppState: ObservableObject {
                 }
             } catch {
                 let message = (error as? AccountPersistenceError) == .historyAfterSwitch
-                    ? "切换已完成，但记录保存失败" : "切换失败：\(error)"
+                    ? L10n.message("切换已完成，但记录保存失败") : L10n.message("切换失败：\(UIFormat.appError(error))")
                 let switched = (error as? AccountPersistenceError) == .historyAfterSwitch
                 let active = switched ? switcher.activeAccountID() : nil
                 DispatchQueue.main.async {
-                    self?.accountOpMessage = message
+                    self?.accountNotice = message
                     if switched {
                         self?.activeCodexAccountID = active
                         self?.officialQuotaService = OfficialQuotaService()
@@ -716,7 +729,7 @@ final class AppState: ObservableObject {
         queryQueue.async { [weak self] in
             let accounts: [CodexAccount]
             do { accounts = try switcher.store.remove(id) } catch {
-                DispatchQueue.main.async { self?.accountOpMessage = String(describing: error) }; return
+                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
             }
             DispatchQueue.main.async { self?.codexAccounts = accounts }
         }
@@ -727,7 +740,7 @@ final class AppState: ObservableObject {
         queryQueue.async { [weak self] in
             let accounts: [CodexAccount]
             do { accounts = try switcher.store.rename(id, name: name) } catch {
-                DispatchQueue.main.async { self?.accountOpMessage = String(describing: error) }; return
+                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
             }
             DispatchQueue.main.async { self?.codexAccounts = accounts }
         }

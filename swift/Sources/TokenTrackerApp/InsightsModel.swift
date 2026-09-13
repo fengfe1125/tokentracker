@@ -27,9 +27,12 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
     @Published var busy = false
     @Published var analyticsLoading = false
     private var analyticsScope = ""
-    @Published var error: String?
-    @Published var backfillProgress = ""
-    @Published var exportMessage: String?
+    @Published private var errorNotice: L10n.Template?
+    var error: String? { errorNotice.map(L10n.text) }
+    @Published private var backfillProgressNotice: L10n.Template?
+    var backfillProgress: String { backfillProgressNotice.map(L10n.text) ?? "" }
+    @Published private var exportMessageNotice: L10n.Template?
+    var exportMessage: String? { exportMessageNotice.map(L10n.text) }
     @Published var costSources: [UsageBreakdown] = []
     @Published var exporting = false
     @Published var notificationsEnabled = false
@@ -48,7 +51,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
     init(path:String) {
         self.path=path
         super.init()
-        notificationsEnabled=UserDefaults.standard.bool(forKey:"tt.notifications.enabled")
+        notificationsEnabled=ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] != "1" && UserDefaults.standard.bool(forKey:"tt.notifications.enabled")
         if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate=self }
     }
     func refresh(afterScan: Bool = false, more: Bool = false) {
@@ -69,7 +72,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                     try store.generateWeeklyReport()
                     let reports=try store.weeklyReports()
                     DispatchQueue.main.async { self?.reports=reports }
-                } catch { DispatchQueue.main.async { self?.error="自动周报生成失败，可在报告页重试" } }
+                } catch { DispatchQueue.main.async { self?.errorNotice=L10n.message("自动周报生成失败，可在报告页重试") } }
             }
         }
         queue.async { [weak self] in
@@ -84,11 +87,11 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                 DispatchQueue.main.async {
                     guard let self,version==self.generation else { return }
                     self.registry=registry;self.projects=more ? self.projects+projects : projects
-                    self.totals=totals;self.health=health;self.busy=false;self.error=nil
+                    self.totals=totals;self.health=health;self.busy=false;self.errorNotice=nil
                     self.loadAnalytics(query:query,version:version,cancellation:cancellation)
                 }
             } catch is CancellationError { }
-            catch { DispatchQueue.main.async { guard let self,version==self.generation else { return };self.busy=false;self.error="分析数据读取失败，请重试" } }
+            catch { DispatchQueue.main.async { guard let self,version==self.generation else { return };self.busy=false;self.errorNotice=L10n.message("分析数据读取失败，请重试") } }
         }
     }
     private func loadAnalytics(query:UsageQuery,version:Int,cancellation:ExportCancellation) {
@@ -115,7 +118,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                     self.deliver(risks)
                 }
             } catch is CancellationError { }
-            catch { DispatchQueue.main.async { guard let self,version==self.generation else { return };self.analyticsLoading=false;self.error="部分分析未完成，请刷新重试" } }
+            catch { DispatchQueue.main.async { guard let self,version==self.generation else { return };self.analyticsLoading=false;self.errorNotice=L10n.message("部分分析未完成，请刷新重试") } }
         }
     }
     func startBackfill() {
@@ -126,12 +129,12 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                 let store=try UsageStore(path:path)
                 while true {
                     let progress=try ProjectBackfill.runBatch(store:store,roots:ScanRoots())
-                    DispatchQueue.main.async { self?.backfillProgress="项目归属补全 \(progress.processed) / \(progress.total)" }
+                    DispatchQueue.main.async { self?.backfillProgressNotice=L10n.message("项目归属补全 \(progress.processed) / \(progress.total)") }
                     if progress.complete { break }
                 }
                 DispatchQueue.main.async { self?.backfillRunning=false;self?.refresh() }
             } catch {
-                DispatchQueue.main.async { self?.backfillRunning=false;self?.backfillProgress="项目归属补全暂停，将在下次扫描后重试" }
+                DispatchQueue.main.async { self?.backfillRunning=false;self?.backfillProgressNotice=L10n.message("项目归属补全暂停，将在下次扫描后重试") }
             }
         }
     }
@@ -143,7 +146,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                 let store=try UsageStore(path:path);try action(store)
                 DispatchQueue.main.async { self?.refresh() }
             } catch {
-                DispatchQueue.main.async { self?.error="保存失败，请检查输入、文件权限与磁盘空间" }
+                DispatchQueue.main.async { self?.errorNotice=L10n.message("保存失败，请检查输入、文件权限与磁盘空间") }
             }
         }
     }
@@ -153,7 +156,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
             do {
                 try UsageStore(path:path).createProject(id:id,name:name)
                 DispatchQueue.main.async { self?.query.projectID=id;self?.search="";self?.refresh() }
-            } catch { DispatchQueue.main.async { self?.error="项目创建失败，请检查名称和存储权限" } }
+            } catch { DispatchQueue.main.async { self?.errorNotice=L10n.message("项目创建失败，请检查名称和存储权限") } }
         }
     }
     func inspectChange(_ change:ChangeContribution) {
@@ -173,7 +176,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
         UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]) { [weak self] granted,_ in
             Task { @MainActor in
                 self?.notificationsEnabled=granted;UserDefaults.standard.set(granted,forKey:"tt.notifications.enabled")
-                if !granted { self?.error="系统通知未获授权；应用内提醒仍可使用" }
+                if !granted { self?.errorNotice=L10n.message("系统通知未获授权；应用内提醒仍可使用") }
             }
         }
     }
@@ -192,8 +195,8 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                     _ = try store.conn.execute("INSERT OR REPLACE INTO insight_state VALUES (?,?)",["notification-target:"+route,risk.projectID ?? ""])
                     try store.conn.commit()
                     let content=UNMutableNotificationContent()
-                    content.title="TokenTracker 用量提醒"
-                    content.body=risk.level == 1 ? "按近期速度估算，配额可能在重置前耗尽。打开应用查看。" : "一项预算或配额已达到 \(risk.level)% 。打开应用查看。"
+                    content.title=L10n.text("TokenTracker 用量提醒")
+                    content.body=risk.level == 1 ? L10n.text("按近期速度估算，配额可能在重置前耗尽。打开应用查看。") : L10n.text("一项预算或配额已达到 \(risk.level)% 。打开应用查看。")
                     content.userInfo=["route":route]
                     let request=UNNotificationRequest(identifier:route+":"+risk.cycle+":"+String(risk.level),content:content,trigger:nil)
                     UNUserNotificationCenter.current().add(request) { error in
@@ -223,30 +226,32 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
     func showHealth(tool:String? = nil, rescan:@escaping ()->Void) {
         if healthWindow == nil {
             let window=NSWindow(contentRect:NSRect(x:0,y:0,width:760,height:560),styleMask:[.titled,.closable,.resizable,.miniaturizable],backing:.buffered,defer:false)
-            window.title="数据健康";window.isReleasedWhenClosed=false;healthWindow=window;window.center()
+            window.identifier=NSUserInterfaceItemIdentifier("数据健康");window.title=L10n.text("数据健康");window.isReleasedWhenClosed=false;healthWindow=window;window.center()
         }
-        healthWindow?.contentView=NSHostingView(rootView:HealthView(model:self,tool:tool,rescan:rescan))
+        healthWindow?.contentView=NSHostingView(rootView:HealthView(model:self,tool:tool,rescan:rescan).appLanguage())
         healthWindow?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true);refresh()
     }
     func export(kind:ExportKind,format:ExportFormat,includePrivate:Bool,queryOverride:UsageQuery? = nil) {
         let effectiveQuery=queryOverride ?? query
-        if kind == .activity,effectiveQuery.model != nil { error="现有证据无法把活动准确归入模型；请清除模型筛选或导出用量记录";return }
+        if kind == .activity,effectiveQuery.model != nil { errorNotice=L10n.message("现有证据无法把活动准确归入模型；请清除模型筛选或导出用量记录");return }
         let panel=NSSavePanel();panel.nameFieldStringValue="TokenTracker-\(kind.rawValue).\(format.rawValue)"
         guard panel.runModal() == .OK,let url=panel.url else { return }
-        let cancellation=ExportCancellation();self.cancellation=cancellation;exporting=true;exportMessage=nil
+        let cancellation=ExportCancellation();self.cancellation=cancellation;exporting=true;exportMessageNotice=nil
         let path=path,query=effectiveQuery
         exportQueue.async { [weak self] in
             do {
                 try InsightExporter.export(store:UsageStore(path:path),query:query,kind:kind,format:format,destination:url,includePrivate:includePrivate,cancellation:cancellation)
-                DispatchQueue.main.async { self?.exporting=false;self?.error=nil;self?.exportMessage="导出已保存到所选文件" }
+                DispatchQueue.main.async { self?.exporting=false;self?.errorNotice=nil;self?.exportMessageNotice=L10n.message("导出已保存到所选文件") }
             } catch is CancellationError { DispatchQueue.main.async { self?.exporting=false } }
-            catch { DispatchQueue.main.async { self?.exporting=false;self?.error="导出失败，未保存不完整结果" } }
+            catch { DispatchQueue.main.async { self?.exporting=false;self?.errorNotice=L10n.message("导出失败，未保存不完整结果") } }
         }
     }
+    func clearExportMessage() { exportMessageNotice = nil }
+
     func cancelExport() { cancellation?.cancel() }
     func exportReport(_ report:WeeklyReport) {
         let panel=NSSavePanel();panel.nameFieldStringValue="TokenTracker-weekly.md"
         guard panel.runModal() == .OK,let url=panel.url else { return }
-        do { try report.markdown.write(to:url,atomically:true,encoding:.utf8) } catch { self.error="周报保存失败" }
+        do { try report.markdown.write(to:url,atomically:true,encoding:.utf8) } catch { self.errorNotice=L10n.message("周报保存失败") }
     }
 }

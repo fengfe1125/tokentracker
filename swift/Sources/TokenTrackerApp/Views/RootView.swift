@@ -10,6 +10,7 @@ import SwiftUI
 import TokenTrackerCore
 
 struct RootView: View {
+    @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
 
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
@@ -18,27 +19,27 @@ struct RootView: View {
         NavigationSplitView {
             List(selection: $state.selection) {
                 Section {
-                    Label("概览", systemImage: "chart.bar.fill")
+                    Label(L10n.text("概览"), systemImage: "chart.bar.fill")
                         .tag(NavSelection.overview)
-                    Label("项目", systemImage: "folder").tag(NavSelection.projects)
-                    Label("报告", systemImage: "doc.text").tag(NavSelection.reports)
-                    Label("会话记录", systemImage: "list.bullet.rectangle")
+                    Label(L10n.text("项目"), systemImage: "folder").tag(NavSelection.projects)
+                    Label(L10n.text("报告"), systemImage: "doc.text").tag(NavSelection.reports)
+                    Label(L10n.text("会话记录"), systemImage: "list.bullet.rectangle")
                         .tag(NavSelection.sessions)
-                    Label("Agent 活动", systemImage: "point.3.connected.trianglepath.dotted")
+                    Label(L10n.text("Agent 活动"), systemImage: "point.3.connected.trianglepath.dotted")
                         .tag(NavSelection.activity)
                 }
-                Section("Agent 数据源") {
+                Section(L10n.text("Agent 数据源")) {
                     ForEach(ScannerRegistry.all, id: \.self) { name in
                         ToolSidebarRow(name: name,
                                        installed: state.detectInfo[name]?.installed ?? false,
                                        todayTokens: todayTokens(for: name),
                                        yi: yi)
                             .tag(NavSelection.tool(name))
-                            .contextMenu { Button("数据健康") { state.insights.showHealth(tool:name,rescan:{ state.requestScan() }) } }
+                            .contextMenu { Button(L10n.text("数据健康")) { state.insights.showHealth(tool:name,rescan:{ state.requestScan() }) } }
                     }
                 }
                 Section {
-                    Label("设置", systemImage: "gear")
+                    Label(L10n.text("设置"), systemImage: "gear")
                         .tag(NavSelection.settings)
                 }
             }
@@ -92,6 +93,7 @@ struct RootView: View {
 
 /// 侧栏工具行：色点 + 名称 + 数据源状态 + 今日量
 private struct ToolSidebarRow: View {
+    @ObservedObject private var language = LanguageManager.shared
     let name: String
     let installed: Bool
     let todayTokens: Int64?
@@ -116,7 +118,7 @@ private struct ToolSidebarRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if !installed {
-                Text("未检测到")
+                Text(L10n.text("未检测到"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

@@ -19,6 +19,7 @@ struct TrendPoint: Identifiable, Equatable {
 }
 
 struct HandDrawnTrendChart: View {
+    @ObservedObject private var language = LanguageManager.shared
     let points: [TrendPoint]
     /// 小时粒度（今天）x 标签保留 "HH:00"；天粒度裁成 "MM-dd"
     let isHourly: Bool
@@ -28,7 +29,9 @@ struct HandDrawnTrendChart: View {
 
     /// 系列定义：名称 / 颜色 / 线宽 / 虚线 / 取值
     fileprivate struct Series {
-        let name: String
+        let title: L10n.Template
+        var name: String { L10n.text(title) }
+        var isCost: Bool { title.key == "成本" }
         let color: Color
         let width: CGFloat
         let dashed: Bool
@@ -36,11 +39,11 @@ struct HandDrawnTrendChart: View {
     }
 
     fileprivate static let seriesList: [Series] = [
-        Series(name: "缓存命中", color: .purple, width: 2.0, dashed: false, value: \.cacheRead),
-        Series(name: "非缓存输入", color: .blue, width: 1.6, dashed: false, value: \.input),
-        Series(name: "输出", color: .green, width: 1.6, dashed: false, value: \.output),
-        Series(name: "缓存创建", color: .orange, width: 1.6, dashed: false, value: \.cacheWrite),
-        Series(name: "成本", color: .red, width: 1.4, dashed: true, value: \.cost),
+        Series(title: "缓存命中", color: .purple, width: 2.0, dashed: false, value: \.cacheRead),
+        Series(title: "非缓存输入", color: .blue, width: 1.6, dashed: false, value: \.input),
+        Series(title: "输出", color: .green, width: 1.6, dashed: false, value: \.output),
+        Series(title: "缓存创建", color: .orange, width: 1.6, dashed: false, value: \.cacheWrite),
+        Series(title: "成本", color: .red, width: 1.4, dashed: true, value: \.cost),
     ]
 
     private var maxTokens: Double {
@@ -155,7 +158,7 @@ struct HandDrawnTrendChart: View {
                 endPoint: CGPoint(x: plot.midX, y: plot.maxY)))
         }
         for (i, series) in Self.seriesList.enumerated() {
-            let max = series.name == "成本" ? maxCost : maxTokens
+            let max = series.isCost ? maxCost : maxTokens
             let pts = pointPixels(series.value, max: max, plot: plot)
             guard pts.count > 1 else { continue }
             let path = sketchPath(pts, seed: UInt64(0x5EED) &+ UInt64(i) &* 7919)
@@ -184,7 +187,7 @@ struct HandDrawnTrendChart: View {
         ctx.stroke(guide, with: .color(.secondary.opacity(0.45)),
                    style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
         for series in Self.seriesList {
-            let max = series.name == "成本" ? maxCost : maxTokens
+            let max = series.isCost ? maxCost : maxTokens
             let y = yPosition(series.value(points[hoverIndex]), max: max, plot: plot)
             let dot = Path(ellipseIn: CGRect(x: x - 3, y: y - 3, width: 6, height: 6))
             ctx.fill(dot, with: .color(series.color))
@@ -263,7 +266,7 @@ struct HandDrawnTrendChart: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Text(series.name == "成本"
+                    Text(series.isCost
                          ? UIFormat.costPrecise(series.value(point))
                          : UIFormat.tokens(Int64(series.value(point)), yi: false))
                         .font(.caption2.monospacedDigit())

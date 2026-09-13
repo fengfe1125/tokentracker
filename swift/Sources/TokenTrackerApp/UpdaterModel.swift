@@ -18,7 +18,7 @@ enum UpdateStage: Equatable {
     case downloading(Double)
     case installing
     case installed          // 换好了，等重启
-    case failed(String)
+    case failed(L10n.Template)
 }
 
 @MainActor
@@ -109,7 +109,7 @@ final class UpdaterModel: ObservableObject {
         NSApp.terminate(nil)
     }
 
-    private static func describe(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    private static func describe(_ error: Error) -> L10n.Template {
+        UIFormat.appError(error)
     }
 }

@@ -22,7 +22,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func show() {
         log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
-            let hosting = NSHostingController(rootView: RootView(state: appState))
+            let hosting = NSHostingController(rootView: RootView(state: appState).appLanguage())
             let window = NSWindow(contentViewController: hosting)
             window.title = "TokenTracker"
             let narrow = ProcessInfo.processInfo.environment["TT_UI_PREVIEW_NARROW"] == "1"
@@ -41,7 +41,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     private func log2(_ message: String) {
-        let path = NSHomeDirectory() + "/.tokentracker/app.log"
+        let path = ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1"
+            ? NSTemporaryDirectory() + "/tokentracker-preview.log" : NSHomeDirectory() + "/.tokentracker/app.log"
         let line = "\(Date()) \(message)\n"
         if let h = FileHandle(forWritingAtPath: path) {
             h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()

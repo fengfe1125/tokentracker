@@ -22,6 +22,12 @@ echo "==> 组装 $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/TokenTracker"
+# The App's localization loader resolves the SwiftPM bundle in Contents/Resources.
+cp -R "$PKG/.build/release/TokenTracker_TokenTrackerApp.bundle" "$APP/Contents/Resources/"
+for lang in en zh-Hans; do
+  mkdir -p "$APP/Contents/Resources/$lang.lproj"
+  cp "$PKG/Sources/TokenTrackerApp/Resources/$lang.lproj/InfoPlist.strings" "$APP/Contents/Resources/$lang.lproj/"
+done
 if [ -f "$ROOT/assets/icon.icns" ]; then
   cp "$ROOT/assets/icon.icns" "$APP/Contents/Resources/icon.icns"
 fi
@@ -30,6 +36,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
   <key>CFBundleName</key><string>TokenTracker</string>
   <key>CFBundleDisplayName</key><string>TokenTracker</string>
   <key>CFBundleIdentifier</key><string>com.tokentracker.desktop.v2</string>

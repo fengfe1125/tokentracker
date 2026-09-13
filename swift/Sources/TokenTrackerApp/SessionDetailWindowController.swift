@@ -49,9 +49,10 @@ final class SessionDetailWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makePanel() -> NSPanel {
-        let hosting = NSHostingController(rootView: SessionDetailView(state: appState))
+        let hosting = NSHostingController(rootView: SessionDetailView(state: appState).appLanguage())
         let panel = NSPanel(contentViewController: hosting)
-        panel.title = "会话详情"
+        panel.identifier = NSUserInterfaceItemIdentifier("会话详情")
+        panel.title = L10n.text("会话详情")
         panel.styleMask.formUnion([.titled, .closable, .resizable, .utilityWindow])
         panel.setContentSize(NSSize(width: 380, height: 620))
         panel.minSize = NSSize(width: 320, height: 300)
