@@ -36,6 +36,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)         // 主面板打开时临时出现 Dock 图标
         NSApp.activate(ignoringOtherApps: true)
         if window?.isVisible == false { window?.center() }
+        if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
         log2("MainWindowController.show: done, visible=\(window?.isVisible == true)")
     }

@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        let showOnLaunch = AppLaunchPolicy.showsMainWindow(for: NSAppleEventManager.shared().currentAppleEvent)
         dbg("AppDelegate.start")
         if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1", ProcessInfo.processInfo.environment["TT_UI_PREVIEW_DARK"] == "1" { NSApp.appearance = NSAppearance(named:.darkAqua) }
         NSApp.setActivationPolicy(.accessory)   // 无 Dock 图标
@@ -105,6 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installFileMenu()
         localizeStandardMenus()   // ⌘W 关闭主面板（只隐藏）
+        if showOnLaunch {
+            DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainPanel()
+        return false
     }
 
     func applicationWillTerminate(_: Notification) {
