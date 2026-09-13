@@ -58,6 +58,12 @@ public struct OpencodeScanner: ScannerAdapter {
                 cacheRead: row.int("tokens_cache_read"), cacheWrite: row.int("tokens_cache_write"),
                 nativeCost: row.doubleOrNil("cost"), prices: prices,
                 legacyKey: id, observedAt: observedAt)
+            let directory=row.string("directory")
+            if directory.hasPrefix("/") {
+                for event in try store.conn.query("SELECT src_key FROM usage_events WHERE tool=? AND session_id=?",[name,id]) {
+                    try store.recordProjectPath(tool:name,srcKey:event.string("src_key"),path:directory)
+                }
+            }
             try store.setSessionTitle(tool: name, sessionID: id, title: row.string("title"))
             outcome.added += result.added
             outcome.counterResets += result.counterResets

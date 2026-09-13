@@ -2,8 +2,8 @@
 //  OverviewView.swift
 //  TokenTrackerApp
 //
-//  概览：cc-switch 风格使用统计 —— 总览大卡（真实消耗 Tokens / 总请求数 /
-//  总成本）/ 2×2 输入输出明细卡 / 缓存命中率进度条 / 使用趋势平滑折线
+//  概览：cc-switch 风格使用统计 —— 总览大卡（真实消耗 Tokens / 用量记录数 /
+//  费用合计）/ 2×2 输入输出明细卡 / 缓存命中率进度条 / 使用趋势平滑折线
 //  （成本虚线走右侧轴）/ 订阅配额卡 / 模型榜。数据对齐 UsageStore.stats/daily。
 //
 
@@ -20,7 +20,7 @@ struct OverviewView: View {
             PanelHeader(title: "用量概览", subtitle: updatedText) {
                 Picker("时间范围", selection: $state.range) {
                     Text("今天").tag("day")
-                    Text("本周").tag("week")
+                    Text("近 7 天").tag("week")
                     Text("本月").tag("month")
                     Text("全部").tag("all")
                 }
@@ -51,6 +51,7 @@ struct OverviewView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    InsightsOverview(model:state.insights,rescan:{state.requestScan()})
                     summaryCard
                     detailGrid
                     hitRateCard
@@ -112,7 +113,7 @@ struct OverviewView: View {
             Spacer()
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("总请求数")
+                    Text("用量记录数")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("\(total.events)")
@@ -124,10 +125,11 @@ struct OverviewView: View {
                 Divider()
                     .frame(height: 36)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("总成本")
+                    Text("费用合计")
+                    Text("含估算，非订阅账单").font(.caption2).foregroundStyle(.secondary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(UIFormat.costPrecise(total.cost))
+                    Text(total.events > 0 && total.unpriced == total.events ? "未计价" : UIFormat.costPrecise(total.cost))
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.green)
@@ -269,7 +271,7 @@ struct OverviewView: View {
     }
 
     private var rangeLabel: String {
-        ["day": "今天", "week": "本周", "month": "本月", "all": "全部"][state.range] ?? state.range
+        ["day": "今天", "week": "近 7 天", "month": "本月", "all": "全部"][state.range] ?? state.range
     }
 
     private var trendLegend: some View {

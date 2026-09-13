@@ -20,6 +20,8 @@ struct RootView: View {
                 Section {
                     Label("概览", systemImage: "chart.bar.fill")
                         .tag(NavSelection.overview)
+                    Label("项目", systemImage: "folder").tag(NavSelection.projects)
+                    Label("报告", systemImage: "doc.text").tag(NavSelection.reports)
                     Label("会话记录", systemImage: "list.bullet.rectangle")
                         .tag(NavSelection.sessions)
                     Label("Agent 活动", systemImage: "point.3.connected.trianglepath.dotted")
@@ -32,6 +34,7 @@ struct RootView: View {
                                        todayTokens: todayTokens(for: name),
                                        yi: yi)
                             .tag(NavSelection.tool(name))
+                            .contextMenu { Button("数据健康") { state.insights.showHealth(tool:name,rescan:{ state.requestScan() }) } }
                     }
                 }
                 Section {
@@ -43,6 +46,10 @@ struct RootView: View {
             .frame(minWidth: 180)
         } detail: {
             switch state.selection {
+            case .projects:
+                ProjectsView(model: state.insights)
+            case .reports:
+                ReportsView(model: state.insights)
             case .overview:
                 OverviewView(state: state)
             case .sessions:

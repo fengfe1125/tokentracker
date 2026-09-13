@@ -33,6 +33,12 @@
 
 > If TokenTracker helps you understand your AI coding costs, consider giving it a **Star**. It helps other developers who work with multiple agents discover the project.
 
+## v0.3.0 update
+
+Project token breakdowns, data health, session execution timelines, budget/quota risk alerts, local weekly reports, and redacted exports. Costs include estimates and are not subscription bills.
+
+See the [bilingual release notes](docs/v0.3.0-release-notes.md) and [validation notes](docs/v0.3.0-validation.md).
+
 ## Why TokenTracker?
 
 Claude Code, Codex, Kimi Code, and other coding agents all record usage differently. Their logs, pricing, and quota information live in separate places. TokenTracker reads those records directly from your Mac and turns them into one clear, native dashboard.

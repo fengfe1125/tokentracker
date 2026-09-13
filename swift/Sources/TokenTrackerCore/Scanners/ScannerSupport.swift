@@ -64,7 +64,9 @@ public func fingerprintChanged(cursor: [String: Any], path: String) -> Bool {
 
 /// Python json.loads 一行 → [String: Any]（非 dict 返回 nil）。
 public func parseJSONLine(_ data: Data) -> [String: Any]? {
-    (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    if object == nil { ScanDiagnostics.current?.parseErrors += 1 }
+    return object
 }
 
 /// 按 \n 切行并保留行号语义（Python 文件迭代只认 \n；空行计入行号）。
@@ -75,7 +77,7 @@ private func splitJSONLines(_ data: Data) -> [String] {
 
 /// iter_jsonl：yield (行号从 1 起, dict)。解析失败的行跳过；行号仍计入。
 public func iterJSONL(_ path: String) -> [(Int, [String: Any])] {
-    guard let data = FileManager.default.contents(atPath: path) else { return [] }
+    guard let data = FileManager.default.contents(atPath: path) else { ScanDiagnostics.current?.readErrors += 1; return [] }
     var out: [(Int, [String: Any])] = []
     for (index, line) in splitJSONLines(data).enumerated() {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_: Notification) {
         dbg("AppDelegate.start")
+        if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1", ProcessInfo.processInfo.environment["TT_UI_PREVIEW_DARK"] == "1" { NSApp.appearance = NSAppearance(named:.darkAqua) }
         NSApp.setActivationPolicy(.accessory)   // 无 Dock 图标
 
         let bar = StatusItemController(appState: appState)
@@ -51,6 +52,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_MAIN"] == "1" {
             appState.selection = .activity
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
+        }
+        appState.insights.onInspect = { [weak self] in self?.appState.selection = .projects; self?.showMainPanel() }
+        appState.insights.onSession = { [weak self] tool,session in self?.appState.showInsightSession(tool:tool,sessionID:session) }
+        appState.insights.onNavigate = { [weak self] project in
+            self?.appState.insights.query.projectID = project
+            self?.appState.selection = .projects
+            self?.showMainPanel()
         }
         appState.start()
         dbg("appState started")

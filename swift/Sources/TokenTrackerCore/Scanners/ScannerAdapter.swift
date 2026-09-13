@@ -109,8 +109,11 @@ public struct ScanRunner {
         var results: [String: ScanOutcome] = [:]
         for name in tools ?? ScannerRegistry.all {
             guard let adapter = ScannerRegistry.make(name, roots: roots) else { continue }
+            ScanDiagnostics.begin()
+            let started = store.nowMs()
             if !adapter.detect() {
                 results[name] = ScanOutcome(skipped: "未检测到数据源")
+                try? store.recordHealth(tool: name, outcome: results[name]!, started: started, finished: store.nowMs())
                 continue
             }
             do {
@@ -133,6 +136,9 @@ public struct ScanRunner {
             } catch {
                 try? store.conn.rollback()
                 results[name] = ScanOutcome(error: String(describing: error))
+            }
+            if let outcome = results[name] {
+                try? store.recordHealth(tool: name, outcome: outcome, started: started, finished: store.nowMs())
             }
         }
         try? store.conn.commit()

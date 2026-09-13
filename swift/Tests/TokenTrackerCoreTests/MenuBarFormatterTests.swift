@@ -160,7 +160,7 @@ final class SegmentRenderPortTests: XCTestCase {
 
     func testTodayLineSegments() {
         XCTAssertEqual(MenuBarFmt.todayLineSegments(MenuBarToday(tokens: 1500, cost: 2.5))
-            .map(\.text).joined(), "今日 1.50K tokens · $2.50")
+            .map(\.text).joined(), "今日 1.50K tokens · ≈$2.50")
         XCTAssertEqual(MenuBarFmt.todayLineSegments(nil),
                        [MenuBarSegment("今日暂无数据（点「立即扫描」）", "dim")])
     }

@@ -27,6 +27,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private var statusItem: NSStatusItem?
     private var todayItem: NSMenuItem?
+    private var riskItem: NSMenuItem?
     private var quotaItems: [NSMenuItem] = []
     private var displayItem: NSMenuItem?
     private static let maxQuotaLines = 4
@@ -125,6 +126,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         today.isEnabled = false
         menu.addItem(today)
         todayItem = today
+        let risk = NSMenuItem(title:"",action:nil,keyEquivalent:"")
+        risk.isEnabled=false;menu.addItem(risk);riskItem=risk
         for _ in 0..<Self.maxQuotaLines {
             let it = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             it.isEnabled = false
@@ -440,6 +443,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 菜单 ----
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        let risks = appState.insights.risks.filter { $0.level > 0 }
+        riskItem?.title = risks.isEmpty ? "" : "⚠︎ \(risks.count) 项预算 / 配额风险，打开项目查看"
+        riskItem?.isHidden = risks.isEmpty
         if let todayItem {
             todayItem.attributedTitle = attributed(
                 MenuBarFmt.todayLineSegments(appState.today, yi: yi))

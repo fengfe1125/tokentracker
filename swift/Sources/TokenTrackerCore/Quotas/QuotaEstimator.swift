@@ -104,16 +104,18 @@ public struct OfficialWindow: Equatable, Sendable {
 /// 官方一次抓取的完整结果（含降级/过期元信息）。
 public struct OfficialResult: Equatable, Sendable {
     public var windows: [String: OfficialWindow]?
+    public var sampledAt: Double?
     public var staleMin: Int?
     public var error: String?
     public var detail: String?
     public var plan: String?
     public var via: String?
 
-    public init(windows: [String: OfficialWindow]? = nil, staleMin: Int? = nil,
+    public init(windows: [String: OfficialWindow]? = nil, sampledAt: Double? = nil, staleMin: Int? = nil,
                 error: String? = nil, detail: String? = nil,
                 plan: String? = nil, via: String? = nil) {
         self.windows = windows
+        self.sampledAt = sampledAt
         self.staleMin = staleMin
         self.error = error
         self.detail = detail

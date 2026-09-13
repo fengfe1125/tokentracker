@@ -36,14 +36,14 @@ final class CodexAccountStoreTests: XCTestCase {
         (acc?.bundle["tokens"] as? [String: Any])?["refresh_token"] as? String
     }
 
-    func testEmptyWhenFileMissing() {
+    func testEmptyWhenFileMissing() throws {
         XCTAssertEqual(store.load().count, 0)
         XCTAssertNil(store.get("nope"))
     }
 
-    func testSaveLoadRoundTrip() {
-        store.upsert(account("A", name: "甲", rt: "R-A"))
-        store.upsert(account("B", name: "乙", rt: "R-B"))
+    func testSaveLoadRoundTrip() throws {
+        try store.upsert(account("A", name: "甲", rt: "R-A"))
+        try store.upsert(account("B", name: "乙", rt: "R-B"))
         let loaded = store.load()
         XCTAssertEqual(loaded.count, 2)
         XCTAssertEqual(loaded.map(\.id).sorted(), ["A", "B"])
@@ -53,9 +53,9 @@ final class CodexAccountStoreTests: XCTestCase {
     }
 
     /// 同 id 二次 upsert：更新 bundle/name，但保留首次 addedAt。
-    func testUpsertDedupByIDPreservesAddedAt() {
-        store.upsert(account("A", name: "甲", rt: "R1"))
-        store.upsert(account("A", name: "甲改", rt: "R1-rotated",
+    func testUpsertDedupByIDPreservesAddedAt() throws {
+        try store.upsert(account("A", name: "甲", rt: "R1"))
+        try store.upsert(account("A", name: "甲改", rt: "R1-rotated",
                              addedAt: Date(timeIntervalSince1970: 9999)))
         let all = store.load()
         XCTAssertEqual(all.count, 1)
@@ -64,20 +64,20 @@ final class CodexAccountStoreTests: XCTestCase {
         XCTAssertEqual(all[0].addedAt, Date(timeIntervalSince1970: 1000))   // 保留首次
     }
 
-    func testRenameRemoveTouchUsed() {
-        store.upsert(account("A", name: "甲", rt: "R-A"))
-        store.upsert(account("B", name: "乙", rt: "R-B"))
+    func testRenameRemoveTouchUsed() throws {
+        try store.upsert(account("A", name: "甲", rt: "R-A"))
+        try store.upsert(account("B", name: "乙", rt: "R-B"))
 
-        let afterRename = store.rename("A", name: "甲PLUS")
+        let afterRename = try store.rename("A", name: "甲PLUS")
         XCTAssertEqual(afterRename.first { $0.id == "A" }?.name, "甲PLUS")
         XCTAssertEqual(store.get("A")?.name, "甲PLUS")
 
         XCTAssertNil(store.get("A")?.lastUsedAt)
         let touchDate = Date(timeIntervalSince1970: 5000)
-        store.touchUsed("A", at: touchDate)
+        try store.touchUsed("A", at: touchDate)
         XCTAssertEqual(store.get("A")?.lastUsedAt, touchDate)
 
-        let afterRemove = store.remove("A")
+        let afterRemove = try store.remove("A")
         XCTAssertEqual(afterRemove.count, 1)
         XCTAssertEqual(afterRemove[0].id, "B")
         XCTAssertNil(store.get("A"))
@@ -85,7 +85,7 @@ final class CodexAccountStoreTests: XCTestCase {
 
     /// 密钥类数据：落盘必须 0600。
     func testFilePermissions0600() throws {
-        store.upsert(account("A", name: "甲", rt: "R-A"))
+        try store.upsert(account("A", name: "甲", rt: "R-A"))
         let attrs = try FileManager.default.attributesOfItem(atPath: storePath)
         XCTAssertEqual((attrs[.posixPermissions] as? Int) ?? 0, 0o600)
     }
@@ -96,12 +96,12 @@ final class CodexAccountStoreTests: XCTestCase {
     }
 
     /// email/plan/lastUsedAt 等可选字段 round-trip 不丢。
-    func testOptionalFieldsRoundTrip() {
+    func testOptionalFieldsRoundTrip() throws {
         var acc = account("A", name: "甲", rt: "R-A")
         acc.email = "a@b.com"
         acc.plan = "plus"
         acc.lastUsedAt = Date(timeIntervalSince1970: 7000)
-        store.upsert(acc)
+        try store.upsert(acc)
         let loaded = store.get("A")
         XCTAssertEqual(loaded?.email, "a@b.com")
         XCTAssertEqual(loaded?.plan, "plus")

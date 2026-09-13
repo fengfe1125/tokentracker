@@ -1,8 +1,16 @@
+# v0.3.0 / schema v5
+
+v5 增加项目来源与归属、扫描健康、预算、配额样本、提醒状态及周报快照表和索引。沿用一致性备份和事务升级；不重记用量，不删除原项目字段。Swift 与当前 Python CLI 均支持 v5；v0.2 二进制拒绝打开 v5。
+
+项目元数据后台补全只处理有明确目录证据的日志。首次补全期间未归属项目可能减少，但全局 Token 总量不变。手动归属可恢复自动，预算不修改源用量。
+
+回退前退出扫描进程，另存升级后的库，再以升级前一致性备份启动旧版本；不要覆盖唯一的数据副本。
+
 # 从审查前版本升级
 
 ## 自动升级流程
 
-数据库仍默认位于 `~/.tokentracker/usage.db`，也可由 `TOKENTRACKER_DB` 指定。现使用 `PRAGMA user_version=4` 管理 schema；首次打开旧库或 v3 Agent Activity 库时自动执行：
+数据库仍默认位于 `~/.tokentracker/usage.db`，也可由 `TOKENTRACKER_DB` 指定。v0.2 使用 `PRAGMA user_version=4` 管理 schema；首次打开旧库或 v3 Agent Activity 库时自动执行：
 
 1. 使用 SQLite 备份接口创建同目录一致性备份：`usage.db.v0.backup-<时间戳>.db`。它包含 WAL 中已提交的数据，不是直接复制主文件。
 2. 在单个事务中增加时间质量、来源与成本依据字段，以及 `aggregate_snapshots`、`migration_history` 表。

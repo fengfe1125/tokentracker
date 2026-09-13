@@ -13,7 +13,7 @@ import TokenTrackerCore
 
 /// 侧边栏导航
 enum NavSelection: Hashable {
-    case overview, sessions, activity, settings
+    case overview, sessions, activity, settings, projects, reports
     case tool(String)
 }
 
@@ -46,7 +46,13 @@ final class AppState: ObservableObject {
 
     // Codex 多账号切换（设置页管理区）
     @Published var codexAccounts: [CodexAccount] = []
-    @Published var activeCodexAccountID: String?
+    @Published var activeCodexAccountID: String? {
+        didSet {
+            insights.codexAccountID = activeCodexAccountID ?? "unknown"
+            insights.risks.removeAll { $0.id.hasPrefix("quota:codex:") }
+            insights.refresh()
+        }
+    }
     @Published var accountOpMessage: String?            // 操作结果 / 错误提示
 
     // 公开统计上报（设置页 + 独立记录窗口）
@@ -67,6 +73,7 @@ final class AppState: ObservableObject {
         (settings["scan_interval"] as? NSNumber)?.intValue ?? 60
     }
 
+    let insights: InsightsModel
     let readStore: UsageStore
     let settingsStore: SettingsStore
     let scanRoots: ScanRoots
@@ -77,6 +84,11 @@ final class AppState: ObservableObject {
     var officialQuotaService: OfficialQuotaService?
     private(set) var scheduler: ScanScheduler!
 
+    private var dataGeneration = 0
+    private var sessionsGeneration = 0
+    private var quotaBusy = false
+    private let quotaQueue = DispatchQueue(label: "tokentracker.quotas")
+    private let detailQueue = DispatchQueue(label: "tokentracker.details")
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
     /// 上报独占一条队列：网络最长阻塞 12 秒，不能占着查询队列。
     private let publishQueue = DispatchQueue(label: "tokentracker.publish")
@@ -107,6 +119,7 @@ final class AppState: ObservableObject {
         let path = dbPath ?? env["TOKENTRACKER_DB"]
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
         readStore = try! UsageStore(path: path)
+        insights = InsightsModel(path: path)
         if let pricesPath = env["TOKENTRACKER_PRICES"] {
             priceTable = PriceTable.load(from: pricesPath)
         } else {
@@ -117,7 +130,9 @@ final class AppState: ObservableObject {
             priceTable = FileManager.default.fileExists(atPath: repoPrices)
                 ? PriceTable.load(from: repoPrices) : .default
         }
-        let settingsStore = SettingsStore()
+        let preview = env["TT_UI_PREVIEW"] == "1"
+        let previewHome = (path as NSString).deletingLastPathComponent
+        let settingsStore = SettingsStore(path: preview ? previewHome + "/settings.json" : nil)
         let tokenStore = KeychainPublishTokenStore()
         let historyStore = PublishHistoryStore()
         self.settingsStore = settingsStore
@@ -126,8 +141,8 @@ final class AppState: ObservableObject {
         publisher = PublicStatsPublisher(settings: settingsStore, tokens: tokenStore,
                                          history: historyStore)
         scanRoots = ScanRoots()
-        accountSwitcher = CodexAccountSwitcher()
-        self.officialQuotaService = officialQuotaService
+        accountSwitcher = preview ? CodexAccountSwitcher(ctx: BillingContext(home:previewHome,env:["CODEX_HOME":previewHome+"/.codex"])) : CodexAccountSwitcher()
+        self.officialQuotaService = preview ? nil : officialQuotaService
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
         publishState = PublishState.load(path: NSHomeDirectory() + "/.tokentracker/publish_state.json")
@@ -158,6 +173,7 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self?.pollScanStatus()
                 self?.refreshVisibleData()
+                self?.insights.refresh(afterScan: true)
             }
             // 上报另开只读连接：与 scan 另开 writeStore 同一纪律，
             // 绝不从后台线程序列化 readStore。三道闸在 publishIfNeeded 内部，
@@ -167,7 +183,9 @@ final class AppState: ObservableObject {
                 publisher.publishIfNeeded(store: store, trigger: .automatic)
             }
         }
-        scheduler.startAuto()
+        if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1" {
+            insights.refresh(afterScan:true)
+        } else { scheduler.startAuto() }
 
         // 5s 轮询：扫描状态 + 设置热生效（对齐 menubar.py tt_loop）
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -179,9 +197,10 @@ final class AppState: ObservableObject {
         }
         // 60s 数据刷新
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshVisibleData() }
+            Task { @MainActor in self?.refreshVisibleData(); self?.refreshQuotas() }
         }
         refreshVisibleData()
+        refreshQuotas()
 
         // 更新检查：启动后延迟 30s 的后台一次性请求（对齐 updatecheck.py 注释），
         // 网络失败静默，绝不阻塞启动
@@ -193,6 +212,7 @@ final class AppState: ObservableObject {
     }
 
     func requestScan(full: Bool = false) {
+        if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1" { insights.refresh(); return }
         scanning = true   // 立即反馈；真实状态以 poll 为准
         scheduler.request(full: full, source: "manual")
     }
@@ -341,23 +361,27 @@ final class AppState: ObservableObject {
     // ------------------------------------------------------------ 数据 ----
 
     func refreshVisibleData() {
+        if selection == .overview { insights.query = UsageQuery.period(range); insights.search = "" }
+        insights.refresh()
         refreshData()
         if selection == .activity { refreshActivity() }
     }
 
     func refreshData() {
+        dataGeneration += 1
+        let generation = dataGeneration
         reloadCodexAccounts()   // 账号列表与 active 跟随轮询热反映
-        let store = readStore
+        let path = readStore.path
         let range = range
         let search = sessionSearch
         let toolFilter: String? = {
             if case .tool(let id) = selection { return id }
             return nil
         }()
-        let officialService = officialQuotaService
         queryQueue.async { [weak self] in
             guard let self else { return }
             do {
+                let store = try UsageStore(path: path)
                 let (rows, total, summary) = try store.stats(rangeKey: range)
                 let daily = try store.daily(rangeKey: range)
                 let models = try store.models(rangeKey: range)
@@ -365,6 +389,49 @@ final class AppState: ObservableObject {
                                                   limit: Self.sessionLimit,
                                                   query: search.isEmpty ? nil : search)
                 let dayStats = try store.stats(rangeKey: "day")
+                let detect = ScanRunner(store: store, prices: self.priceTable,
+                                        roots: self.scanRoots).detectAll()
+                DispatchQueue.main.async {
+                    guard generation == self.dataGeneration else { return }
+                    let newTokens = dayStats.total.tokens
+                    if let prev = self.today?.tokens, prev != newTokens {
+                        self.onTokensChanged?()   // 数值刷新闪光
+                    }
+                    self.today = MenuBarToday(tokens: newTokens, cost: dayStats.total.cost, unpriced: dayStats.total.events > 0 && dayStats.total.unpriced == dayStats.total.events)
+
+                    self.statRows = rows
+                    self.statTotal = total
+                    self.statSummary = summary
+                    self.dailyRows = daily
+                    self.modelRows = models
+                    if search == self.sessionSearch { self.sessionRows = sessions }
+                    self.detectInfo = detect
+                    self.todayByTool = Dictionary(uniqueKeysWithValues:
+                        dayStats.rows.map { ($0.tool, $0.tokens) })
+                    self.updatedAt = Date()
+                    if ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" {
+                        FileHandle.standardError.write(Data(
+                            "[tt] refreshData OK: today=\(newTokens) sessions=\(sessions.count)\n".utf8))
+                    }
+                }
+            } catch {
+                // 读库失败（如迁移中短暂锁定）：写到 stderr 便于诊断，下一轮再试
+                FileHandle.standardError.write(Data(
+                    "[tt] refreshData FAILED: \(error)\n".utf8))
+            }
+        }
+    }
+
+    func refreshQuotas() {
+        guard !quotaBusy else { return }
+        quotaBusy = true
+        let accountID = activeCodexAccountID ?? "unknown"
+        let path = readStore.path
+        let officialService = officialQuotaService
+        quotaQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let store = try UsageStore(path: path)
                 let quotasConfig = QuotasConfig.load(
                     from: ProcessInfo.processInfo.environment["TOKENTRACKER_QUOTAS"] ?? "")
                 // 官方抓取并行（对齐 quotas.py ThreadPoolExecutor；任一失败不阻塞整体）
@@ -384,38 +451,48 @@ final class AppState: ObservableObject {
                     }
                 }
                 let officialResults = resultsBox.dict
+                for (provider,result) in officialResults where result.error == nil && result.staleMin == nil {
+                    guard let sampled = result.sampledAt else { continue }
+                    for (window,value) in result.windows ?? [:] {
+                        if let pct=value.pct {
+                            let reset=value.resetsAt.flatMap { ISO8601DateFormatter().date(from:$0) }.map { Int64($0.timeIntervalSince1970*1000) } ?? 0
+                            let identity=provider+":"+(provider == "codex" ? accountID : "current")+":"+window
+                            try store.recordQuota(QuotaSample(identity:identity,at:Int64(sampled*1000),pct:pct,resetsAt:reset))
+                        }
+                    }
+                }
                 let quotas = try QuotaEstimator.compute(
                     store: store, config: quotasConfig,
                     nowMs: store.nowMs()) { officialResults[$0] }
-                let detect = ScanRunner(store: store, prices: self.priceTable,
-                                        roots: self.scanRoots).detectAll()
                 DispatchQueue.main.async {
-                    let newTokens = dayStats.total.tokens
-                    if let prev = self.today?.tokens, prev != newTokens {
-                        self.onTokensChanged?()   // 数值刷新闪光
+                    guard accountID == (self.activeCodexAccountID ?? "unknown") else {
+                        self.quotaBusy=false;self.refreshQuotas();return
                     }
-                    self.today = MenuBarToday(tokens: newTokens, cost: dayStats.total.cost)
                     self.quotaEntries = quotas.map(MenuBarQuotaEntry.init(result:))
-                    self.statRows = rows
-                    self.statTotal = total
-                    self.statSummary = summary
-                    self.dailyRows = daily
-                    self.modelRows = models
-                    self.sessionRows = sessions
-                    self.detectInfo = detect
-                    self.todayByTool = Dictionary(uniqueKeysWithValues:
-                        dayStats.rows.map { ($0.tool, $0.tokens) })
-                    self.updatedAt = Date()
-                    if ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" {
-                        FileHandle.standardError.write(Data(
-                            "[tt] refreshData OK: today=\(newTokens) sessions=\(sessions.count)\n".utf8))
-                    }
+                    self.quotaBusy = false
+                    self.insights.refresh()
                 }
             } catch {
-                // 读库失败（如迁移中短暂锁定）：写到 stderr 便于诊断，下一轮再试
-                FileHandle.standardError.write(Data(
-                    "[tt] refreshData FAILED: \(error)\n".utf8))
+                DispatchQueue.main.async { self.quotaBusy = false }
             }
+        }
+    }
+
+    func refreshSessions() {
+        sessionsGeneration += 1
+        let generation = sessionsGeneration
+        let path = readStore.path, range = range, search = sessionSearch
+        let tool: String? = { if case .tool(let id) = selection { return id }; return nil }()
+        detailQueue.async { [weak self] in
+            do {
+                let rows = try UsageStore(path: path).sessions(rangeKey: range, tool: tool,
+                    limit: Self.sessionLimit, query: search.isEmpty ? nil : search)
+                DispatchQueue.main.async {
+                    guard let self, generation == self.sessionsGeneration,
+                          search == self.sessionSearch, range == self.range else { return }
+                    self.sessionRows = rows
+                }
+            } catch { }
         }
     }
 
@@ -486,10 +563,10 @@ final class AppState: ObservableObject {
                               confidence: String, status: String?, limit: Int, before: Int64?,
                               beforeID: Int64?, kind: ActivityKind?, query: String?) async
         -> UsageStore.ActivityTimelinePage? {
-        let store = readStore
+        let path = readStore.path
         return await withCheckedContinuation { continuation in
-            queryQueue.async {
-                continuation.resume(returning: try? store.activityTimelinePage(
+            detailQueue.async {
+                continuation.resume(returning: try? UsageStore(path:path).activityTimelinePage(
                     rangeKey: range, agent: agent, sessionID: sessionID,
                     confidence: confidence, limit: limit, before: before,
                     beforeID: beforeID, kind: kind, query: query, status: status))
@@ -530,12 +607,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    func showInsightSession(tool:String,sessionID:String) {
+        let path=readStore.path
+        detailQueue.async { [weak self] in
+            guard let row=try? UsageStore(path:path).sessions(rangeKey:"all",tool:tool,limit:300,query:sessionID).first(where:{$0.sessionID==sessionID}) else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !self.sessionRows.contains(where:{$0.tool==tool && $0.sessionID==sessionID}) { self.sessionRows.insert(row,at:0) }
+                self.selectedSessionID=SessionRowModel(row:row).id
+                self.showSessionDetail()
+            }
+        }
+    }
+
     /// 会话详情走查询队列：选中一行不应该在主线程读库（大库时会顿）。
     func sessionDetail(tool: String, sessionID: String) async -> UsageStore.SessionDetail? {
-        let store = readStore
+        let path = readStore.path
         return await withCheckedContinuation { cont in
-            queryQueue.async {
-                cont.resume(returning: try? store.sessionDetail(tool: tool, sessionID: sessionID))
+            detailQueue.async {
+                cont.resume(returning: try? UsageStore(path:path).sessionDetail(tool: tool, sessionID: sessionID))
             }
         }
     }
@@ -548,7 +638,10 @@ final class AppState: ObservableObject {
     func reloadCodexAccounts() {
         let switcher = accountSwitcher
         queryQueue.async { [weak self] in
-            let accounts = switcher.store.load()
+            let accounts: [CodexAccount]
+            do { accounts = try switcher.store.loadChecked() } catch {
+                DispatchQueue.main.async { self?.accountOpMessage = String(describing:error) }; return
+            }
             let active = switcher.activeAccountID()
             DispatchQueue.main.async {
                 self?.codexAccounts = accounts
@@ -590,10 +683,30 @@ final class AppState: ObservableObject {
                     self?.codexAccounts = accounts
                     self?.activeCodexAccountID = active
                     self?.accountOpMessage = "已切换，请重启 Codex 生效"
+                    self?.officialQuotaService = OfficialQuotaService()
+                    self?.insights.mutate { store in
+                        _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
+                        try store.conn.commit()
+                    }
+                    self?.refreshQuotas()
                 }
             } catch {
-                let message = "切换失败：\(error)"
-                DispatchQueue.main.async { self?.accountOpMessage = message }
+                let message = (error as? AccountPersistenceError) == .historyAfterSwitch
+                    ? "切换已完成，但记录保存失败" : "切换失败：\(error)"
+                let switched = (error as? AccountPersistenceError) == .historyAfterSwitch
+                let active = switched ? switcher.activeAccountID() : nil
+                DispatchQueue.main.async {
+                    self?.accountOpMessage = message
+                    if switched {
+                        self?.activeCodexAccountID = active
+                        self?.officialQuotaService = OfficialQuotaService()
+                        self?.insights.mutate { store in
+                            _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
+                            try store.conn.commit()
+                        }
+                        self?.refreshQuotas()
+                    }
+                }
             }
         }
     }
@@ -601,7 +714,10 @@ final class AppState: ObservableObject {
     func removeCodexAccount(id: String) {
         let switcher = accountSwitcher
         queryQueue.async { [weak self] in
-            let accounts = switcher.store.remove(id)
+            let accounts: [CodexAccount]
+            do { accounts = try switcher.store.remove(id) } catch {
+                DispatchQueue.main.async { self?.accountOpMessage = String(describing: error) }; return
+            }
             DispatchQueue.main.async { self?.codexAccounts = accounts }
         }
     }
@@ -609,7 +725,10 @@ final class AppState: ObservableObject {
     func renameCodexAccount(id: String, name: String) {
         let switcher = accountSwitcher
         queryQueue.async { [weak self] in
-            let accounts = switcher.store.rename(id, name: name)
+            let accounts: [CodexAccount]
+            do { accounts = try switcher.store.rename(id, name: name) } catch {
+                DispatchQueue.main.async { self?.accountOpMessage = String(describing: error) }; return
+            }
             DispatchQueue.main.async { self?.codexAccounts = accounts }
         }
     }

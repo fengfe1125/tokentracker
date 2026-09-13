@@ -73,7 +73,7 @@ public struct CodexAccountSwitcher: @unchecked Sendable {
             throw CodexAccountError.noLiveCredentials
         }
         let email = CodexAccount.email(fromBundle: live)
-        var account = store.get(id) ?? CodexAccount(id: id, name: "", bundle: live)
+        var account = try store.loadChecked().first { $0.id == id } ?? CodexAccount(id: id, name: "", bundle: live)
         account.bundle = live
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
@@ -82,24 +82,24 @@ public struct CodexAccountSwitcher: @unchecked Sendable {
             account.name = email ?? id
         }
         if account.email == nil { account.email = email }
-        store.upsert(account)
+        try store.upsert(account)
         return account
     }
 
     /// 切换到指定账号：★回采当前 live → ★原子写目标快照 → 记 lastUsedAt。
     public func switchTo(_ id: String) throws {
         Self.lock.lock(); defer { Self.lock.unlock() }
-        guard let target = store.get(id) else { throw CodexAccountError.notFound(id) }
+        guard let target = try store.loadChecked().first(where: { $0.id == id }) else { throw CodexAccountError.notFound(id) }
         // 1) 回采：把 live auth.json 存回「即将离开」的账号（其 refresh_token 可能已轮换）。
         //    仅当 live 账号确实存在且 != 目标时才回采，避免用目标自身覆盖。
         if let live = readLiveBundle(),
-           let current = Self.accountID(in: live), current != id,
-           var leaving = store.get(current) {
+           let current = Self.accountID(in: live), current != id {
+            var leaving = try store.loadChecked().first { $0.id == current } ?? CodexAccount(id: current, name: "", bundle: live)
             leaving.bundle = live
-            store.upsert(leaving)
+            try store.upsert(leaving)
         }
         // 2) 原子写入目标账号快照（tmp + rename，0600），不产生半截 auth.json。
-        atomicWriteJSON(authPath, target.bundle, permissions: 0o600)
-        store.touchUsed(id)
+        try writeAccountJSON(authPath, target.bundle, permissions: 0o600)
+        do { try store.touchUsed(id) } catch { throw AccountPersistenceError.historyAfterSwitch }
     }
 }

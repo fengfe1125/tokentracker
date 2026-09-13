@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 public final class OfficialQuotaService: @unchecked Sendable {
     public let ctx: BillingContext
@@ -32,7 +33,14 @@ public final class OfficialQuotaService: @unchecked Sendable {
     /// 带缓存的抓取（对齐 billing._cached；kimi 挂凭据文件版本）。
     public func cached(_ name: String, force: Bool = false) -> [String: Any] {
         let kimi = name == "kimi" ? KimiBilling(ctx: ctx) : nil
-        return cache.cached(name, force: force,
+        var cacheKey = name
+        if name == "codex" {
+            let authPath = expandPath(ctx.env["CODEX_HOME"] ?? (ctx.home + "/.codex")) + "/auth.json"
+            let object = FileManager.default.contents(atPath:authPath).flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] }
+            let account = (object?["tokens"] as? [String:Any])?["account_id"] as? String ?? "signed-out"
+            cacheKey += ":" + SHA256.hash(data:Data(account.utf8)).map { String(format:"%02x",$0) }.joined()
+        }
+        return cache.cached(cacheKey, force: force,
                             versionFn: kimi.map { b in { b.credentialsVersion() } }) {
             self.fetch(name)
         }
@@ -70,6 +78,7 @@ public final class OfficialQuotaService: @unchecked Sendable {
         }
         return OfficialResult(
             windows: windows,
+            sampledAt: (raw["_sampled_at"] as? NSNumber)?.doubleValue,
             staleMin: (raw["_stale_min"] as? NSNumber)?.intValue,
             error: raw["error"] as? String,
             detail: raw["detail"] as? String ?? (raw["_err"] as? String),

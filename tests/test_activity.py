@@ -86,7 +86,7 @@ class ActivityCase(unittest.TestCase):
             legacy.executescript("CREATE TABLE usage_events(id INTEGER PRIMARY KEY,tool TEXT NOT NULL,session_id TEXT NOT NULL DEFAULT '',project TEXT NOT NULL DEFAULT '',ts INTEGER NOT NULL,model TEXT NOT NULL DEFAULT '',input INTEGER NOT NULL DEFAULT 0,output INTEGER NOT NULL DEFAULT 0,cache_read INTEGER NOT NULL DEFAULT 0,cache_write INTEGER NOT NULL DEFAULT 0,cost REAL,src_key TEXT NOT NULL,time_quality TEXT NOT NULL DEFAULT 'exact',interval_start INTEGER,cost_source TEXT NOT NULL DEFAULT 'estimate',source_kind TEXT NOT NULL DEFAULT '',source_scope TEXT NOT NULL DEFAULT '',UNIQUE(tool,src_key)); PRAGMA user_version=2;")
         upgraded = db.connect(path)
         try:
-            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
             self.assertIsNotNone(upgraded.execute("SELECT 1 FROM sqlite_master WHERE name='agent_activity_events'").fetchone())
         finally:
             upgraded.close()
@@ -103,7 +103,7 @@ class ActivityCase(unittest.TestCase):
 
         upgraded = db.connect(path)
         try:
-            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
             self.assertEqual(upgraded.execute(
                 "SELECT COUNT(*) FROM agent_activity_events WHERE src_key='kept'"
             ).fetchone()[0], 1)

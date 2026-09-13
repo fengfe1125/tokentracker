@@ -67,6 +67,9 @@ public struct ClaudeScanner: ScannerAdapter {
         let model = jsonOrString(msg["model"], obj["model"])
         let key = (msg["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "\(sessionID)|\(fallbackKey)"
         let sourceKey = "\(sessionID)|\(key)"
+        if let cwd = obj["cwd"] as? String {
+            try store.recordProjectPath(tool: name, srcKey: sourceKey, path: cwd)
+        }
         let old = try store.conn.queryOne(
             "SELECT input,output,cache_read,cache_write FROM usage_events WHERE tool=? AND src_key=?",
             [name, sourceKey])

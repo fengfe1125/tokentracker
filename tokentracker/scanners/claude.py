@@ -82,6 +82,8 @@ def _scan_line(obj, fallback_key, session_id, slug, st_mtime_ms, prices, conn):
     key = (msg or {}).get("id") or f"{session_id}|{fallback_key}"
     cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
     source_key = f"{session_id}|{key}"
+    if obj.get("cwd"):
+        db.record_project_path(conn, NAME, source_key, obj["cwd"])
     old = conn.execute(
         "SELECT input,output,cache_read,cache_write FROM usage_events WHERE tool=? AND src_key=?",
         (NAME, source_key)).fetchone()

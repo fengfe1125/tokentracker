@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
@@ -79,6 +79,24 @@ CREATE INDEX IF NOT EXISTS idx_activity_tool ON agent_activity_events(canonical_
 CREATE INDEX IF NOT EXISTS idx_activity_skill ON agent_activity_events(skill_name, started_at);
 """
 
+SCHEMA += """
+    CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS project_paths(path TEXT PRIMARY KEY,automatic_id TEXT NOT NULL,manual_id TEXT);
+    CREATE TABLE IF NOT EXISTS project_sources(tool TEXT NOT NULL,src_key TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(tool,src_key));
+    CREATE TABLE IF NOT EXISTS project_sessions(tool TEXT NOT NULL,session_id TEXT NOT NULL,project_id TEXT NOT NULL,PRIMARY KEY(tool,session_id));
+    CREATE TABLE IF NOT EXISTS insight_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS scan_health(tool TEXT PRIMARY KEY,state TEXT NOT NULL,attempted_at INTEGER NOT NULL,succeeded_at INTEGER,duration REAL NOT NULL,files INTEGER NOT NULL,added INTEGER NOT NULL,updated INTEGER NOT NULL,error TEXT NOT NULL,parser_version INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS scan_diagnostics(tool TEXT PRIMARY KEY,parse_errors INTEGER,read_errors INTEGER);
+    CREATE TABLE IF NOT EXISTS scan_health_history(id INTEGER PRIMARY KEY,tool TEXT NOT NULL,at INTEGER NOT NULL,state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS budgets(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS quota_samples(identity TEXT NOT NULL,at INTEGER NOT NULL,pct REAL NOT NULL,resets_at INTEGER NOT NULL,PRIMARY KEY(identity,at));
+    CREATE TABLE IF NOT EXISTS alert_deliveries(identity TEXT NOT NULL,cycle TEXT NOT NULL,level INTEGER NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(identity,cycle,level));
+    CREATE TABLE IF NOT EXISTS weekly_reports(id TEXT PRIMARY KEY,generated_at INTEGER NOT NULL,payload TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_project_sources_path ON project_sources(path);
+    CREATE INDEX IF NOT EXISTS idx_project_paths_auto ON project_paths(automatic_id);
+    CREATE INDEX IF NOT EXISTS idx_insight_session ON usage_events(tool,session_id);
+    CREATE INDEX IF NOT EXISTS idx_health_history_time ON scan_health_history(at);
+    """
 
 def default_db_path() -> str:
     return os.environ.get("TOKENTRACKER_DB") or os.path.join(os.path.expanduser("~"), ".tokentracker", "usage.db")
@@ -220,11 +238,36 @@ def put_event(conn, tool: str, src_key: str, *, session_id: str = "", project: s
     if ts <= 0:
         ts = int(time.time() * 1000)
     verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
-    return conn.execute(
+    changed = conn.execute(
         f"{verb} INTO usage_events (tool,src_key,session_id,project,ts,model,input,output,cache_read,cache_write,cost,"
         "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tool, src_key, session_id, project, ts, model, input, output, cache_read, cache_write, cost,
          time_quality, interval_start, cost_source, source_kind, source_scope)).rowcount
+    if tool in ("codex", "pi", "dsh", "kimi") and project.startswith("/") and not src_key.startswith("cli|"):
+        record_project_path(conn, tool, src_key, project)
+    return changed
+
+
+def record_project_path(conn, tool, src_key, path):
+    if not isinstance(path, str) or not path.startswith("/") or "\0" in path:
+        return
+    path = os.path.realpath(path)
+    conn.execute("INSERT OR REPLACE INTO project_sources VALUES (?,?,?)", (tool, src_key, path))
+    if conn.execute("SELECT path FROM project_paths WHERE path=?", (path,)).fetchone() is None:
+        import subprocess
+        identity = "directory:" + path
+        name = os.path.basename(path)
+        try:
+            result = subprocess.run(["git", "--no-optional-locks", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip().startswith("/"):
+                common = os.path.realpath(result.stdout.strip())
+                identity = "git:" + common
+                name = os.path.basename(os.path.dirname(common))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        conn.execute("INSERT OR IGNORE INTO projects VALUES (?,?)", (identity, name))
+        conn.execute("INSERT OR IGNORE INTO project_paths(path,automatic_id) VALUES (?,?)", (path, identity))
+
 
 
 _ACTIVITY_STATUSES = {"success", "error", "denied", "unknown"}

@@ -152,6 +152,7 @@ public final class OfficialCache {
             data = ["error": "network", "detail": String(describing: error), "_ok": false]
         }
         let finishedAt = clock()
+        if data["_ok"] as? Bool == true { data["_sampled_at"] = finishedAt }
         state.attempt = (finishedAt, data)
         var retryAfter = 0.0
         if let ra = data["_retry_after"] {

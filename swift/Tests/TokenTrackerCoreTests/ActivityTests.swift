@@ -153,7 +153,7 @@ final class ActivityTests: XCTestCase {
         }
 
         let reopened = try temp.store()
-        XCTAssertEqual(try reopened.conn.scalarInt("PRAGMA user_version"), 4)
+        XCTAssertEqual(try reopened.conn.scalarInt("PRAGMA user_version"), Int64(UsageStore.schemaVersion))
         XCTAssertEqual(try reopened.activityTimeline().map(\.srcKey), ["kept"])
     }
 

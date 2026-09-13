@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 4
+    public static let schemaVersion: Int32 = 5
     public static let tokenColumns = ["input", "output", "cache_read", "cache_write"]
     public static let tokensExpr = "(input+output+cache_read+cache_write)"
 
@@ -132,7 +132,7 @@ public final class UsageStore {
                     _ = try conn.execute("ALTER TABLE usage_events ADD COLUMN \(column) \(declaration)")
                 }
             }
-            for statement in UsageStore.schema.split(separator: ";") {
+            for statement in (UsageStore.schema + UsageStore.insightsSchema).split(separator: ";") {
                 let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { _ = try conn.execute(trimmed) }
             }
@@ -258,11 +258,15 @@ public final class UsageStore {
         }
         if ts <= 0 { ts = nowMs() }
         let verb = replace ? "INSERT OR REPLACE" : "INSERT OR IGNORE"
-        return try conn.execute(
+        let changed = try conn.execute(
             "\(verb) INTO usage_events (tool,src_key,session_id,project,ts,model,input,output,cache_read,cache_write,cost,"
                 + "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [tool, srcKey, sessionID, project, ts, model, input, output, cacheRead, cacheWrite,
              cost as Any, quality, intervalStart as Any, costSource, sourceKind, sourceScope])
+        if ["codex", "pi", "dsh", "kimi"].contains(tool), project.hasPrefix("/"), !srcKey.hasPrefix("cli|") {
+            try recordProjectPath(tool: tool, srcKey: srcKey, path: project)
+        }
+        return changed
     }
 
     @discardableResult

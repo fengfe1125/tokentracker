@@ -38,9 +38,11 @@ public enum MenuBarFmt {
 public struct MenuBarToday: Equatable, Sendable {
     public var tokens: Int64
     public var cost: Double
-    public init(tokens: Int64, cost: Double) {
+    public var unpriced: Bool
+    public init(tokens: Int64, cost: Double, unpriced: Bool = false) {
         self.tokens = tokens
         self.cost = cost
+        self.unpriced = unpriced
     }
 }
 
@@ -221,7 +223,7 @@ extension MenuBarFmt {
         return [MenuBarSegment("今日 ", "dim"),
                 MenuBarSegment(fmtTokens(Double(today.tokens), yi: yi), "tokens"),
                 MenuBarSegment(" tokens", "dim"), MenuBarSegment(" · ", "dim"),
-                MenuBarSegment(String(format: "$%.2f", today.cost), "cost")]
+                MenuBarSegment(today.unpriced ? "未计价" : String(format: "≈$%.2f", today.cost), "cost")]
     }
 
     /// 菜单配额行分段：●(工具色点) 名称 · 窗口 label pct(紧急度色)。

@@ -76,11 +76,11 @@ final class CodexAccountSwitcherTests: XCTestCase {
 
     // ------------------------------------------------------------ authPath ----
 
-    func testAuthPathFollowsCodexHome() {
+    func testAuthPathFollowsCodexHome() throws {
         XCTAssertEqual(switcher.authPath, authPath)
     }
 
-    func testActiveAccountIDNilWhenNoFile() {
+    func testActiveAccountIDNilWhenNoFile() throws {
         XCTAssertNil(switcher.activeAccountID())
     }
 
@@ -100,7 +100,7 @@ final class CodexAccountSwitcherTests: XCTestCase {
         XCTAssertEqual(storedRefreshToken("acct-A"), "R1")
     }
 
-    func testCaptureCurrentWithoutLiveThrows() {
+    func testCaptureCurrentWithoutLiveThrows() throws {
         XCTAssertThrowsError(try switcher.captureCurrent(name: "x")) { error in
             guard case CodexAccountError.noLiveCredentials = error else {
                 return XCTFail("expected noLiveCredentials, got \(error)")
@@ -119,7 +119,7 @@ final class CodexAccountSwitcherTests: XCTestCase {
 
     // ------------------------------------------------------------ switch ----
 
-    func testSwitchToUnknownThrows() {
+    func testSwitchToUnknownThrows() throws {
         XCTAssertThrowsError(try switcher.switchTo("ghost")) { error in
             guard case CodexAccountError.notFound = error else {
                 return XCTFail("expected notFound, got \(error)")

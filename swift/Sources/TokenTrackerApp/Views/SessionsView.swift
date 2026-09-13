@@ -47,7 +47,7 @@ struct SessionsView: View {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             lastQueriedSearch = state.sessionSearch
-            state.refreshData()
+            state.refreshSessions()
         }
         .onChange(of: state.selectedSessionID) { _, _ in state.autoShowSessionDetail() }
         // ⌘I 打开详情面板（对齐「显示简介」的习惯用法）

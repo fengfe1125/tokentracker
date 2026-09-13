@@ -33,6 +33,12 @@
 
 > 如果 TokenTracker 帮你弄清了 AI 编程成本，欢迎点一个 **Star**。它会让更多同时使用多个 Agent 的开发者发现这个项目。
 
+## v0.3.0 更新
+
+项目视图与 Token 分解、数据健康、会话执行时间线、预算/配额风险提醒，以及本地周报和脱敏导出。费用包含估算，不能视作订阅账单。
+
+详见[中英文更新说明](docs/v0.3.0-release-notes.md)和[验证记录](docs/v0.3.0-validation.md)。
+
 ## 为什么需要 TokenTracker？
 
 Claude Code、Codex、Kimi Code 等工具各自记录用量，但格式、价格和配额入口并不统一。TokenTracker 会直接读取它们留在 Mac 上的本地记录，把分散的信息整理成一个原生 macOS App：

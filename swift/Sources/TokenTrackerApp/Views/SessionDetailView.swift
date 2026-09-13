@@ -13,6 +13,7 @@ import TokenTrackerCore
 
 struct SessionDetailView: View {
     @ObservedObject var state: AppState
+    @State private var tab = "overview"
     @State private var detail: UsageStore.SessionDetail?
 
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
@@ -25,7 +26,10 @@ struct SessionDetailView: View {
     var body: some View {
         Group {
             if let session {
-                content(session)
+                VStack {
+                    Picker("详情",selection:$tab) { Text("概览").tag("overview");Text("执行时间线").tag("timeline") }.pickerStyle(.segmented).padding()
+                    if tab == "timeline" { SessionTimelineView(state:state,tool:session.tool,sessionID:session.sessionID) } else { content(session) }
+                }
             } else {
                 ContentUnavailableView("未选中会话", systemImage: "sidebar.right",
                                        description: Text("在会话记录里点一行"))
