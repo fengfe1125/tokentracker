@@ -114,11 +114,30 @@ enum L10n {
            let bundle = Bundle(url: url) { return bundle }
         return Bundle.module
     }()
-    private static let bundles = ["en", "zh-Hans"].reduce(into: [String: Bundle]()) {
-        $0[$1] = Bundle(path: resources.path(forResource: $1.lowercased(), ofType: "lproj")!)!
+    private static func localeBundle(_ language: String) -> Bundle? {
+        // SwiftPM has emitted both `zh-hans.lproj` and `zh-Hans.lproj`
+        // across toolchain versions. Keep the canonical name first, then
+        // support the historical lowercase package without force-unwrapping.
+        for candidate in [language, language.lowercased()] {
+            guard let path = resources.path(forResource: candidate, ofType: "lproj"),
+                  let bundle = Bundle(path: path) else { continue }
+            return bundle
+        }
+        return nil
     }
+    private static let bundles: [String: Bundle] = {
+        var result = [String: Bundle]()
+        for language in ["en", "zh-Hans"] {
+            if let bundle = localeBundle(language) {
+                result[language] = bundle
+            }
+        }
+        return result
+    }()
     private static let placeholders = try! NSRegularExpression(pattern: #"\{(\d+)\}"#)
-    static func localizedBundle(_ language: String) -> Bundle { bundles[language] ?? bundles["en"]! }
+    static func localizedBundle(_ language: String) -> Bundle {
+        bundles[language] ?? bundles["en"] ?? resources
+    }
     static func message(_ template: Template) -> Template { template }
 
     static func text(_ template: Template) -> String { render(template, language: language) }

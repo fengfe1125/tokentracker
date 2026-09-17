@@ -50,10 +50,14 @@ final class RingTitlePortTests: XCTestCase {
                        "⚡87.92M·C56%")
     }
 
-    func testRingTitleKeepsEstimateMarker() {
-        let e = entry("claude", pct: 56, source: "local")
+    func testRingTitleOmitsStaleOfficialMarker() {
+        let e = entry("claude", pct: 56, stale: true)
         XCTAssertEqual(MenuBarFmt.fmtTitle(today: MenuBarToday(tokens: 100, cost: 0),
                                            entries: [e], provider: "claude", ring: true),
+                       "100 · C")
+        let local = entry("claude", pct: 56, source: "local")
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: MenuBarToday(tokens: 100, cost: 0),
+                                           entries: [local], provider: "claude", ring: true),
                        "100 · C≈")
     }
 
@@ -102,10 +106,9 @@ final class RingTitlePortTests: XCTestCase {
 }
 
 final class TitleSourcePortTests: XCTestCase {
-    /// test_source_marker_does_not_depend_on_note
-    func testSourceMarkerDoesNotDependOnNote() {
+    func testStatusBarTitleOmitsStaleOfficialMarker() {
         for (source, stale, expected) in [("official", false, "45%"),
-                                          ("official", true, "~45%"),
+                                          ("official", true, "45%"),
                                           ("local", false, "≈45%")] {
             let e = entry("claude", pct: 45, source: source, stale: stale)
             XCTAssertEqual(MenuBarFmt.fmtTitle(today: MenuBarToday(tokens: 100, cost: 0),
@@ -140,12 +143,14 @@ final class SegmentRenderPortTests: XCTestCase {
         }
         let stale = entry("claude", pct: 45, stale: true)
         let local = entry("claude", pct: 45, source: "local")
-        XCTAssertTrue(MenuBarFmt.fmtSegments(today: MenuBarToday(tokens: 1, cost: 0),
-                                             entries: [stale], provider: "claude")
-            .contains(MenuBarSegment(" ~", "marker")))
+        XCTAssertFalse(MenuBarFmt.fmtSegments(today: MenuBarToday(tokens: 1, cost: 0),
+                                              entries: [stale], provider: "claude")
+            .contains(where: { $0.role == "marker" }))
         XCTAssertTrue(MenuBarFmt.fmtSegments(today: MenuBarToday(tokens: 1, cost: 0),
                                              entries: [local], provider: "claude")
             .contains(MenuBarSegment(" ≈", "marker")))
+        XCTAssertEqual(MenuBarFmt.quotaLineSegments(stale).last?.text, "~45%")
+        XCTAssertEqual(MenuBarFmt.quotaLineSegments(local).last?.text, "≈45%")
     }
 
     func testMenuLineSegments() {

@@ -32,6 +32,13 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(LanguageManager(defaults: defaults).selection, .system)
     }
 
+    func testPackagedLocaleDirectoryNamesResolve() {
+        XCTAssertNotNil(L10n.localizedBundle("en").url(forResource: "Localizable",
+                                                       withExtension: "strings"))
+        XCTAssertNotNil(L10n.localizedBundle("zh-Hans").url(forResource: "Localizable",
+                                                             withExtension: "strings"))
+    }
+
     func testResourcesHaveMatchingKeysAndPlaceholders() throws {
         func strings(_ language: String) throws -> [String: String] {
             let url = try XCTUnwrap(L10n.localizedBundle(language).url(forResource: "Localizable", withExtension: "strings"))

@@ -174,16 +174,18 @@ extension MenuBarFmt {
         guard let best = bestWindow(entry), best.pct != nil else { return segs }
         let glyph = providerGlyph[provider]
             ?? String((entry?.name.isEmpty == false ? entry?.name : nil) ?? "?").prefix(1).description
+        let marker = quotaMarker(best)
         segs.append(MenuBarSegment(compact ? "·" : " · ", "dim"))
         segs.append(MenuBarSegment(glyph, "glyph"))
-        let marker = quotaMarker(best)
         if ring {
-            if !marker.isEmpty {
+            // Omit only the stale-official marker from the status-bar title;
+            // the expanded menu remains the source-of-truth for freshness.
+            if marker == "≈" {
                 segs.append(MenuBarSegment(marker, "marker"))
             }
             return segs
         }
-        if !marker.isEmpty {
+        if marker == "≈" {
             segs.append(MenuBarSegment("\(sep)\(marker)", "marker"))
             segs.append(MenuBarSegment(String(format: "%.0f%%", best.pct ?? 0),
                                        quotaUrgency(best.pct)))
