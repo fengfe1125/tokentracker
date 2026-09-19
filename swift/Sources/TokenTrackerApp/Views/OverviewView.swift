@@ -52,13 +52,13 @@ struct OverviewView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    InsightsOverview(model:state.insights,rescan:{state.requestScan()})
                     summaryCard
                     detailGrid
                     hitRateCard
                     trendCard
                     quotaSection
                     modelSection
+                    InsightsOverview(model:state.insights,rescan:{state.requestScan()})
                 }
                 .padding(20)
             }
