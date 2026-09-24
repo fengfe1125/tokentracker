@@ -69,6 +69,17 @@
 "今日暂无数据（点「立即扫描」）" = "No data today (click Scan now)";
 "今日用量 + {0}" = "Today's usage + {0}";
 "价格表估算" = "Price list estimate";
+"价格估算" = "Price estimates";
+"自动同步官方价格" = "Sync official prices automatically";
+"每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。" = "API rates are refreshed daily from public provider pages. Turning this off keeps local estimates; token counts and source-reported costs continue to work.";
+"立即同步" = "Sync now";
+"上次成功同步：从未" = "Last successful sync: Never";
+"上次成功同步：{0}" = "Last successful sync: {0}";
+"正在同步价格…" = "Syncing prices…";
+"价格同步成功" = "Price sync succeeded";
+"部分价格来源同步失败" = "Some price sources could not be synced";
+"价格同步失败，继续使用上次有效价格" = "Price sync failed; using the last valid rates";
+"尚未同步价格" = "Prices have not been synced";
 "会下载 {0}（{1}），" = "Downloads {0} ({1}),";
 "会话" = "Sessions";
 "会话 ID" = "Session ID";

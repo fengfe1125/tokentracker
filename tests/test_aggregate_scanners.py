@@ -9,8 +9,19 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-from tokentracker import db, pricing
+from tokentracker import db
 from tokentracker.scanners import hermes, opencode
+
+SNAPSHOT_PRICES = {"schema_version": 1, "versions": [
+    {"id": "test:test:m", "provider": "test", "model": "m", "aliases": [],
+     "effective_at_ms": 0, "fetched_at_ms": 0, "source_url": "fixture://prices",
+     "rates": {"input": 1, "output": 0, "cache_read": 0, "cache_write": 0},
+     "conditions": []},
+    {"id": "test:p:gpt-5", "provider": "p", "model": "gpt-5", "aliases": [],
+     "effective_at_ms": 0, "fetched_at_ms": 0, "source_url": "fixture://prices",
+     "rates": {"input": 1, "output": 0, "cache_read": 0, "cache_write": 0},
+     "conditions": []}
+]}
 
 
 class AggregateScannerTest(unittest.TestCase):
@@ -37,7 +48,7 @@ class AggregateScannerTest(unittest.TestCase):
 
     def scan_at(self, scanner, ms, full=False):
         with patch("tokentracker.db.time.time", return_value=ms/1000):
-            return scanner.scan(self.conn, pricing.DEFAULT_PRICES, full=full)
+            return scanner.scan(self.conn, SNAPSHOT_PRICES, full=full)
 
     def update(self, name, value):
         with closing(sqlite3.connect(self.paths[name])) as conn, conn:
@@ -127,9 +138,9 @@ class AggregateScannerTest(unittest.TestCase):
 
     def snapshot(self, conn, inp, cost, at, source="native"):
         return db.put_snapshot(conn, "test", "fixture.db", "s", session_id="s",
-                               project="p", model="m", input=inp, native_cost=cost,
+                               project="p", model="m", provider="test", input=inp, native_cost=cost,
                                cost_source=source, observed_at=at,
-                               prices={"models": {"m": {"input": 1, "output": 0}}})
+                               prices=SNAPSHOT_PRICES)
 
     def test_native_cost_arrival_creates_unallocated_adjustment(self):
         self.snapshot(self.conn, 1_000_000, None, self.start-1000)

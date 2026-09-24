@@ -154,11 +154,13 @@ def _scan_journal(conn, prices, cursor, full) -> tuple[int, int, int]:
                 model = model_hint or "kimi-code"
                 ts = _parse_ts(env.get("timestamp") or obj.get("time"))
                 key = f"{session_id}|step|{obj.get('seq')}"
-                cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+                cost, version_id = pricing.cost_for(prices, model, inp, outp, cr, cw,
+                                                   provider="moonshot", event_ts=ts)
                 added += db.put_event(conn, NAME, key, session_id=session_id,
                                       project=project, ts=ts, model=str(model),
                                       input=inp, output=outp, cache_read=cr,
-                                      cache_write=cw, cost=cost)
+                                      cache_write=cw, cost=cost, provider="moonshot",
+                                      price_version_id=version_id)
             cursor[path] = snapshot
             if title:
                 db.set_session_title(conn, NAME, session_id, title)
@@ -193,11 +195,13 @@ def _scan_cli(conn, prices, cursor, full) -> tuple[int, int, int]:
                 if inp + outp == 0:
                     continue
                 model = obj.get("model") or ""
-                cost, _ = pricing.cost_for(prices, model, inp, outp, 0, 0)
+                ts = _parse_ts(obj.get("timestamp") or 0)
+                cost, version_id = pricing.cost_for(prices, model, inp, outp, 0, 0,
+                                                   provider="moonshot", event_ts=ts)
                 added += db.put_event(conn, NAME, f"cli|{path}|{lineno}",
                                       session_id=name[:-6], project=dirpath,
-                                      ts=_parse_ts(obj.get("timestamp") or 0), model=str(model),
-                                      input=inp, output=outp, cost=cost)
+                                      ts=ts, model=str(model), input=inp, output=outp,
+                                      cost=cost, provider="moonshot", price_version_id=version_id)
             cursor[path] = snapshot
     return added, updated, files, activity_added, activity_updated
 

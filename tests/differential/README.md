@@ -24,6 +24,10 @@ python3 tests/differential/export_python.py - # 打印到 stdout（不写文件�
 与基线一致。若对扫描器做了**有意**的行为变更，重跑 `export_python.py`
 更新基线并在提交信息里说明。
 
+事件基线包含 `provider` 和 `price_version_id`，同时锁定所有七个扫描器的
+四类 token 都为非负互斥计数；OpenCode/Hermes 的 reasoning 子项不重复加入，
+未知模型仍保留 token、费用与费率版本为空。
+
 ## 规范化约定（Swift 侧 Phase 1 必须遵守）
 
 - `events`：按 `(tool, src_key)` 升序；`cost` 四舍五入到 6 位小数，`NULL → null`；
@@ -35,7 +39,7 @@ python3 tests/differential/export_python.py - # 打印到 stdout（不写文件�
 
 ## 语料覆盖范围
 
-正常路径：每工具 1–2 个会话、含缓存 token、命中价格表/走 default/模型为空
+正常路径：每工具 1–2 个会话、含缓存 token、命中精确模型价格/未知模型不计价/模型为空
 不计费、codex 双源（rollout JSONL + logs_2.sqlite）、opencode/hermes 聚合
 快照（native / 估算成本、unallocated 时间质量）、DSH zstd 压缩流、
 Kimi 逐步增量、Pi 官方成本。**边界场景**（计数器重置、截断增量、坏行、

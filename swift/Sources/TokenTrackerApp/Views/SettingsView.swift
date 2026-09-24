@@ -103,6 +103,37 @@ struct SettingsPanelView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section(L10n.text("价格估算")) {
+                Toggle(L10n.text("自动同步官方价格"), isOn: binding("price_sync_enabled"))
+                Text(L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(priceSyncStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(L10n.text("立即同步")) { state.syncPricesNow() }
+                        .disabled(state.priceSyncRunning)
+                    if state.priceSyncRunning { ProgressView().controlSize(.small) }
+                }
+                if state.priceSyncLastSuccessAtMs > 0 {
+                    let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
+                    Text(L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.text("上次成功同步：从未"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !state.priceSyncMessage.isEmpty {
+                    Text(state.priceSyncMessage)
+                        .font(.caption)
+                        .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
+                        .lineLimit(3)
+                }
+            }
             publishSection
             Section(L10n.text("关于")) {
                 HStack {
@@ -146,6 +177,16 @@ struct SettingsPanelView: View {
             Button(L10n.text("取消"), role: .cancel) {}
         } message: {
             Text(L10n.text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。"))
+        }
+    }
+
+    private var priceSyncStatusText: String {
+        if state.priceSyncRunning { return L10n.text("正在同步价格…") }
+        switch state.priceSyncState {
+        case "success": return L10n.text("价格同步成功")
+        case "partial": return L10n.text("部分价格来源同步失败")
+        case "failed": return L10n.text("价格同步失败，继续使用上次有效价格")
+        default: return L10n.text("尚未同步价格")
         }
     }
 

@@ -10,9 +10,11 @@ import XCTest
 @testable import TokenTrackerCore
 
 /// tests/test_scanners.py 的 PRICES
-let testPrices = PriceTable(
-    fallback: nil,
-    models: ["test-model": PriceRate(input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2)])
+let testPrices = PriceTable(versions: ["anthropic", "openai", "deepseek", "moonshot", "xai"].map {
+    PriceVersion(id: "test:\($0):test-model", provider: $0, model: "test-model",
+                 effectiveAtMs: 0, fetchedAtMs: 0, sourceURL: "fixture://prices",
+                 rates: PriceRate(input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2))
+})
 
 let fixtureTS = "2026-08-25T01:00:00Z"
 let fixtureTSMs: Int64 = 1_787_619_600_000

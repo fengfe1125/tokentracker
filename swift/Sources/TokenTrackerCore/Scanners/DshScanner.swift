@@ -127,12 +127,14 @@ public struct DshScanner: ScannerAdapter {
                     let turn = data["turn"].map { String(describing: $0) } ?? "None"
                     let step = data["step"].map { String(describing: $0) } ?? "None"
                     let key = "\(sid)|\(turn)|\(step)"
-                    let cost = prices.cost(for: model, input: inp, output: outp,
-                                           cacheRead: cr, cacheWrite: cw)
+                    let quote = prices.quote(model: model, input: inp, output: outp,
+                                              cacheRead: cr, cacheWrite: cw, eventAtMs: ts)
                     outcome.added += try store.putEvent(
                         tool: name, srcKey: key, sessionID: sid, project: project,
                         ts: ts, model: model, input: inp, output: outp,
-                        cacheRead: cr, cacheWrite: cw, cost: cost)
+                        cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
+                        provider: quote?.provider ?? (model.lowercased().hasPrefix("deepseek-") ? "deepseek" : ""),
+                        priceVersionID: quote?.priceVersionID)
                     if sessionID.isEmpty {
                         let oldKey = "\(oldFallback)|\(turn)|\(step)"
                         outcome.updated += try replaceOldFallback(
@@ -150,10 +152,12 @@ public struct DshScanner: ScannerAdapter {
                     let sid = sessionID.isEmpty ? fallbackID : sessionID
                     let seq = obj["seq"].map { String(describing: $0) } ?? "None"
                     let key = "\(sid)|top|\(seq)"
-                    let cost = prices.cost(for: model, input: inp, output: outp)
+                    let quote = prices.quote(model: model, input: inp, output: outp, eventAtMs: ts)
                     outcome.added += try store.putEvent(
                         tool: name, srcKey: key, sessionID: sid, project: project,
-                        ts: ts, model: model, input: inp, output: outp, cost: cost)
+                        ts: ts, model: model, input: inp, output: outp, cost: quote?.cost,
+                        provider: quote?.provider ?? (model.lowercased().hasPrefix("deepseek-") ? "deepseek" : ""),
+                        priceVersionID: quote?.priceVersionID)
                     if sessionID.isEmpty {
                         let oldKey = "\(oldFallback)|top|\(seq)"
                         outcome.updated += try replaceOldFallback(

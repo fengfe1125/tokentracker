@@ -170,7 +170,8 @@ public struct HermesScanner: ScannerAdapter {
                 model: row.string("model"),
                 input: c.0, output: c.1, cacheRead: c.2, cacheWrite: c.3,
                 nativeCost: native, costSource: origin, prices: prices,
-                legacyKey: legacyKey, observedAt: observedAt)
+                legacyKey: legacyKey, observedAt: observedAt,
+                provider: row.string("billing_provider"))
             try store.setSessionTitle(tool: name, sessionID: row.string("session_id"),
                                       title: row.stringOrNil("display_name") ?? "")
             added += result.added

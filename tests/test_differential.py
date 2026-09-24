@@ -28,6 +28,21 @@ class DifferentialCase(unittest.TestCase):
         self.assertEqual({r for r in data["scan_results"]},
                          {"claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"})
         self.assertGreaterEqual(len(data["events"]), 10)
+        by_tool = {tool: [event for event in data["events"] if event["tool"] == tool]
+                   for tool in data["scan_results"]}
+        self.assertTrue(all(by_tool.values()), "七个扫描器都必须产出固定样例用量")
+        self.assertTrue(all(event["input"] >= 0 and event["output"] >= 0
+                            and event["cache_read"] >= 0 and event["cache_write"] >= 0
+                            for event in data["events"]))
+        opencode = next(event for event in by_tool["opencode"]
+                        if event["session_id"] == "oc-sess-1")
+        # tokens_reasoning 是 output 的子集；不再独立叠加。
+        self.assertEqual(sum(opencode[key] for key in
+                             ("input", "output", "cache_read", "cache_write")), 26_800)
+        unknown = next(event for event in by_tool["pi"] if event["model"] == "unpriced-model-x")
+        self.assertEqual(unknown["input"] + unknown["output"], 1_560)
+        self.assertIsNone(unknown["cost"])
+        self.assertIsNone(unknown["price_version_id"])
 
 
 if __name__ == "__main__":

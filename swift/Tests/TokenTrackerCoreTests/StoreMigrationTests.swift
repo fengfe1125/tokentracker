@@ -95,8 +95,10 @@ final class StoreMigrationTests: XCTestCase {
         let codex = try XCTUnwrap(store.conn.queryOne(
             "SELECT * FROM usage_events WHERE tool='codex'"))
         XCTAssertEqual(codex.int("input"), 200_000)
-        XCTAssertEqual(codex.double("cost"), 0.35, accuracy: 1e-9)
-        XCTAssertEqual(codex.string("cost_source"), "recomputed")
+        XCTAssertEqual(codex.double("cost"), 1.35, accuracy: 1e-9)
+        XCTAssertEqual(codex.string("cost_source"), "legacy_unversioned")
+        XCTAssertEqual(codex.string("provider"), "openai")
+        XCTAssertNil(codex.stringOrNil("price_version_id"))
         XCTAssertEqual(codex.string("time_quality"), "unallocated")
 
         // 重复打开不重复迁移/备份

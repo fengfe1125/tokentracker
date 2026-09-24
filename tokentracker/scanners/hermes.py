@@ -145,7 +145,8 @@ def _scan_one(conn, path: str, prices, rows=None, owners=None) -> tuple[int, int
             conn, NAME, os.path.realpath(path), json.dumps(parts),
             session_id=r["session_id"] or "", project=r["display_name"] or r["session_id"] or "",
             model=r["model"] or "", input=inp, output=out, cache_read=cached, cache_write=written,
-            native_cost=native, cost_source=origin, prices=prices, legacy_key=legacy_key, observed_at=observed_at)
+            native_cost=native, cost_source=origin, prices=prices, legacy_key=legacy_key,
+            observed_at=observed_at, provider=r["billing_provider"] or "")
         db.set_session_title(conn, NAME, r["session_id"] or "", r["display_name"] or "")
         added += result["added"]
         resets += result["counter_resets"]

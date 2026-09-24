@@ -80,7 +80,8 @@ def _scan_line(obj, fallback_key, session_id, slug, st_mtime_ms, prices, conn):
         return 0, 0, changes, title
     model = msg.get("model") or obj.get("model") or ""
     key = (msg or {}).get("id") or f"{session_id}|{fallback_key}"
-    cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+    cost, version_id = pricing.cost_for(prices, model, inp, outp, cr, cw,
+                                        provider="anthropic", event_ts=ts)
     source_key = f"{session_id}|{key}"
     if obj.get("cwd"):
         db.record_project_path(conn, NAME, source_key, obj["cwd"])
@@ -97,12 +98,14 @@ def _scan_line(obj, fallback_key, session_id, slug, st_mtime_ms, prices, conn):
         unchanged = (inp, outp, cr, cw) == tuple(old)
         if unchanged:
             return 0, 0, changes, title
-        cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+        cost, version_id = pricing.cost_for(prices, model, inp, outp, cr, cw,
+                                            provider="anthropic", event_ts=ts)
     added = db.put_event(conn, NAME, source_key,
                          session_id=session_id, project=slug, ts=ts,
                          model=model, input=inp, output=outp,
                          cache_read=cr, cache_write=cw, cost=cost,
-                         replace=old is not None)
+                         replace=old is not None, provider="anthropic",
+                         price_version_id=version_id)
     return (0, 1, changes, title) if old else (added, 0, changes, title)
 
 

@@ -3,7 +3,7 @@
 //  TokenTrackerCore
 //
 //  差分测试对照模型：对应 tests/differential/export_python.py 的输出格式
-//  （format_version=3）。Swift 扫描器将产出同一结构并逐字段比对。
+//  （format_version=4）。Swift 扫描器将产出同一结构并逐字段比对。
 //
 
 import Foundation
@@ -26,9 +26,11 @@ public struct ExpectedEvent: Codable, Equatable, Sendable {
     public var costSource: String
     public var sourceKind: String
     public var sourceScope: String
+    public var provider: String
+    public var priceVersionID: String?
 
     enum CodingKeys: String, CodingKey {
-        case tool, project, ts, model, input, output, cost
+        case tool, project, ts, model, input, output, cost, provider
         case srcKey = "src_key"
         case sessionID = "session_id"
         case cacheRead = "cache_read"
@@ -38,6 +40,7 @@ public struct ExpectedEvent: Codable, Equatable, Sendable {
         case costSource = "cost_source"
         case sourceKind = "source_kind"
         case sourceScope = "source_scope"
+        case priceVersionID = "price_version_id"
     }
 }
 

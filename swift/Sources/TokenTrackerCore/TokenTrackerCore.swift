@@ -10,10 +10,10 @@ import Foundation
 
 public enum TokenTrackerCore {
     /// 与 Python db.SCHEMA_VERSION 对齐；Swift 版复用同一 ~/.tokentracker/usage.db。
-    public static let schemaVersion = 4
+    public static let schemaVersion = 6
 
     /// 差分导出格式版本（tests/differential/export_python.py）。
-    public static let differentialFormatVersion = 3
+    public static let differentialFormatVersion = 4
 
     /// 公开统计载荷格式版本。与 differentialFormatVersion 完全独立：
     /// 差分导出含绝对路径与原始 prompt，绝不复用。

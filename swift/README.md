@@ -44,8 +44,9 @@ open dist/TokenTracker.app
 
 Python CLI 与 Swift 共用以下兼容数据：
 
-- `~/.tokentracker/usage.db`（schema v4；兼容迁移 v3 的 Agent Activity）
+- `~/.tokentracker/usage.db`（schema v6；用量事件保留供应商和费率版本）
 - `~/.tokentracker/settings.json`
+- `~/.tokentracker/prices.json`（供应商官方公开费率目录，按事件时间版本化）
 - `~/.tokentracker/official_cache.json`
 - `~/.tokentracker/claude_cred_backup.json`
 
