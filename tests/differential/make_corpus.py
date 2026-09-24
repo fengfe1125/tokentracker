@@ -150,7 +150,7 @@ def make_opencode(base):
             "time_created INT,time_updated INT)")
         conn.execute("INSERT INTO session VALUES "
                      "('oc-sess-1','/repo/webapp','重构侧边栏','\"gpt-5.6-luna\"',"
-                     "20000,800,0,5000,1000,0.0315,1,1)")
+                     "20000,800,240,5000,1000,0.0315,1,1)")
         conn.execute("INSERT INTO session VALUES "
                      "('oc-sess-2','/repo/api','修测试','{\"id\":\"gpt-5\"}',"
                      "9000,300,0,0,0,0.014,1,1)")
@@ -215,7 +215,7 @@ def make_hermes(base):
             "first_seen INT,last_seen INT,api_call_count INT,"
             "billing_provider TEXT,billing_base_url TEXT,billing_mode TEXT,task TEXT)")
         conn.execute("INSERT INTO session_model_usage VALUES "
-                     "('hermes-sess-1','claude-sonnet-4-5',15000,600,3000,0,0,"
+                     "('hermes-sess-1','claude-sonnet-4-5',15000,600,3000,0,90,"
                      "0,0.052,1,1,3,'anthropic','https://api.anthropic.com','sub','chat')")
         conn.execute("INSERT INTO session_model_usage VALUES "
                      "('hermes-sess-2','unpriced-model-x',4000,120,0,0,0,"

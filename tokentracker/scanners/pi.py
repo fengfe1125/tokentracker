@@ -115,13 +115,22 @@ def scan(conn, prices, full: bool = False) -> dict:
                     model = msg.get("model") or obj.get("modelId") or ""
                     key = f"{os.path.basename(path)}|{obj.get('id')}"
                     cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
-                    cost = cost_obj.get("total") or 0
-                    if cost <= 0:
-                        cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+                    source_cost = cost_obj.get("total")
+                    source_cost = source_cost if isinstance(source_cost, (int, float)) and source_cost > 0 else None
+                    source_provider = str(msg.get("provider") or obj.get("provider") or "")
+                    cost, resolved_provider, version_id = pricing.quote_for(
+                        prices, model, inp, outp, cr, cw,
+                        provider=source_provider or None, event_ts=ts)
+                    provider = source_provider or resolved_provider or ""
+                    if source_cost is not None:
+                        cost, version_id, cost_source = source_cost, None, "native"
+                    else:
+                        cost_source = "estimate"
                     added += db.put_event(conn, NAME, key, session_id=session_id,
                                           project=project, ts=ts, model=str(model),
                                           input=inp, output=outp, cache_read=cr,
-                                          cache_write=cw, cost=cost)
+                                          cache_write=cw, cost=cost, provider=provider,
+                                          price_version_id=version_id, cost_source=cost_source)
                 cursor[path] = snapshot
                 if title:
                     db.set_session_title(conn, NAME, session_id, title)

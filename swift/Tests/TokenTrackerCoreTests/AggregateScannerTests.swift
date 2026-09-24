@@ -56,11 +56,11 @@ final class AggregateScannerPortTests: XCTestCase {
         store.nowMs = { ms }
         switch tool {
         case .opencode:
-            return try OpencodeScanner(dbPath: paths["opencode"]!).scan(store, .default, full: full)
+            return try OpencodeScanner(dbPath: paths["opencode"]!).scan(store, snapshotPrices, full: full)
         case .hermes:
             var scanner = HermesScanner(home: tmp.url.path)
             scanner.dbFilesOverride = [paths["hermes"]!]
-            return try scanner.scan(store, .default, full: full)
+            return try scanner.scan(store, snapshotPrices, full: full)
         }
     }
 
@@ -194,8 +194,13 @@ final class AggregateScannerPortTests: XCTestCase {
 
     // ------------------------------------------------ put_snapshot 语义 ----
 
-    private let snapshotPrices = PriceTable(fallback: nil, models: [
-        "m": PriceRate(input: 1, output: 0),
+    private let snapshotPrices = PriceTable(versions: [
+        PriceVersion(id: "test:source:m", provider: "test", model: "m",
+                     effectiveAtMs: 0, fetchedAtMs: 0, sourceURL: "fixture://prices",
+                     rates: PriceRate(input: 1, output: 0)),
+        PriceVersion(id: "test:p:gpt-5", provider: "p", model: "gpt-5",
+                     effectiveAtMs: 0, fetchedAtMs: 0, sourceURL: "fixture://prices",
+                     rates: PriceRate(input: 1, output: 0)),
     ])
 
     @discardableResult
@@ -205,7 +210,7 @@ final class AggregateScannerPortTests: XCTestCase {
         try store.putSnapshot(tool: "test", sourceScope: "fixture.db", identity: "s",
                               sessionID: "s", project: "p", model: "m", input: input,
                               nativeCost: cost, costSource: source,
-                              prices: snapshotPrices, observedAt: at)
+                              prices: snapshotPrices, observedAt: at, provider: "test")
     }
 
     /// test_native_cost_arrival_creates_unallocated_adjustment
@@ -264,9 +269,13 @@ final class AggregateScannerPortTests: XCTestCase {
     func testNativeArrivalAccountsForPricesFilledBetweenScans() throws {
         try store.putSnapshot(tool: "test", sourceScope: "fixture.db", identity: "s",
                               sessionID: "s", project: "p", model: "m", input: 1_000_000,
-                              prices: PriceTable(fallback: nil, models: [:]),
+                              prices: PriceTable(),
                               observedAt: startMs)
-        _ = try store.reprice(PriceTable(fallback: nil, models: ["m": PriceRate(input: 1)]))
+        _ = try store.reprice(PriceTable(versions: [
+            PriceVersion(id: "test:source:m", provider: "test", model: "m",
+                         effectiveAtMs: 0, fetchedAtMs: 0, sourceURL: "fixture://prices",
+                         rates: PriceRate(input: 1)),
+        ]))
         try snapshot(store, input: 1_100_000, cost: 2, at: startMs + 1000)
         XCTAssertEqual(try store.stats().total.cost, 2, accuracy: 1e-9)
     }

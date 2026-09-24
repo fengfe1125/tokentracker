@@ -86,13 +86,15 @@ def _normalized(counts):
 def _put(conn, prices, key, sid, turn, model, ts, counts, kind,
          project="", quality="exact"):
     inp, out, cached, written = _normalized(counts)
-    cost, _ = pricing.cost_for(prices, model, inp, out, cached, written)
+    cost, version_id = pricing.cost_for(prices, model, inp, out, cached, written,
+                                        provider="openai", event_ts=ts)
     exists = conn.execute("SELECT 1 FROM usage_events WHERE tool=? AND src_key=?", (NAME, key)).fetchone()
     db.put_event(conn, NAME, key, session_id=sid, project=project, ts=ts or 1,
                  model=model, input=inp, output=out, cache_read=cached,
                  cache_write=written, cost=cost, replace=True,
                  time_quality=quality if ts > 0 else "unallocated",
-                 cost_source="estimate", source_kind=kind, source_scope=turn)
+                 cost_source="estimate", source_kind=kind, source_scope=turn,
+                 provider="openai", price_version_id=version_id)
     return (0, 1) if exists else (1, 0)
 
 

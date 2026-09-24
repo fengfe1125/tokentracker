@@ -161,12 +161,13 @@ public struct KimiScanner: ScannerAdapter {
                 let model = modelHint.isEmpty ? "kimi-code" : modelHint
                 let ts = parseTS(jsonOrAny(envelope["timestamp"], obj["time"]))
                 let key = "\(sessionID)|step|\((obj["seq"] as? NSNumber).map { $0.stringValue } ?? "None")"
-                let cost = prices.cost(for: model, input: inp, output: outp,
-                                       cacheRead: cr, cacheWrite: cw)
+                let quote = prices.quote(provider: "moonshot", model: model, input: inp, output: outp,
+                                         cacheRead: cr, cacheWrite: cw, eventAtMs: ts)
                 outcome.added += try store.putEvent(
                     tool: name, srcKey: key, sessionID: sessionID, project: project,
                     ts: ts, model: model, input: inp, output: outp,
-                    cacheRead: cr, cacheWrite: cw, cost: cost)
+                    cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
+                    provider: "moonshot", priceVersionID: quote?.priceVersionID)
             }
             cursor[path] = statKey.asDict
             if let title {
@@ -192,13 +193,15 @@ public struct KimiScanner: ScannerAdapter {
                 let outp = jsonOrInt(usage["output"], usage["output_tokens"])
                 if inp + outp == 0 { continue }
                 let model = obj["model"] as? String ?? ""
-                let cost = prices.cost(for: model, input: inp, output: outp)
+                let ts = parseTS(obj["timestamp"])
+                let quote = prices.quote(provider: "moonshot", model: model, input: inp,
+                                         output: outp, eventAtMs: ts)
                 outcome.added += try store.putEvent(
                     tool: name, srcKey: "cli|\(path)|\(lineno)",
                     sessionID: String(filename.dropLast(".jsonl".count)),
                     project: (path as NSString).deletingLastPathComponent,
-                    ts: parseTS(obj["timestamp"]), model: model,
-                    input: inp, output: outp, cost: cost)
+                    ts: ts, model: model, input: inp, output: outp, cost: quote?.cost,
+                    provider: "moonshot", priceVersionID: quote?.priceVersionID)
             }
             cursor[path] = statKey.asDict
         }

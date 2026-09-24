@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
     cache_read INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0,
     cost REAL, src_key TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '', price_version_id TEXT,
     time_quality TEXT NOT NULL DEFAULT 'exact', interval_start INTEGER,
     cost_source TEXT NOT NULL DEFAULT 'estimate',
     source_kind TEXT NOT NULL DEFAULT '', source_scope TEXT NOT NULL DEFAULT '',
@@ -151,22 +152,29 @@ def _upgrade(conn, path):
         # ALTER TABLE block above. New databases take the same path.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_kind_time "
                      "ON agent_activity_events(event_kind, started_at)")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(usage_events)")}
+        if "provider" not in columns:
+            conn.execute("ALTER TABLE usage_events ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+        if "price_version_id" not in columns:
+            conn.execute("ALTER TABLE usage_events ADD COLUMN price_version_id TEXT")
+        if legacy and version < 6:
+            conn.execute("UPDATE usage_events SET provider='anthropic' WHERE tool='claude' AND provider=''")
+            conn.execute("UPDATE usage_events SET provider='openai' WHERE tool='codex' AND provider=''")
+            conn.execute("UPDATE usage_events SET provider='moonshot' WHERE tool='kimi' AND provider=''")
+            conn.execute("UPDATE usage_events SET provider='deepseek' WHERE tool='dsh' AND provider='' AND lower(model) LIKE 'deepseek-%'")
         if legacy and version < 1:
-            from .pricing import cost_for, load_prices
-            prices = load_prices()
             for row in conn.execute("SELECT * FROM usage_events WHERE tool IN ('codex','opencode','hermes')").fetchall():
                 old = dict(row)
                 conn.execute("INSERT INTO migration_history VALUES (?,?,?,?,?)", (
                     SCHEMA_VERSION, int(time.time()*1000), row["id"], json.dumps(old),
-                    "Preserved original counters; Codex prices recalculated using the current price table (not a historical bill)."))
+                    "Preserved original counters and cost as an unversioned historical estimate."))
                 if row["tool"] == "codex":
                     inp = max(0, row["input"] - row["cache_read"] - row["cache_write"])
-                    cost, _ = cost_for(prices, row["model"], inp, row["output"], row["cache_read"], row["cache_write"])
                     quality = "unallocated" if row["src_key"].startswith("legacy|") else "exact"
-                    conn.execute("UPDATE usage_events SET input=?,cost=?,cost_source='recomputed',time_quality=? WHERE id=?",
-                                 (inp, cost, quality, row["id"]))
+                    conn.execute("UPDATE usage_events SET input=?,cost_source='legacy_unversioned',time_quality=? WHERE id=?",
+                                 (inp, quality, row["id"]))
                 else:
-                    conn.execute("UPDATE usage_events SET time_quality='unallocated',cost_source='legacy' WHERE id=?", (row["id"],))
+                    conn.execute("UPDATE usage_events SET time_quality='unallocated',cost_source='legacy_unversioned' WHERE id=?", (row["id"],))
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
     except BaseException:
@@ -230,19 +238,26 @@ def put_event(conn, tool: str, src_key: str, *, session_id: str = "", project: s
               ts: int = 0, model: str = "", input: int = 0, output: int = 0,
               cache_read: int = 0, cache_write: int = 0, cost=None, replace: bool = False,
               time_quality: str = "exact", interval_start: int | None = None,
-              cost_source: str = "estimate", source_kind: str = "", source_scope: str = "") -> int:
+              cost_source: str = "estimate", source_kind: str = "", source_scope: str = "",
+              provider: str = "", price_version_id: str | None = None) -> int:
     if time_quality not in ("exact", "observed", "unallocated"):
         raise ValueError("Unknown time quality")
     if time_quality == "observed" and (interval_start is None or interval_start > ts):
         time_quality = "unallocated"
     if ts <= 0:
         ts = int(time.time() * 1000)
+    if not provider:
+        provider = {"claude": "anthropic", "codex": "openai", "kimi": "moonshot"}.get(tool, "")
+        if tool == "dsh" and model.lower().startswith("deepseek-"):
+            provider = "deepseek"
     verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
     changed = conn.execute(
         f"{verb} INTO usage_events (tool,src_key,session_id,project,ts,model,input,output,cache_read,cache_write,cost,"
-        "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "time_quality,interval_start,cost_source,source_kind,source_scope,provider,price_version_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tool, src_key, session_id, project, ts, model, input, output, cache_read, cache_write, cost,
-         time_quality, interval_start, cost_source, source_kind, source_scope)).rowcount
+         time_quality, interval_start, cost_source, source_kind, source_scope,
+         provider, price_version_id)).rowcount
     if tool in ("codex", "pi", "dsh", "kimi") and project.startswith("/") and not src_key.startswith("cli|"):
         record_project_path(conn, tool, src_key, project)
     return changed
@@ -384,14 +399,15 @@ def get_scan_cursor(conn, tool: str) -> dict:
 
 def put_snapshot(conn, tool, source_scope, identity, *, session_id, project, model,
                  input=0, output=0, cache_read=0, cache_write=0, native_cost=None,
-                 cost_source="native", prices=None, legacy_key=None, observed_at=None):
+                 cost_source="native", prices=None, legacy_key=None, observed_at=None,
+                 provider=""):
     """Persist a cumulative observation and emit only its change (no commit).
 
     The first observation has no reliable event time. Unchanged observations also
     advance the interval boundary. A decreasing counter establishes a new baseline
     without adding a negative event or counting the replacement baseline again.
     """
-    from .pricing import cost_for
+    from .pricing import cost_for, quote_for
     # SELECT must participate in the same write transaction as the revision
     # insert. Otherwise another process can consume that revision between them.
     if not conn.in_transaction:
@@ -433,15 +449,21 @@ def put_snapshot(conn, tool, source_scope, identity, *, session_id, project, mod
         accounted = ledger_cost() - cost_offset
     reset = bool(previous and any(values[k] < previous[k] for k in TOKEN_COLUMNS))
     delta = {k: values[k] - (previous[k] if previous else 0) for k in TOKEN_COLUMNS}
+    inferred_provider = None
+    if not provider:
+        _unused_cost, inferred_provider, _unused_version = quote_for(
+            prices or {}, model, 0, 0, provider=None, event_ts=now)
+    stored_provider = provider or inferred_provider or ""
     added = 0
-    def emit(counters, cost, origin, quality):
+    def emit(counters, cost, origin, quality, version_id=None, resolved_provider=None):
         nonlocal revision, added
         revision += 1
         added += put_event(conn, tool, f"aggregate|{digest}|{revision}",
                            session_id=session_id, project=project, model=model, ts=now,
                            **counters, cost=cost, time_quality=quality,
                            interval_start=start if quality == "observed" else None,
-                           cost_source=origin, source_kind="aggregate_snapshot", source_scope=source_scope)
+                           cost_source=origin, source_kind="aggregate_snapshot", source_scope=source_scope,
+                           provider=resolved_provider or stored_provider, price_version_id=version_id)
     if not reset:
         continuous_native = bool(
             previous and native_cost is not None and previous.get("native_cost") is not None
@@ -454,11 +476,17 @@ def put_snapshot(conn, tool, source_scope, identity, *, session_id, project, mod
         if native_cost is not None and (not previous or continuous_native):
             cost = native_cost - (previous["native_cost"] if previous else 0)
             origin = cost_source
+            version_id = None
+            resolved_provider = stored_provider
         else:
-            cost, _ = cost_for(prices or {}, model, *(delta[k] for k in TOKEN_COLUMNS))
+            cost, resolved_provider, version_id = quote_for(
+                prices or {}, model, *(delta[k] for k in TOKEN_COLUMNS),
+                provider=provider or None, event_ts=now,
+                interval_start=start if start is not None else None)
             origin = "estimate"
         if any(delta.values()) or (cost is not None and cost != 0):
-            emit(delta, cost, origin, "observed" if start is not None else "unallocated")
+            emit(delta, cost, origin, "observed" if start is not None else "unallocated",
+                 version_id, resolved_provider)
             accounted += cost or 0
         if previous and native_cost is not None and not continuous_native:
             # The first authoritative cumulative cost (or a different cost
@@ -477,7 +505,8 @@ def put_snapshot(conn, tool, source_scope, identity, *, session_id, project, mod
         # not to all the expenses retained from the previous epoch.
         accounted = native_cost
         if accounted is None:
-            accounted, _ = cost_for(prices or {}, model, *(values[k] for k in TOKEN_COLUMNS))
+            accounted, _ = cost_for(prices or {}, model, *(values[k] for k in TOKEN_COLUMNS),
+                                    provider=provider or None, event_ts=now)
         cost_offset = ledger_cost() - (accounted or 0)
     values["accounted_cost"] = accounted or 0
     values["cost_offset"] = cost_offset
@@ -606,12 +635,19 @@ def quota_usage(conn, range_key, tool=None, model_prefix=None, include_cache=Fal
 
 
 def reprice(conn, prices):
-    from .pricing import cost_for
+    from .pricing import quote_for
     n = 0
-    for r in conn.execute("SELECT * FROM usage_events WHERE cost IS NULL").fetchall():
-        cost, _ = cost_for(prices, r["model"], *(r[k] for k in TOKEN_COLUMNS))
+    for r in conn.execute(
+        "SELECT * FROM usage_events WHERE cost IS NULL AND price_version_id IS NULL "
+        "AND cost_source IN ('estimate','priced')").fetchall():
+        provider = r["provider"] or None
+        cost, resolved_provider, version_id = quote_for(
+            prices, r["model"], *(r[k] for k in TOKEN_COLUMNS), provider=provider,
+            event_ts=r["ts"],
+            interval_start=r["interval_start"] if r["time_quality"] == "observed" else None)
         if cost is not None:
-            conn.execute("UPDATE usage_events SET cost=?,cost_source='estimate' WHERE id=?", (cost, r["id"]))
+            conn.execute("UPDATE usage_events SET cost=?,cost_source='estimate',provider=?,price_version_id=? WHERE id=?",
+                         (cost, resolved_provider or r["provider"], version_id, r["id"]))
             n += 1
     conn.commit()
     return n

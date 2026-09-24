@@ -201,15 +201,17 @@ public struct CodexScanner: ScannerAdapter {
                      counts: (Int64, Int64, Int64, Int64), kind: String,
                      project: String = "", quality: String = "exact") throws -> (Int, Int) {
         let n = normalized(counts)
-        let cost = prices.cost(for: model, input: n.0, output: n.1, cacheRead: n.2, cacheWrite: n.3)
+        let quote = prices.quote(provider: "openai", model: model, input: n.0, output: n.1,
+                                 cacheRead: n.2, cacheWrite: n.3, eventAtMs: ts)
         let exists = try store.conn.queryOne(
             "SELECT 1 FROM usage_events WHERE tool=? AND src_key=?", [name, key]) != nil
         try store.putEvent(tool: name, srcKey: key, sessionID: sid, project: project,
                            ts: ts > 0 ? ts : 1, model: model,
                            input: n.0, output: n.1, cacheRead: n.2, cacheWrite: n.3,
-                           cost: cost, replace: true,
+                           cost: quote?.cost, replace: true,
                            timeQuality: ts > 0 ? quality : "unallocated",
-                           costSource: "estimate", sourceKind: kind, sourceScope: turn)
+                           costSource: "estimate", sourceKind: kind, sourceScope: turn,
+                           provider: "openai", priceVersionID: quote?.priceVersionID)
         return exists ? (0, 1) : (1, 0)
     }
 

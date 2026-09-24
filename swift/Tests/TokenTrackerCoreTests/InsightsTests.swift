@@ -173,7 +173,7 @@ final class InsightsTests: XCTestCase {
             try conn.commit()
         }
         let store=try UsageStore(path:path)
-        XCTAssertEqual(try store.conn.scalarInt("PRAGMA user_version"),5)
+        XCTAssertEqual(try store.conn.scalarInt("PRAGMA user_version"),6)
         XCTAssertEqual(try store.usageTotals(UsageQuery()).tokens,77)
         XCTAssertTrue(try store.budgets().isEmpty)
     }

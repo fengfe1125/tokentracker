@@ -43,6 +43,10 @@ final class AppState: ObservableObject {
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
     @Published var updatedAt: Date?
+    @Published private(set) var priceSyncState = "never"
+    @Published private(set) var priceSyncMessage = ""
+    @Published private(set) var priceSyncLastSuccessAtMs: Int64 = 0
+    @Published private(set) var priceSyncRunning = false
 
     // Codex 多账号切换（设置页管理区）
     @Published var codexAccounts: [CodexAccount] = []
@@ -80,7 +84,7 @@ final class AppState: ObservableObject {
     let readStore: UsageStore
     let settingsStore: SettingsStore
     let scanRoots: ScanRoots
-    let priceTable: PriceTable
+    let priceCatalogPath: String
     /// Codex 多账号切换：快照当前登录 + 一键原子替换 auth.json
     let accountSwitcher: CodexAccountSwitcher
     /// 官方配额抓取（注入缝：测试可换成假实现；nil = 仅本地估算）
@@ -101,6 +105,8 @@ final class AppState: ObservableObject {
     private let publisher: PublicStatsPublisher
     private var pollTimer: Timer?
     private var refreshTimer: Timer?
+    private var priceSyncTimer: Timer?
+    private var priceSyncTask: Task<Void, Never>?
     private var settingsFingerprint: String = ""
 
     /// 数值刷新闪光（状态栏动画）；由 StatusItemController 消费。
@@ -124,16 +130,7 @@ final class AppState: ObservableObject {
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
         readStore = try! UsageStore(path: path)
         insights = InsightsModel(path: path)
-        if let pricesPath = env["TOKENTRACKER_PRICES"] {
-            priceTable = PriceTable.load(from: pricesPath)
-        } else {
-            // 仓库根的 prices.json；打包后回退内置默认表
-            let repoPrices = Bundle.main.bundleURL
-                .deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("prices.json").path
-            priceTable = FileManager.default.fileExists(atPath: repoPrices)
-                ? PriceTable.load(from: repoPrices) : .default
-        }
+        priceCatalogPath = env["TOKENTRACKER_PRICES"] ?? PriceCatalogStore.sharedPath
         let preview = env["TT_UI_PREVIEW"] == "1"
         let previewHome = (path as NSString).deletingLastPathComponent
         let settingsStore = SettingsStore(path: preview ? previewHome + "/settings.json" : nil)
@@ -149,6 +146,10 @@ final class AppState: ObservableObject {
         self.officialQuotaService = preview ? nil : officialQuotaService
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
+        let priceStatus = PriceCatalogDocument.load(from: priceCatalogPath)
+        priceSyncState = priceStatus.syncStatus
+        priceSyncMessage = priceStatus.syncMessage
+        priceSyncLastSuccessAtMs = priceStatus.lastSuccessAtMs
         publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
         publishHistory = historyStore.load()
         let handle = settings["publish_handle"] as? String ?? ""
@@ -159,13 +160,14 @@ final class AppState: ObservableObject {
     /// 启动调度：启动扫一次 + 每 60s 增量（写库用独立连接）。
     func start(dbPath: String? = nil) {
         let path = dbPath ?? readStore.path
-        let prices = priceTable
+        let pricesPath = priceCatalogPath
         let roots = scanRoots
         let publisher = publisher
         let publishQueue = publishQueue
         scheduler = ScanScheduler(
             scan: { tools, full in
                 let writeStore = try UsageStore(path: path)
+                let prices = PriceTable.load(from: pricesPath)
                 writeStore.priceTableForMigration = prices
                 let runner = ScanRunner(store: writeStore, prices: prices, roots: roots)
                 let results = runner.runAll(tools: tools, full: full)
@@ -196,6 +198,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 self?.pollScanStatus()
                 self?.reloadSettingsIfChanged()
+                self?.reloadPriceSyncStatus()
                 if self?.selection == .settings { self?.refreshPublishInfo(refreshToken: false) }
             }
         }
@@ -205,6 +208,7 @@ final class AppState: ObservableObject {
         }
         refreshVisibleData()
         refreshQuotas()
+        configurePriceSyncTimer(enabled: (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true)
 
         // 更新检查：启动后延迟 30s 的后台一次性请求（对齐 updatecheck.py 注释），
         // 网络失败静默，绝不阻塞启动
@@ -231,6 +235,7 @@ final class AppState: ObservableObject {
     }
 
     private func reloadSettingsIfChanged() {
+        let wasPriceSyncEnabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
         let effective = settingsStore.effective()
         let fp = Self.fingerprint(effective)
         if fp != settingsFingerprint {
@@ -239,15 +244,79 @@ final class AppState: ObservableObject {
             scheduler?.setInterval(Double(scanIntervalSeconds))
             let handle = settings["publish_handle"] as? String ?? ""
             publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
+            let enabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+            if enabled != wasPriceSyncEnabled { configurePriceSyncTimer(enabled: enabled) }
         }
     }
 
     func updateSetting(key: String, value: Any) {
+        let wasPriceSyncEnabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
         if settingsStore.set(key: key, value: value) {
             settings = settingsStore.effective()
             settingsFingerprint = Self.fingerprint(settings)
             scheduler?.setInterval(Double(scanIntervalSeconds))
+            if key == "price_sync_enabled" {
+                let enabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+                if enabled != wasPriceSyncEnabled { configurePriceSyncTimer(enabled: enabled) }
+            }
         }
+    }
+
+    private func configurePriceSyncTimer(enabled: Bool) {
+        priceSyncTimer?.invalidate()
+        priceSyncTimer = nil
+        guard !isPreview else { return }
+        if !enabled {
+            priceSyncTask?.cancel()
+            priceSyncRunning = false
+            reloadPriceSyncStatus()
+            return
+        }
+        syncPricesIfDue()
+        priceSyncTimer = Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncPricesIfDue() }
+        }
+    }
+
+    private func syncPricesIfDue() {
+        guard !isPreview,
+              (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true else { return }
+        let catalog = PriceCatalogDocument.load(from: priceCatalogPath)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        guard PriceSyncService.isDue(lastSuccessAtMs: catalog.lastSuccessAtMs, nowMs: now) else { return }
+        beginPriceSync()
+    }
+
+    func syncPricesNow() { beginPriceSync() }
+
+    private func beginPriceSync() {
+        guard !isPreview, priceSyncTask == nil else { return }
+        priceSyncRunning = true
+        priceSyncState = "syncing"
+        let service = PriceSyncService(path: priceCatalogPath)
+        priceSyncTask = Task { [weak self] in
+            let result = await service.synchronize()
+            guard let self else { return }
+            self.priceSyncTask = nil
+            self.priceSyncRunning = false
+            if result.status == "cancelled" {
+                if (self.settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true {
+                    self.syncPricesIfDue()
+                }
+                return
+            }
+            self.reloadPriceSyncStatus()
+            if result.status == "success" || result.status == "partial" {
+                self.scheduler?.request(full: false, source: "price_sync")
+            }
+        }
+    }
+
+    private func reloadPriceSyncStatus() {
+        let catalog = PriceCatalogDocument.load(from: priceCatalogPath)
+        priceSyncState = catalog.syncStatus
+        priceSyncMessage = catalog.syncMessage
+        priceSyncLastSuccessAtMs = catalog.lastSuccessAtMs
     }
 
     // ------------------------------------------------------ 公开统计 ----
@@ -387,6 +456,8 @@ final class AppState: ObservableObject {
         let path = readStore.path
         let range = range
         let search = sessionSearch
+        let pricePath = priceCatalogPath
+        let roots = scanRoots
         let toolFilter: String? = {
             if case .tool(let id) = selection { return id }
             return nil
@@ -402,8 +473,8 @@ final class AppState: ObservableObject {
                                                   limit: Self.sessionLimit,
                                                   query: search.isEmpty ? nil : search)
                 let dayStats = try store.stats(rangeKey: "day")
-                let detect = ScanRunner(store: store, prices: self.priceTable,
-                                        roots: self.scanRoots).detectAll()
+                let detect = ScanRunner(store: store, prices: PriceTable.load(from: pricePath),
+                                        roots: roots).detectAll()
                 DispatchQueue.main.async {
                     guard generation == self.dataGeneration else { return }
                     let newTokens = dayStats.total.tokens

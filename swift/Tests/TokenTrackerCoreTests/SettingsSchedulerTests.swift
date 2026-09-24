@@ -141,6 +141,7 @@ final class SettingsStorePortTests: XCTestCase {
         XCTAssertEqual(store.effectiveString("terminal_app"), "auto")
         XCTAssertFalse(store.effectiveBool("menubar_compact"))
         XCTAssertFalse(store.effectiveBool("unit_yi"))
+        XCTAssertTrue(store.effectiveBool("price_sync_enabled"))
     }
 
     /// test_settings_post_validates_and_merges
@@ -153,10 +154,13 @@ final class SettingsStorePortTests: XCTestCase {
         // 非法值一律拒绝且不落盘
         XCTAssertFalse(store.set(key: "menubar_provider", value: "INVALID ID!"))
         XCTAssertFalse(store.set(key: "menubar_compact", value: "yes"))   // 非 bool
+        XCTAssertFalse(store.set(key: "price_sync_enabled", value: "yes"))
         XCTAssertFalse(store.set(key: "terminal_app", value: "vscode"))
         XCTAssertFalse(store.set(key: "unknown_key", value: 1))
         XCTAssertEqual(store.effectiveString("menubar_provider"), "kimi") // 未被破坏
         XCTAssertEqual(store.load()["unknown_key"] as? Int, nil)
+        XCTAssertTrue(store.set(key: "price_sync_enabled", value: false))
+        XCTAssertFalse(store.effectiveBool("price_sync_enabled"))
     }
 
     /// 原子写入：tmp 文件不残留。

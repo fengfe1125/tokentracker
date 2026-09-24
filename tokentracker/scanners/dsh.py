@@ -113,11 +113,14 @@ def scan(conn, prices, full: bool = False) -> dict:
                         ts = obj.get("time") or 0
                         sid = session_id or fallback_id
                         key = f"{sid}|{data.get('turn')}|{data.get('step')}"
-                        cost, _ = pricing.cost_for(prices, model, inp, outp, cr, cw)
+                        cost, provider, version_id = pricing.quote_for(
+                            prices, model, inp, outp, cr, cw, event_ts=int(ts or 0))
                         added += db.put_event(conn, NAME, key, session_id=sid,
                                               project=project, ts=int(ts), model=model,
                                               input=inp, output=outp, cache_read=cr,
-                                              cache_write=cw, cost=cost)
+                                              cache_write=cw, cost=cost,
+                                              provider=provider or ("deepseek" if model.lower().startswith("deepseek-") else ""),
+                                              price_version_id=version_id)
                         if not session_id:
                             old_key = f"{old_fallback}|{data.get('turn')}|{data.get('step')}"
                             updated += _replace_old_fallback(
@@ -132,10 +135,14 @@ def scan(conn, prices, full: bool = False) -> dict:
                         continue
                     sid = session_id or fallback_id
                     key = f"{sid}|top|{obj.get('seq')}"
-                    cost, _ = pricing.cost_for(prices, model, inp, outp, 0, 0)
+                    ts = int(obj.get("time") or 0)
+                    cost, provider, version_id = pricing.quote_for(
+                        prices, model, inp, outp, 0, 0, event_ts=ts)
                     added += db.put_event(conn, NAME, key, session_id=sid,
-                                          project=project, ts=int(obj.get("time") or 0),
-                                          model=model, input=inp, output=outp, cost=cost)
+                                          project=project, ts=ts, model=model,
+                                          input=inp, output=outp, cost=cost,
+                                          provider=provider or ("deepseek" if model.lower().startswith("deepseek-") else ""),
+                                          price_version_id=version_id)
                     if not session_id:
                         old_key = f"{old_fallback}|top|{obj.get('seq')}"
                         updated += _replace_old_fallback(
