@@ -1,0 +1,221 @@
+<UserControl x:Class="TokenTracker.Windows.Views.SessionsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:l="clr-namespace:TokenTracker.Windows.Localization">
+    <DockPanel>
+        <!-- 顶栏：标题 + 计数 + 搜索 -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource PageHeader}">
+            <DockPanel VerticalAlignment="Center">
+                <ui:TextBox DockPanel.Dock="Right" Width="260" Icon="{ui:SymbolIcon Search24}" ClearButtonEnabled="True"
+                            PlaceholderText="{l:Tr 搜索标题 / 项目 / 会话 / 模型}"
+                            Text="{Binding SessionSearch, UpdateSourceTrigger=PropertyChanged}" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SessionsTitle}" Style="{StaticResource Title}" />
+                    <TextBlock Text="{Binding SessionsSubtitle}" Style="{StaticResource Tertiary}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid>
+            <DataGrid x:Name="Table" ItemsSource="{Binding SessionRows}" SelectedItem="{Binding SelectedSession}"
+                      AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single" CanUserResizeRows="False"
+                      HeadersVisibility="Column" GridLinesVisibility="None" Background="Transparent" BorderThickness="0"
+                      Margin="8,4,8,8" RowHeight="40" Sorting="OnSorting" HorizontalScrollBarVisibility="Auto">
+                <DataGrid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="{l:Tr 查看详情}" Click="OnShowDetail" />
+                        <Separator />
+                        <MenuItem Header="{l:Tr 在资源管理器中打开项目目录}" Click="OnOpenProject" />
+                        <MenuItem Header="{l:Tr 复制会话 ID}" Click="OnCopyId" />
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="{l:Tr 时间}" SortMemberPath="SortTs" Width="92" MinWidth="92">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding TimeText}" Style="{StaticResource Primary}" />
+                                    <TextBlock Text="{Binding DateText}" Style="{StaticResource Tertiary}"
+                                               Visibility="{Binding DateText, Converter={StaticResource VisibleWhen}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 会话}" SortMemberPath="Title" Width="2*" MinWidth="140">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Title}" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" ToolTip="{Binding Title}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 项目}" SortMemberPath="ProjectShort" Width="*" MinWidth="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding ProjectShort}" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" ToolTip="{Binding Project}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 工具}" SortMemberPath="ToolName" Width="110" MinWidth="110">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse Width="7" Height="7" Fill="{Binding ToolBrush}" Margin="0,0,6,0" />
+                                    <TextBlock Text="{Binding ToolName}" Style="{StaticResource Primary}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 模型}" SortMemberPath="Model" Width="*" MinWidth="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Model}" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" ToolTip="{Binding Model}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 活动}" SortMemberPath="ActivityExact" Width="90" MinWidth="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Right">
+                                    <TextBlock Text="{Binding ActivityText}" Style="{StaticResource Primary}" HorizontalAlignment="Right" />
+                                    <TextBlock Text="{Binding ActivitySubtitle}" Style="{StaticResource Tertiary}" HorizontalAlignment="Right"
+                                               Visibility="{Binding ActivitySubtitle, Converter={StaticResource VisibleWhen}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Tokens" SortMemberPath="Tokens" Width="90" MinWidth="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding TokensText}" Style="{StaticResource Primary}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="{l:Tr 成本}" SortMemberPath="Cost" Width="80" MinWidth="80">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding CostText}" Style="{StaticResource Secondary}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Visibility="{Binding HasSessions, Converter={StaticResource HiddenWhen}}">
+                <ui:SymbolIcon Symbol="TextBulletListLtr24" FontSize="36" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                <TextBlock Text="{Binding EmptySessionsTitle}" Style="{StaticResource Title}" HorizontalAlignment="Center" Margin="0,8,0,4" />
+                <TextBlock Text="{Binding EmptySessionsHint}" Style="{StaticResource Secondary}" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- 详情抽屉：浮在表格右侧，不挤压列宽（对齐 macOS 的独立浮动面板） -->
+            <Grid Width="340" HorizontalAlignment="Right" Margin="0,4,8,8"
+                  Visibility="{Binding SelectedSession, Converter={StaticResource VisibleWhen}}">
+            <!-- 阴影单独一层：Effect 会把子元素文字栅格化变糊 -->
+            <Border CornerRadius="8" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.18" />
+                </Border.Effect>
+            </Border>
+            <Border CornerRadius="8" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14" DataContext="{Binding SelectedSession}">
+                        <DockPanel>
+                            <ui:Button DockPanel.Dock="Right" Appearance="Transparent" Icon="{ui:SymbolIcon Dismiss24}" Padding="6"
+                                       Click="OnCloseDetail" ToolTip="{l:Tr 关闭}" VerticalAlignment="Top" />
+                            <TextBlock Text="{Binding Title}" Style="{StaticResource Title}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="66" ToolTip="{Binding Title}" />
+                        </DockPanel>
+                        <Border Style="{StaticResource SubtleCard}" Margin="0,10,0,0">
+                            <StackPanel>
+                                <TextBlock Text="{l:Tr 会话信息}" Style="{StaticResource Secondary}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="{l:Tr 工具}" Style="{StaticResource Tertiary}" Margin="0,2" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,2">
+                                        <Ellipse Width="7" Height="7" Fill="{Binding ToolBrush}" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding ToolName}" Style="{StaticResource Secondary}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="1" Text="{l:Tr 时间}" Style="{StaticResource Tertiary}" Margin="0,2" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding WhenText}" Style="{StaticResource Secondary}" Margin="0,2" />
+                                    <TextBlock Grid.Row="2" Text="{l:Tr 会话 ID}" Style="{StaticResource Tertiary}" Margin="0,2" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SessionId}" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis" ToolTip="{Binding SessionId}" Margin="0,2" />
+                                    <TextBlock Grid.Row="3" Text="{l:Tr 模型}" Style="{StaticResource Tertiary}" Margin="0,2" />
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Model}" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis" Margin="0,2" />
+                                    <TextBlock Grid.Row="4" Text="{l:Tr 项目}" Style="{StaticResource Tertiary}" Margin="0,2" />
+                                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Project}" Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,2" />
+                                </Grid>
+                                <ui:Button Content="{l:Tr 在资源管理器中打开}" Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Transparent"
+                                           Click="OnOpenProject" Margin="0,6,0,0" Padding="6,3" />
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel DataContext="{Binding DataContext.SessionDetail, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <ui:ProgressRing IsIndeterminate="True" Width="24" Height="24" Margin="0,16"
+                                             Visibility="{Binding Converter={StaticResource HiddenWhen}}" />
+                            <Border Style="{StaticResource SubtleCard}" Margin="0,10,0,0"
+                                    Visibility="{Binding HasActivity, Converter={StaticResource VisibleWhen}, FallbackValue=Collapsed}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:Tr 工具与 Skill 摘要}" Style="{StaticResource Secondary}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <ItemsControl ItemsSource="{Binding Activity}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <DockPanel Margin="0,2">
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Evidence}" Foreground="{Binding EvidenceBrush}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Calls}" Style="{StaticResource Secondary}" />
+                                                    <TextBlock Text="{Binding Name}" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis" />
+                                                </DockPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource SubtleCard}" Margin="0,10,0,0"
+                                    Visibility="{Binding Converter={StaticResource VisibleWhen}}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:Tr 按模型分解}" Style="{StaticResource Secondary}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <ItemsControl ItemsSource="{Binding Models}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="0,3">
+                                                    <DockPanel>
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Tokens}" Style="{StaticResource Primary}" />
+                                                        <TextBlock Text="{Binding Model}" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding Breakdown}" Style="{StaticResource Tertiary}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource SubtleCard}" Margin="0,10,0,0"
+                                    Visibility="{Binding HasIntervals, Converter={StaticResource VisibleWhen}, FallbackValue=Collapsed}">
+                                <StackPanel>
+                                    <TextBlock Text="{l:Tr 观察区间（按观测时间估算）}" Style="{StaticResource Secondary}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <ItemsControl ItemsSource="{Binding Intervals}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding}" Style="{StaticResource Tertiary}" Margin="0,1" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</UserControl>

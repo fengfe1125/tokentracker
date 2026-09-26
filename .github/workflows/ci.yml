@@ -38,6 +38,33 @@ jobs:
           python3 scripts/check_icon.py
           git diff --exit-code -- assets
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: windows/global.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 安装差分语料依赖
+        shell: pwsh
+        run: if (-not (Get-Command zstd -ErrorAction SilentlyContinue)) { choco install zstandard -y --no-progress }
+      - name: 构建
+        run: dotnet build windows/TokenTracker.Windows.sln -c Release
+      - name: Core 测试（含 Python 差分基线）
+        env:
+          PYTHONUTF8: "1"
+        run: dotnet test windows/TokenTracker.Windows.sln -c Release --no-build
+      - name: 发布 zip
+        shell: pwsh
+        run: ./windows/scripts/publish.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TokenTracker-win-x64
+          path: dist/TokenTracker-*-win-x64.zip
+
   web:
     runs-on: ubuntu-latest
     steps:
