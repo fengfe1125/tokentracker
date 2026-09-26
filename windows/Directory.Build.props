@@ -1,0 +1,24 @@
+<Project>
+  <!-- 版本号与 macOS 共用：从 Swift 核心的版本常量解析，不在两处维护。 -->
+  <PropertyGroup>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))\</RepoRoot>
+    <TtVersionFile>$(RepoRoot)swift\Sources\TokenTrackerCore\TokenTrackerCore.swift</TtVersionFile>
+    <TtVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(TtVersionFile)')), '(?&lt;=public static let version = ")[^"]+').Value)</TtVersion>
+    <Version>$(TtVersion)</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Product>TokenTracker</Product>
+    <Company>TokenTracker</Company>
+    <Copyright>TokenTracker</Copyright>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <Target Name="TtCheckVersion" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(TtVersion)' == ''" Text="无法从 $(TtVersionFile) 解析版本号" />
+  </Target>
+</Project>
