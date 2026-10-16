@@ -6,7 +6,7 @@ import UserNotifications
 import TokenTrackerCore
 
 @MainActor
-final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
+final class InsightsModel: NSObject, ObservableObject {
     var codexAccountID = "unknown"
     let path: String
     @Published var registry: [ProjectIdentity] = []
@@ -52,7 +52,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
         self.path=path
         super.init()
         notificationsEnabled=ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] != "1" && UserDefaults.standard.bool(forKey:"tt.notifications.enabled")
-        if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate=self }
+        NotificationRouter.shared.onRisk = { [weak self] route in self?.navigateNotification(route) }
     }
     func refresh(afterScan: Bool = false, more: Bool = false) {
         generation += 1
@@ -198,6 +198,7 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
                     content.title=L10n.text("TokenTracker 用量提醒")
                     content.body=risk.level == 1 ? L10n.text("按近期速度估算，配额可能在重置前耗尽。打开应用查看。") : L10n.text("一项预算或配额已达到 \(risk.level)% 。打开应用查看。")
                     content.userInfo=["route":route]
+                    content.sound = .default
                     let request=UNNotificationRequest(identifier:route+":"+risk.cycle+":"+String(risk.level),content:content,trigger:nil)
                     UNUserNotificationCenter.current().add(request) { error in
                         if error == nil {
@@ -209,19 +210,12 @@ final class InsightsModel: NSObject, ObservableObject, UNUserNotificationCenterD
             }
         }
     }
-    nonisolated func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping () -> Void) {
-        let route=response.notification.request.content.userInfo["route"] as? String ?? ""
-        Task { @MainActor in
+    private func navigateNotification(_ route: String) {
             let path=self.path
             self.queue.async { [weak self] in
                 let project=(try? UsageStore(path:path).conn.queryOne("SELECT value FROM insight_state WHERE key=?",["notification-target:"+route]))?.string("value")
                 DispatchQueue.main.async { self?.onNavigate?(project?.isEmpty == false ? project : nil) }
             }
-        }
-        completionHandler()
-    }
-    nonisolated func userNotificationCenter(_ center:UNUserNotificationCenter,willPresent notification:UNNotification,withCompletionHandler completionHandler:@escaping (UNNotificationPresentationOptions)->Void) {
-        completionHandler([.banner,.sound])
     }
     func showHealth(tool:String? = nil, rescan:@escaping ()->Void) {
         if healthWindow == nil {

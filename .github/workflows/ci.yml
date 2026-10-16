@@ -27,14 +27,30 @@ jobs:
       - name: Swift Core 与 App 测试
         run: swift test --package-path swift
       - name: 构建 SwiftUI App
-        run: ./scripts/build_swift_app.sh
-      - name: 校验产物
+        run: |
+          ./scripts/build_swift_app.sh --production
+          ./scripts/build_swift_app.sh --development
+      - name: 校验生产与开发产物
         run: |
           test -x dist/TokenTracker.app/Contents/MacOS/TokenTracker
+          test -x "build/TokenTracker Dev.app/Contents/MacOS/TokenTracker"
           codesign --verify --deep --strict dist/TokenTracker.app
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)" = "com.tokentracker.desktop.v2"
+          codesign --verify --deep --strict "build/TokenTracker Dev.app"
+          prod_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)"
+          dev_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'build/TokenTracker Dev.app/Contents/Info.plist)"
+          prod_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' dist/TokenTracker.app/Contents/Info.plist)"
+          dev_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' 'build/TokenTracker Dev.app/Contents/Info.plist)"
+          test "$prod_id" = "com.tokentracker.desktop.v2"
+          test "$dev_id" = "com.tokentracker.desktop.v2.dev"
+          test "$prod_name" = "TokenTracker"
+          test "$dev_name" = "TokenTracker Dev"
+          test "$prod_id" != "$dev_id"
+          test "$prod_name" != "$dev_name"
+          test "$(dirname "$(realpath dist/TokenTracker.app)")" != "$(dirname "$(realpath 'build/TokenTracker Dev.app')")"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' dist/TokenTracker.app/Contents/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' 'build/TokenTracker Dev.app/Contents/Info.plist')" = "true"
           cmp assets/icon.icns dist/TokenTracker.app/Contents/Resources/icon.icns
+          cmp assets/icon.icns "build/TokenTracker Dev.app/Contents/Resources/icon.icns"
           python3 scripts/check_icon.py
           git diff --exit-code -- assets
 

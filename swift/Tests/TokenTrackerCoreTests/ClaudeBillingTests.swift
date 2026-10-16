@@ -111,4 +111,56 @@ final class ClaudeBillingPortTests: XCTestCase {
         let result = ClaudeBilling(ctx: ctx).oauthUsage()
         XCTAssertEqual(result["error"] as? String, "no_credentials")
     }
+
+    func testCurrentLoginRejectsSavedBackupDesktopAndUnscopedCache() throws {
+        let backup = tmp.path(".tokentracker", "claude_cred_backup.json")
+        atomicWriteJSON(backup, ["claudeAiOauth": ["accessToken": "old-account", "refreshToken": "old-refresh"]])
+        atomicWriteJSON(tmp.path("Library", "Application Support", "Claude", "plan-usage-history.json"),
+                        ["samples": [["t": Date().timeIntervalSince1970 * 1000, "u": ["fh": 0]]]])
+        var calls = 0
+        var ctx = BillingContext(home: tmp.url.path, env: [:], http: { _, _, _, _ in
+            calls += 1
+            return (200, ["five_hour": ["utilization": 0]])
+        })
+        ctx.keychainRead = { ["claudeAiOauth": ["accessToken": "", "refreshToken": ""]] }
+        let cachePath = tmp.path("quota-cache.json")
+        atomicWriteJSON(cachePath, ["claude-oauth": [Date().timeIntervalSince1970,
+            ["windows": ["5h": ["pct": 0]], "_via": "oauth"]] as [Any]])
+        let service = OfficialQuotaService(ctx: ctx, cache: OfficialCache(diskPath: cachePath), currentLoginOnly: true)
+        let result = service.cached("claude-oauth")
+        XCTAssertEqual(result["error"] as? String, "no_credentials")
+        XCTAssertNil(result["windows"])
+        XCTAssertEqual(calls, 0, "Never query an inactive backup login for the HUD")
+    }
+
+    func testCurrentLoginPrefersKeychainAndDoesNotReuseAnotherLoginCache() throws {
+        let future = Date().timeIntervalSince1970 * 1000 + 3_600_000
+        atomicWriteJSON(tmp.path(".claude", ".credentials.json"), ["claudeAiOauth": [
+            "accessToken": "different-file-login", "expiresAt": future + 100_000]])
+        var activeToken: String? = "first-login"
+        var requested: [String] = []
+        var ctx = BillingContext(home: tmp.url.path, env: [:], http: { _, headers, _, _ in
+            let auth = headers["Authorization"] ?? ""
+            requested.append(auth)
+            return (200, ["five_hour": ["utilization": auth == "Bearer first-login" ? 12 : 34]])
+        })
+        ctx.keychainRead = {
+            activeToken.map { ["claudeAiOauth": ["accessToken": $0, "expiresAt": future]] }
+        }
+        let cachePath = tmp.path("quota-cache.json")
+        atomicWriteJSON(cachePath, [:])
+        let service = OfficialQuotaService(ctx: ctx, cache: OfficialCache(diskPath: cachePath), currentLoginOnly: true)
+        func pct() -> Double? {
+            let raw = service.cached("claude-oauth")
+            return OfficialQuotaService.toOfficialResult(raw).windows?["5h"]?.pct
+        }
+        XCTAssertEqual(pct(), 12)
+        activeToken = "second-login"
+        XCTAssertEqual(pct(), 34, "Changing the active credential bypasses the first login's cached quota")
+        XCTAssertEqual(requested, ["Bearer first-login", "Bearer second-login"])
+        activeToken = nil
+        // After sign-out, a genuinely present CLI credentials file is the next active source.
+        XCTAssertEqual(service.fetch("claude-oauth")["_via"] as? String, "oauth")
+        XCTAssertEqual(requested.last, "Bearer different-file-login")
+    }
 }

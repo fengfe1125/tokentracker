@@ -15,6 +15,7 @@ import TokenTrackerCore
 
 struct SettingsPanelView: View {
     @ObservedObject private var language = LanguageManager.shared
+    @ObservedObject private var notch = NotchHUDPreferences.shared
     @ObservedObject var state: AppState
     @StateObject private var updater = UpdaterModel()
     @State private var showCaptureSheet = false
@@ -64,6 +65,24 @@ struct SettingsPanelView: View {
                     .disabled(L10n.isEnglish)
                 Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
             }
+            Section(L10n.text("刘海圆环")) {
+                Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
+                Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
+                    ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
+                }
+                Text(L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(notchProviders, id: \.id) { entry in
+                    Toggle(entry.name, isOn: Binding(
+                        get: { notch.providers.contains(entry.id) },
+                        set: { notch.setProvider(entry.id, visible: $0) }
+                    ))
+                    .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
+                }
+            }
+            TaskReminderSettings()
             Section(L10n.text("通用")) {
                 Picker(L10n.text("语言 / Language"), selection: $language.selection) {
                     Text(L10n.text("跟随系统")).tag(AppLanguage.system)
@@ -178,6 +197,14 @@ struct SettingsPanelView: View {
         } message: {
             Text(L10n.text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。"))
         }
+    }
+
+    private var notchProviders: [MenuBarQuotaEntry] {
+        var entries = state.quotaEntries
+        for id in notch.providers where !entries.contains(where: { $0.id == id }) {
+            entries.append(MenuBarQuotaEntry(id: id, name: id == "codex" ? "Codex" : id == "claude" ? "Claude" : id, windows: []))
+        }
+        return entries
     }
 
     private var priceSyncStatusText: String {

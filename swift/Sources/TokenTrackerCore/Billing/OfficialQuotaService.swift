@@ -13,16 +13,19 @@ import CryptoKit
 public final class OfficialQuotaService: @unchecked Sendable {
     public let ctx: BillingContext
     public let cache: OfficialCache
+    public let currentLoginOnly: Bool
 
-    public init(ctx: BillingContext = BillingContext(), cache: OfficialCache = OfficialCache()) {
+    public init(ctx: BillingContext = BillingContext(), cache: OfficialCache = OfficialCache(),
+                currentLoginOnly: Bool = false) {
         self.ctx = ctx
         self.cache = cache
+        self.currentLoginOnly = currentLoginOnly
     }
 
     /// 原始抓取（无缓存）。name ∈ claude-oauth / kimi / codex / go。
     public func fetch(_ name: String) -> [String: Any] {
         switch name {
-        case "claude-oauth": return ClaudeBilling(ctx: ctx).oauthUsage()
+        case "claude-oauth": return ClaudeBilling(ctx: ctx).oauthUsage(currentLoginOnly: currentLoginOnly)
         case "kimi": return KimiBilling(ctx: ctx).usage()
         case "codex": return CodexBilling(ctx: ctx).usage()
         case "go": return GoBilling(ctx: ctx).usage()
@@ -34,6 +37,14 @@ public final class OfficialQuotaService: @unchecked Sendable {
     public func cached(_ name: String, force: Bool = false) -> [String: Any] {
         let kimi = name == "kimi" ? KimiBilling(ctx: ctx) : nil
         var cacheKey = name
+        if name == "claude-oauth", currentLoginOnly {
+            let credential = ClaudeBilling(ctx: ctx).credentials(currentLoginOnly: true).first
+            let identity = credential.map {
+                $0.source + ":" + (($0.oauth["refreshToken"] as? String) ?? ($0.oauth["accessToken"] as? String) ?? "")
+            } ?? "signed-out"
+            cacheKey += ":current:" + SHA256.hash(data: Data(identity.utf8))
+                .map { String(format: "%02x", $0) }.joined()
+        }
         if name == "codex" {
             let authPath = expandPath(ctx.env["CODEX_HOME"] ?? (ctx.home + "/.codex")) + "/auth.json"
             let object = FileManager.default.contents(atPath:authPath).flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] }

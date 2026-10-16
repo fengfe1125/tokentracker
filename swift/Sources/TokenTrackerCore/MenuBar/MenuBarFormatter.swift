@@ -64,11 +64,18 @@ public struct MenuBarQuotaEntry: Equatable, Sendable {
     public var id: String
     public var name: String
     public var windows: [MenuBarQuotaWindow]
+    public var sampledAt: Double?
+    public var via: String?
+    public var note: String
 
-    public init(id: String, name: String, windows: [MenuBarQuotaWindow]) {
+    public init(id: String, name: String, windows: [MenuBarQuotaWindow],
+                sampledAt: Double? = nil, via: String? = nil, note: String = "") {
         self.id = id
         self.name = name
         self.windows = windows
+        self.sampledAt = sampledAt
+        self.via = via
+        self.note = note
     }
 }
 
@@ -90,7 +97,7 @@ extension MenuBarQuotaEntry {
                   windows: result.windows.map {
                     MenuBarQuotaWindow(pct: $0.pct, source: $0.source,
                                        stale: $0.stale, label: $0.label)
-                  })
+                  }, via: result.via, note: result.note)
     }
 }
 

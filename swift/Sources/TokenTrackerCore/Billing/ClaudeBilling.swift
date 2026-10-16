@@ -49,7 +49,7 @@ public struct ClaudeBilling {
 
     /// 全部凭据来源 → [(oauth, writeBack?, source)]。跳过被清空的空壳条目
     /// （accessToken/refreshToken 皆空），按 expiresAt 从新到旧排序。
-    func credentials() -> [(oauth: [String: Any], save: (([String: Any]) -> Void)?, source: String)] {
+    func credentials(currentLoginOnly: Bool = false) -> [(oauth: [String: Any], save: (([String: Any]) -> Void)?, source: String)] {
         var cands: [([String: Any], (([String: Any]) -> Void)?, String)] = []
         if let kc = ctx.keychainRead(),
            let oauth = kc["claudeAiOauth"] as? [String: Any] {
@@ -59,7 +59,8 @@ public struct ClaudeBilling {
                 _ = ctx.keychainWrite(updated)
             }, "keychain"))
         }
-        let credPath = ctx.home + "/.claude/.credentials.json"
+        let configDir = ctx.env["CLAUDE_CONFIG_DIR"].map(expandPath) ?? (ctx.home + "/.claude")
+        let credPath = configDir + "/.credentials.json"
         if let data = FileManager.default.contents(atPath: credPath),
            let cred = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let oauth = cred["claudeAiOauth"] as? [String: Any] {
@@ -69,11 +70,19 @@ public struct ClaudeBilling {
                 atomicWriteJSON(credPath, updated)
             }, "file"))
         }
-        if let snap = snapLoad() {
+        if !currentLoginOnly, let snap = snapLoad() {
             cands.append((snap, { [self] in snapSave($0) }, "snapshot"))
         }
         // 跳过空壳（官方 bug 清空的条目）
-        cands = cands.filter { $0.0["accessToken"] != nil || $0.0["refreshToken"] != nil }
+        cands = cands.filter {
+            !(($0.0["accessToken"] as? String) ?? "").isEmpty
+                || !(($0.0["refreshToken"] as? String) ?? "").isEmpty
+        }
+        if currentLoginOnly {
+            // Match the active CLI source order, never choose another login just
+            // because its saved access token expires later.
+            return Array(cands.prefix(1))
+        }
         cands.sort { ($0.0["expiresAt"] as? NSNumber)?.doubleValue ?? 0
             > ($1.0["expiresAt"] as? NSNumber)?.doubleValue ?? 0 }
         return cands
@@ -255,12 +264,12 @@ public struct ClaudeBilling {
 
     // ------------------------------------------------------------ 入口 ----
 
-    public func oauthUsage() -> [String: Any] {
+    public func oauthUsage(currentLoginOnly: Bool = false) -> [String: Any] {
         // 1) 桌面采样（桌面 App 登录态独立于 CLI，最抗造）
-        let desk = desktopUsage()
+        let desk = currentLoginOnly ? nil : desktopUsage()
 
         // 2) OAuth API（能拿到 resets_at 和更细的窗口，成功则用更丰富的那份）
-        let cands = credentials()
+        let cands = credentials(currentLoginOnly: currentLoginOnly)
         var oauthErr: [String: Any]?
         for (oauth, save, _) in cands {
             let result = trySource(oauth, save: save)

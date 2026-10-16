@@ -124,7 +124,7 @@ final class AppState: ObservableObject {
     func showActivityDetail() { onActivityDetail?() }
     func showPublishHistory() { onPublishHistory?() }
 
-    init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService()) {
+    init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService(currentLoginOnly: true)) {
         let env = ProcessInfo.processInfo.environment
         let path = dbPath ?? env["TOKENTRACKER_DB"]
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
@@ -133,7 +133,10 @@ final class AppState: ObservableObject {
         priceCatalogPath = env["TOKENTRACKER_PRICES"] ?? PriceCatalogStore.sharedPath
         let preview = env["TT_UI_PREVIEW"] == "1"
         let previewHome = (path as NSString).deletingLastPathComponent
-        let settingsStore = SettingsStore(path: preview ? previewHome + "/settings.json" : nil)
+        // A development run can isolate preferences (e.g. disable publishing)
+        // while still using the real usage database and normal official login.
+        let settingsStore = SettingsStore(path: env["TOKENTRACKER_SETTINGS"]
+            ?? (preview ? previewHome + "/settings.json" : nil))
         let tokenStore = KeychainPublishTokenStore()
         let historyStore = PublishHistoryStore(path: preview ? previewHome + "/publish_history.json" : NSHomeDirectory() + "/.tokentracker/publish_history.json")
         self.settingsStore = settingsStore
@@ -535,26 +538,16 @@ final class AppState: ObservableObject {
                     }
                 }
                 let officialResults = resultsBox.dict
-                for (provider,result) in officialResults where result.error == nil && result.staleMin == nil {
-                    guard let sampled = result.sampledAt else { continue }
-                    for (window,value) in result.windows ?? [:] {
-                        if let pct=value.pct {
-                            let reset=value.resetsAt.flatMap { ISO8601DateFormatter().date(from:$0) }.map { Int64($0.timeIntervalSince1970*1000) } ?? 0
-                            let identity=provider+":"+(provider == "codex" ? accountID : "current")+":"+window
-                            try store.recordQuota(QuotaSample(identity:identity,at:Int64(sampled*1000),pct:pct,resetsAt:reset))
+                try QuotaRefresh.load(store: store, config: quotasConfig, results: officialResults,
+                                      accountID: accountID) { entries in
+                    DispatchQueue.main.async {
+                        guard accountID == (self.activeCodexAccountID ?? "unknown") else {
+                            self.quotaBusy=false;self.refreshQuotas();return
                         }
+                        self.quotaEntries = entries
+                        self.quotaBusy = false
+                        self.insights.refresh()
                     }
-                }
-                let quotas = try QuotaEstimator.compute(
-                    store: store, config: quotasConfig,
-                    nowMs: store.nowMs()) { officialResults[$0] }
-                DispatchQueue.main.async {
-                    guard accountID == (self.activeCodexAccountID ?? "unknown") else {
-                        self.quotaBusy=false;self.refreshQuotas();return
-                    }
-                    self.quotaEntries = quotas.map(MenuBarQuotaEntry.init(result:))
-                    self.quotaBusy = false
-                    self.insights.refresh()
                 }
             } catch {
                 DispatchQueue.main.async { self.quotaBusy = false }
@@ -767,7 +760,7 @@ final class AppState: ObservableObject {
                     self?.codexAccounts = accounts
                     self?.activeCodexAccountID = active
                     self?.accountNotice = L10n.message("已切换，请重启 Codex 生效")
-                    self?.officialQuotaService = OfficialQuotaService()
+                    self?.officialQuotaService = OfficialQuotaService(currentLoginOnly: true)
                     self?.insights.mutate { store in
                         _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
                         try store.conn.commit()
@@ -783,7 +776,7 @@ final class AppState: ObservableObject {
                     self?.accountNotice = message
                     if switched {
                         self?.activeCodexAccountID = active
-                        self?.officialQuotaService = OfficialQuotaService()
+                        self?.officialQuotaService = OfficialQuotaService(currentLoginOnly: true)
                         self?.insights.mutate { store in
                             _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
                             try store.conn.commit()

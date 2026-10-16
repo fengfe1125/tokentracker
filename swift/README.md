@@ -30,10 +30,14 @@ Tests/
 swift build --package-path swift
 swift test --package-path swift
 ./scripts/build_swift_app.sh
-open dist/TokenTracker.app
+./scripts/run_swift_dev.sh
 ```
 
-打包结果使用 bundle ID `com.tokentracker.desktop.v2`，最低支持 macOS 14。
+默认打包结果 `dist/TokenTracker.app` 使用生产 bundle ID
+`com.tokentracker.desktop.v2`。本地运行入口会在独立目录构建并启动
+`build/TokenTracker Dev.app`，其 bundle ID 为
+`com.tokentracker.desktop.v2.dev`，避免开发副本改变生产菜单栏身份。
+两者最低支持 macOS 14。
 发布 DMG 使用 `./scripts/release_swift.sh`。
 
 ## 差分验证
