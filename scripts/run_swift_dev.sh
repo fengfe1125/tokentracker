@@ -5,4 +5,4 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 "$ROOT/scripts/build_swift_app.sh" --development
-open "$ROOT/dist/TokenTracker Dev.app"
+open "$ROOT/build/TokenTracker Dev.app"
