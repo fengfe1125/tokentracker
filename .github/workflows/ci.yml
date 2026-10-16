@@ -37,9 +37,9 @@ jobs:
           codesign --verify --deep --strict dist/TokenTracker.app
           codesign --verify --deep --strict "build/TokenTracker Dev.app"
           prod_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/TokenTracker.app/Contents/Info.plist)"
-          dev_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'build/TokenTracker Dev.app/Contents/Info.plist)"
+          dev_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'build/TokenTracker Dev.app/Contents/Info.plist')"
           prod_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' dist/TokenTracker.app/Contents/Info.plist)"
-          dev_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' 'build/TokenTracker Dev.app/Contents/Info.plist)"
+          dev_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' 'build/TokenTracker Dev.app/Contents/Info.plist')"
           test "$prod_id" = "com.tokentracker.desktop.v2"
           test "$dev_id" = "com.tokentracker.desktop.v2.dev"
           test "$prod_name" = "TokenTracker"
