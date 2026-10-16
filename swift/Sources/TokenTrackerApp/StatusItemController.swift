@@ -30,6 +30,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var riskItem: NSMenuItem?
     private var quotaItems: [NSMenuItem] = []
     private var displayItem: NSMenuItem?
+    private var notchItem: NSMenuItem?
     private static let maxQuotaLines = 4
 
     // 动画状态
@@ -48,6 +49,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     var onOpenMain: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    var onOpenTasks: (() -> Void)?
     var onQuit: (() -> Void)?
 
     init(appState: AppState) {
@@ -140,6 +142,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         display.submenu = NSMenu()
         menu.addItem(display)
         displayItem = display
+        let notch = NSMenuItem(title: "", action: #selector(toggleNotchHUD), keyEquivalent: "")
+        notch.target = self
+        menu.addItem(notch)
+        notchItem = notch
+        addAction(menu, title: L10n.text("任务提醒"), action: #selector(openTasks))
         menu.addItem(.separator())
         addAction(menu, title: L10n.text("打开主面板"), action: #selector(openMain))
         addAction(menu, title: L10n.text("设置…"), action: #selector(openSettings), key: ",")
@@ -163,6 +170,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         item.target = self
         menu.addItem(item)
     }
+    @objc private func openTasks() { onOpenTasks?() }
 
     // ------------------------------------------------------------ 标题渲染 ----
 
@@ -449,6 +457,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             switch item.action {
             case #selector(openMain): item.title = L10n.text("打开主面板")
             case #selector(openSettings): item.title = L10n.text("设置…")
+            case #selector(openTasks): item.title = L10n.text("任务提醒")
             case #selector(rescan): item.title = L10n.text("立即扫描")
             case #selector(quitApp): item.title = L10n.text("退出 TokenTracker")
             default: break
@@ -459,6 +468,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        notchItem?.title = L10n.text(NotchHUDPreferences.shared.enabled ? "隐藏刘海圆环" : "显示刘海圆环")
         let risks = appState.insights.risks.filter { $0.level > 0 }
         riskItem?.title = risks.isEmpty ? "" : L10n.text("⚠︎ \(risks.count) 项预算 / 配额风险，打开项目查看")
         riskItem?.isHidden = risks.isEmpty
@@ -537,6 +547,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quitApp(_: Any?) { onQuit?() }
+
+    @objc private func toggleNotchHUD(_: Any?) {
+        NotchHUDPreferences.shared.enabled.toggle()
+    }
 
     @objc private func pickProvider(_ sender: NSMenuItem) {
         guard let pid = sender.representedObject as? String, pid != provider else { return }

@@ -53,7 +53,8 @@ final class DifferentialScanTests: XCTestCase {
         try store.conn.query(
             "SELECT tool,src_key,session_id,project,ts,model,input,output,"
                 + "cache_read,cache_write,cost,time_quality,interval_start,cost_source,"
-                + "source_kind,source_scope FROM usage_events ORDER BY tool,src_key"
+                + "source_kind,source_scope,provider,price_version_id "
+                + "FROM usage_events ORDER BY tool,src_key"
         ).map { row in
             ExpectedEvent(
                 tool: row.string("tool"), srcKey: row.string("src_key"),
@@ -66,7 +67,9 @@ final class DifferentialScanTests: XCTestCase {
                 intervalStart: row.intOrNil("interval_start"),
                 costSource: row.string("cost_source"),
                 sourceKind: row.string("source_kind"),
-                sourceScope: row.string("source_scope"))
+                sourceScope: row.string("source_scope"),
+                provider: row.string("provider"),
+                priceVersionID: row.stringOrNil("price_version_id"))
         }
     }
 

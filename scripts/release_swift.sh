@@ -15,7 +15,8 @@ VERSION="$(sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' \
   "$ROOT/swift/Sources/TokenTrackerCore/TokenTrackerCore.swift")"
 [ -n "$VERSION" ] || { echo "!! 解析不到 TokenTrackerCore.version" >&2; exit 1; }
 
-"$ROOT/scripts/build_swift_app.sh"
+# 发布流程始终显式构建生产身份，不受本地开发入口影响。
+"$ROOT/scripts/build_swift_app.sh" --production
 
 APP="$ROOT/dist/TokenTracker.app"
 ENTITLEMENTS="$ROOT/swift/TokenTracker.entitlements"

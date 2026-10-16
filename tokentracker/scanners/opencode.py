@@ -22,17 +22,18 @@ def detect() -> bool:
     return os.path.isfile(db_path())
 
 
-def _model_id(raw) -> str:
+def _model_info(raw) -> tuple[str, str]:
     if not raw:
-        return ""
+        return "", ""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except ValueError:
-            return raw
+            return raw, ""
     if isinstance(raw, dict):
-        return raw.get("id") or raw.get("model") or raw.get("providerID") or ""
-    return str(raw)
+        return (raw.get("id") or raw.get("modelID") or raw.get("model") or "",
+                raw.get("providerID") or raw.get("provider") or "")
+    return str(raw), ""
 
 
 def scan(conn, prices, full: bool = False) -> dict:
@@ -45,10 +46,11 @@ def scan(conn, prices, full: bool = False) -> dict:
         rows = src.execute("SELECT * FROM session").fetchall()
         observed_at = int(db.time.time() * 1000)
         for r in rows:
+            model, provider = _model_info(r["model"])
             result = db.put_snapshot(
                 conn, NAME, os.path.realpath(path), str(r["id"]),
                 session_id=str(r["id"]), project=r["directory"] or r["title"] or "",
-                model=_model_id(r["model"]), input=r["tokens_input"], output=r["tokens_output"],
+                model=model, provider=provider, input=r["tokens_input"], output=r["tokens_output"],
                 cache_read=r["tokens_cache_read"], cache_write=r["tokens_cache_write"],
                 native_cost=r["cost"], prices=prices, legacy_key=str(r["id"]), observed_at=observed_at)
             directory = r["directory"] or ""

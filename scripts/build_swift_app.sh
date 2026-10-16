@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
-# SwiftUI 版打包 → dist/TokenTracker.app
-# 保持既有 bundle id（Tahoe 的状态栏授权、登录项都跟 bundle id 走）。
+# SwiftUI 版打包。默认生产包；--development 构建隔离的本地开发包。
+# 生产包保持既有 bundle id（Tahoe 的状态栏授权、登录项都跟 bundle id 走）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 PKG="$ROOT/swift"
-APP="$ROOT/dist/TokenTracker.app"
 ENTITLEMENTS="$PKG/TokenTracker.entitlements"
+
+case "${1:---production}" in
+  --production)
+    APP_NAME="TokenTracker"
+    BUNDLE_ID="com.tokentracker.desktop.v2"
+    APP="$ROOT/dist/TokenTracker.app"
+    ;;
+  --development)
+    APP_NAME="TokenTracker Dev"
+    BUNDLE_ID="com.tokentracker.desktop.v2.dev"
+    APP="$ROOT/build/TokenTracker Dev.app"
+    ;;
+  *)
+    echo "用法：$0 [--production|--development]" >&2
+    exit 2
+    ;;
+esac
 
 # 版本号单一来源：TokenTrackerCore.version（设置页「关于」和更新检查读的也是它）
 VERSION="$(sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' \
@@ -22,6 +38,8 @@ echo "==> 组装 $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/TokenTracker"
+cp "$PKG/.build/release/TokenTrackerHook" "$APP/Contents/MacOS/TokenTrackerHook"
+codesign --force --sign - "$APP/Contents/MacOS/TokenTrackerHook"
 # The App's localization loader resolves the SwiftPM bundle in Contents/Resources.
 cp -R "$PKG/.build/release/TokenTracker_TokenTrackerApp.bundle" "$APP/Contents/Resources/"
 for lang in en zh-Hans; do
@@ -38,9 +56,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
-  <key>CFBundleName</key><string>TokenTracker</string>
-  <key>CFBundleDisplayName</key><string>TokenTracker</string>
-  <key>CFBundleIdentifier</key><string>com.tokentracker.desktop.v2</string>
+  <key>CFBundleName</key><string>${APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
+  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -64,6 +82,19 @@ echo "==> 本地 ad-hoc 签名（带 automation entitlement）"
 # 签名失败必须报错：entitlement 丢了「在终端继续」会静默退化成剪贴板降级
 codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP"
 
+# LaunchServices 可能仅因产物出现在仓库内，就登记第二个生产 bundle 路径。
+# 保留构建产物，但注销这一精确路径，避免与 /Applications 安装包竞争菜单栏身份。
+if [ "$BUNDLE_ID" = "com.tokentracker.desktop.v2" ]; then
+  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+  fi
+fi
+
 echo ""
 echo "✅ 完成：$APP (v$VERSION)"
-echo "   运行：open dist/TokenTracker.app"
+if [ "$BUNDLE_ID" = "com.tokentracker.desktop.v2" ]; then
+  echo "   本地开发运行：./scripts/run_swift_dev.sh"
+else
+  echo "   运行：open \"build/TokenTracker Dev.app\""
+fi

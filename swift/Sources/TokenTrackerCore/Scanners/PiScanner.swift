@@ -103,15 +103,20 @@ public struct PiScanner: ScannerAdapter {
                     let key = "\(basename)|\(eventID)"
                     let costObj = usage["cost"] as? [String: Any] ?? [:]
                     // 官方 cost 优先；<=0 时价格表估算（未匹配保持 nil，不计费）
-                    var cost: Double? = (costObj["total"] as? NSNumber)?.doubleValue ?? 0
-                    if (cost ?? 0) <= 0 {
-                        cost = prices.cost(for: model, input: inp, output: outp,
-                                           cacheRead: cr, cacheWrite: cw)
-                    }
+                    let sourceCost = (costObj["total"] as? NSNumber)?.doubleValue ?? 0
+                    let sourceProvider = jsonOrString(msg["provider"], obj["provider"])
+                    let quote = prices.quote(
+                        provider: sourceProvider.isEmpty ? nil : sourceProvider,
+                        model: model, input: inp, output: outp, cacheRead: cr,
+                        cacheWrite: cw, eventAtMs: ts)
+                    let cost = sourceCost > 0 ? sourceCost : quote?.cost
                     outcome.added += try store.putEvent(
                         tool: name, srcKey: key, sessionID: sessionID, project: project,
                         ts: ts, model: model, input: inp, output: outp,
-                        cacheRead: cr, cacheWrite: cw, cost: cost)
+                        cacheRead: cr, cacheWrite: cw, cost: cost,
+                        costSource: sourceCost > 0 ? "native" : "estimate",
+                        provider: quote?.provider ?? sourceProvider,
+                        priceVersionID: sourceCost > 0 ? nil : quote?.priceVersionID)
                 }
                 cursor[path] = statKey.asDict
                 if let title {

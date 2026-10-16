@@ -23,19 +23,20 @@ public struct OpencodeScanner: ScannerAdapter {
     }
 
     /// model 字段可能是 JSON 字符串 / 对象 / 裸字符串。
-    private func modelID(_ raw: Any?) -> String {
-        guard let raw else { return "" }
+    private func modelInfo(_ raw: Any?) -> (model: String, provider: String) {
+        guard let raw else { return ("", "") }
         if let s = raw as? String {
             guard let data = s.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-            else { return s }
-            return modelID(obj)
+            else { return (s, "") }
+            return modelInfo(obj)
         }
         if let dict = raw as? [String: Any] {
-            return (dict["id"] as? String) ?? (dict["model"] as? String)
-                ?? (dict["providerID"] as? String) ?? ""
+            return ((dict["id"] as? String) ?? (dict["modelID"] as? String)
+                ?? (dict["model"] as? String) ?? "",
+                (dict["providerID"] as? String) ?? (dict["provider"] as? String) ?? "")
         }
-        return String(describing: raw)
+        return (String(describing: raw), "")
     }
 
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
@@ -46,6 +47,7 @@ public struct OpencodeScanner: ScannerAdapter {
         let scope = realPath(dbPath)
         for row in rows {
             let id = row.string("id")
+            let model = modelInfo(row["model"])
             let result = try store.putSnapshot(
                 tool: name, sourceScope: scope, identity: id,
                 sessionID: id, project: {
@@ -53,11 +55,11 @@ public struct OpencodeScanner: ScannerAdapter {
                     let title = row.string("title")
                     return !dir.isEmpty ? dir : title
                 }(),
-                model: modelID(row["model"]),
+                model: model.model,
                 input: row.int("tokens_input"), output: row.int("tokens_output"),
                 cacheRead: row.int("tokens_cache_read"), cacheWrite: row.int("tokens_cache_write"),
                 nativeCost: row.doubleOrNil("cost"), prices: prices,
-                legacyKey: id, observedAt: observedAt)
+                legacyKey: id, observedAt: observedAt, provider: model.provider)
             let directory=row.string("directory")
             if directory.hasPrefix("/") {
                 for event in try store.conn.query("SELECT src_key FROM usage_events WHERE tool=? AND session_id=?",[name,id]) {

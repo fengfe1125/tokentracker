@@ -15,6 +15,7 @@ import TokenTrackerCore
 
 struct SettingsPanelView: View {
     @ObservedObject private var language = LanguageManager.shared
+    @ObservedObject private var notch = NotchHUDPreferences.shared
     @ObservedObject var state: AppState
     @StateObject private var updater = UpdaterModel()
     @State private var showCaptureSheet = false
@@ -64,6 +65,24 @@ struct SettingsPanelView: View {
                     .disabled(L10n.isEnglish)
                 Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
             }
+            Section(L10n.text("刘海圆环")) {
+                Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
+                Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
+                    ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
+                }
+                Text(L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(notchProviders, id: \.id) { entry in
+                    Toggle(entry.name, isOn: Binding(
+                        get: { notch.providers.contains(entry.id) },
+                        set: { notch.setProvider(entry.id, visible: $0) }
+                    ))
+                    .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
+                }
+            }
+            TaskReminderSettings()
             Section(L10n.text("通用")) {
                 Picker(L10n.text("语言 / Language"), selection: $language.selection) {
                     Text(L10n.text("跟随系统")).tag(AppLanguage.system)
@@ -102,6 +121,37 @@ struct SettingsPanelView: View {
                 Text(L10n.text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Section(L10n.text("价格估算")) {
+                Toggle(L10n.text("自动同步官方价格"), isOn: binding("price_sync_enabled"))
+                Text(L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(priceSyncStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(L10n.text("立即同步")) { state.syncPricesNow() }
+                        .disabled(state.priceSyncRunning)
+                    if state.priceSyncRunning { ProgressView().controlSize(.small) }
+                }
+                if state.priceSyncLastSuccessAtMs > 0 {
+                    let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
+                    Text(L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.text("上次成功同步：从未"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !state.priceSyncMessage.isEmpty {
+                    Text(state.priceSyncMessage)
+                        .font(.caption)
+                        .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
+                        .lineLimit(3)
+                }
             }
             publishSection
             Section(L10n.text("关于")) {
@@ -146,6 +196,24 @@ struct SettingsPanelView: View {
             Button(L10n.text("取消"), role: .cancel) {}
         } message: {
             Text(L10n.text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。"))
+        }
+    }
+
+    private var notchProviders: [MenuBarQuotaEntry] {
+        var entries = state.quotaEntries
+        for id in notch.providers where !entries.contains(where: { $0.id == id }) {
+            entries.append(MenuBarQuotaEntry(id: id, name: id == "codex" ? "Codex" : id == "claude" ? "Claude" : id, windows: []))
+        }
+        return entries
+    }
+
+    private var priceSyncStatusText: String {
+        if state.priceSyncRunning { return L10n.text("正在同步价格…") }
+        switch state.priceSyncState {
+        case "success": return L10n.text("价格同步成功")
+        case "partial": return L10n.text("部分价格来源同步失败")
+        case "failed": return L10n.text("价格同步失败，继续使用上次有效价格")
+        default: return L10n.text("尚未同步价格")
         }
     }
 

@@ -13,6 +13,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var statusItem: StatusItemController?
+    private var notchHUD: NotchHUDController?
+    private var taskWindows: TaskReminderWindowController?
     private var mainWindow: MainWindowController?
     private var detailWindow: SessionDetailWindowController?
     private var activityDetailWindow: ActivityDetailWindowController?
@@ -43,6 +45,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar.onQuit = { NSApp.terminate(nil) }
         bar.install()
         statusItem = bar
+        let hud = NotchHUDController(state: appState)
+        hud.onOpenMain = { [weak self] in self?.showMainPanel() }
+        hud.start()
+        notchHUD = hud
+        NotificationRouter.shared.start()
+        let tasks = TaskReminderModel.shared
+        let taskWindows = TaskReminderWindowController(model: tasks, hud: hud)
+        taskWindows.start()
+        self.taskWindows = taskWindows
+        bar.onOpenTasks = { [weak taskWindows] in taskWindows?.showList() }
+        tasks.start()
         dbg("statusItem installed")
 
         mainWindow = MainWindowController(appState: appState)
@@ -78,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.wasScanning = self.appState.scanning
                 self.statusItem?.tickMain()
+                TaskReminderModel.shared.maintainHistory()
             }
         }
 
@@ -106,17 +120,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installFileMenu()
         localizeStandardMenus()   // ⌘W 关闭主面板（只隐藏）
-        if showOnLaunch {
+        let hudPreview = ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1"
+            && ProcessInfo.processInfo.environment["TT_UI_TEST_HUD_ONLY"] == "1"
+        if showOnLaunch && !hudPreview {
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1",
+           ProcessInfo.processInfo.environment["TT_UI_TEST_HUD_ONLY"] == "1" { return false }
         showMainPanel()
         return false
     }
 
     func applicationWillTerminate(_: Notification) {
+        taskWindows?.close()
+        TaskReminderModel.shared.stop()
+        notchHUD?.stop()
         appState.scheduler.stop()
     }
 

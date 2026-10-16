@@ -24,6 +24,8 @@ let package = Package(
             dependencies: ["TokenTrackerCore"],
             path: "Sources/tt-swift"
         ),
+        .executableTarget(name: "TokenTrackerHook", dependencies: ["TokenTrackerCore"],
+                          path: "Sources/TokenTrackerHook"),
         .testTarget(
             name: "TokenTrackerCoreTests",
             dependencies: ["TokenTrackerCore"],

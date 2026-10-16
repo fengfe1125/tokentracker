@@ -2,14 +2,13 @@
 //  PriceTable.swift
 //  TokenTrackerCore
 //
-//  价格表移植自 tokentracker/pricing.py：
-//  prices.json，单位 美元 / 百万 token；模型名先精确、再最长子串（不区分
-//  大小写），最后回退 default；未匹配返回 nil（只统计 token、不计费）。
+//  Event-time price lookup over the shared local price catalog. Model names
+//  match only by provider plus an exact model ID or an explicit alias.
 //
 
 import Foundation
 
-/// 单档费率（字段缺失按 0 计，与 Python `rate.get(..., 0)` 一致）。
+/// API rate in USD per million tokens. The four counters are disjoint.
 public struct PriceRate: Codable, Equatable, Sendable {
     public var input: Double
     public var output: Double
@@ -39,77 +38,159 @@ public struct PriceRate: Codable, Equatable, Sendable {
     }
 }
 
+public struct PriceVersion: Codable, Equatable, Sendable {
+    public var id: String
+    public var provider: String
+    public var model: String
+    public var aliases: [String]
+    public var effectiveAtMs: Int64
+    public var fetchedAtMs: Int64
+    public var sourceURL: String
+    public var rates: PriceRate
+    /// Conditions and assumptions that the token logs cannot fully identify.
+    public var conditions: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id, provider, model, aliases, rates, conditions
+        case effectiveAtMs = "effective_at_ms"
+        case fetchedAtMs = "fetched_at_ms"
+        case sourceURL = "source_url"
+    }
+
+    public init(id: String, provider: String, model: String, aliases: [String] = [],
+                effectiveAtMs: Int64, fetchedAtMs: Int64, sourceURL: String,
+                rates: PriceRate, conditions: [String] = []) {
+        self.id = id
+        self.provider = PriceTable.normalizeProvider(provider)
+        self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.aliases = aliases
+        self.effectiveAtMs = effectiveAtMs
+        self.fetchedAtMs = fetchedAtMs
+        self.sourceURL = sourceURL
+        self.rates = rates
+        self.conditions = conditions
+    }
+}
+
+public struct PriceQuote: Equatable, Sendable {
+    public let cost: Double
+    public let provider: String
+    public let priceVersionID: String
+    public let conditions: [String]
+
+    public var isConditionalEstimate: Bool { !conditions.isEmpty }
+}
+
 public struct PriceTable: Sendable {
-    /// 顶层 "default" 回退档（平铺格式下为 nil，与 Python 一致）。
-    public var fallback: PriceRate?
-    public var models: [String: PriceRate]
+    public var versions: [PriceVersion]
 
-    public init(fallback: PriceRate?, models: [String: PriceRate]) {
-        self.fallback = fallback
-        self.models = models
+    public init(versions: [PriceVersion] = []) {
+        self.versions = versions
     }
 
-    /// 与 Python `DEFAULT_PRICES` 保持一致的兜底表（文件缺失/损坏时使用）。
-    public static let `default` = PriceTable(
-        fallback: PriceRate(input: 2.0, output: 10.0, cacheRead: 0.4, cacheWrite: 2.0),
-        models: [
-            "claude-opus-4-5": PriceRate(input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 1.25),
-            "claude-sonnet-4-5": PriceRate(input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 0.75),
-            "claude-haiku": PriceRate(input: 1.0, output: 5.0, cacheRead: 0.1, cacheWrite: 0.25),
-            "gpt-5": PriceRate(input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25),
-            "gpt-5.6-luna": PriceRate(input: 2.0, output: 12.0, cacheRead: 0.2, cacheWrite: 2.0),
-            "deepseek-v4-flash": PriceRate(input: 0.22, output: 0.66, cacheRead: 0.007, cacheWrite: 0.22),
-            "deepseek-v4-pro": PriceRate(input: 0.66, output: 1.98, cacheRead: 0.022, cacheWrite: 0.66),
-            "kimi-k2": PriceRate(input: 0.6, output: 2.5, cacheRead: 0.1, cacheWrite: 0.6),
-            "kimi-k3": PriceRate(input: 0.6, output: 2.5, cacheRead: 0.1, cacheWrite: 0.6),
-            "grok-4.6": PriceRate(input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.0),
-        ])
+    /// No guessed default rate: missing or corrupt catalogs leave events unpriced.
+    public static let `default` = PriceTable()
 
-    /// 解析 prices.json。含 "models" 键 → {models: 它, fallback: 顶层 default}；
-    /// 否则整表视为 models、无 fallback（对齐 Python `load_prices`）。
+    /// Loads the shared catalog. Legacy files are read only for explicit model
+    /// keys; a legacy `default` key is deliberately ignored.
     public static func load(from path: String) -> PriceTable {
-        guard let data = FileManager.default.contents(atPath: path),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dict = object as? [String: Any]
-        else { return .default }
-
-        func rate(_ value: Any) -> PriceRate? {
-            guard let d = value as? [String: Any] else { return nil }
-            func num(_ key: String) -> Double { (d[key] as? NSNumber)?.doubleValue ?? 0 }
-            return PriceRate(input: num("input"), output: num("output"),
-                             cacheRead: num("cache_read"), cacheWrite: num("cache_write"))
+        guard let data = FileManager.default.contents(atPath: path) else { return .default }
+        if let document = try? JSONDecoder().decode(PriceCatalogDocument.self, from: data),
+           document.schemaVersion == PriceCatalogDocument.currentSchemaVersion {
+            return PriceTable(versions: document.versions)
         }
-
-        if let nested = dict["models"] as? [String: Any] {
-            return PriceTable(fallback: rate(dict["default"] as Any),
-                              models: nested.compactMapValues(rate))
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dict = object as? [String: Any] else { return .default }
+        let models = (dict["models"] as? [String: Any]) ?? dict
+        let effectiveModels = models.filter { $0.key != "default" }
+        let versions = effectiveModels.compactMap { model, raw -> PriceVersion? in
+            guard let values = raw as? [String: Any],
+                  let provider = legacyProvider(for: model) else { return nil }
+            func number(_ key: String) -> Double {
+                (values[key] as? NSNumber)?.doubleValue ?? 0
+            }
+            return PriceVersion(id: "legacy:\(provider):\(model)", provider: provider,
+                model: model, aliases: [], effectiveAtMs: 0, fetchedAtMs: 0,
+                sourceURL: "legacy local price file",
+                rates: PriceRate(input: number("input"), output: number("output"),
+                                 cacheRead: number("cache_read"), cacheWrite: number("cache_write")),
+                conditions: ["Legacy local rate; source and effective date are unknown."])
         }
-        return PriceTable(fallback: nil, models: dict.compactMapValues(rate))
+        return PriceTable(versions: versions)
     }
 
-    /// 返回成本（美元）；模型为空或无任何费率可匹配时返回 nil。
+    public static func normalizeProvider(_ value: String) -> String {
+        let key = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch key {
+        case "claude", "anthropic": return "anthropic"
+        case "openai", "open_ai", "codex": return "openai"
+        case "deepseek", "dsh": return "deepseek"
+        case "kimi", "moonshot", "moonshotai": return "moonshot"
+        case "xai", "x-ai", "grok": return "xai"
+        case "google", "gemini", "google_ai": return "google"
+        case "minimax", "mini-max": return "minimax"
+        default: return key
+        }
+    }
+
+    private static func legacyProvider(for model: String) -> String? {
+        let value = model.lowercased()
+        if value.hasPrefix("claude-") { return "anthropic" }
+        if value.hasPrefix("gpt-") || value.hasPrefix("o1") || value.hasPrefix("o3")
+            || value.hasPrefix("o4") || value.hasPrefix("codex-") { return "openai" }
+        if value.hasPrefix("deepseek-") { return "deepseek" }
+        if value.hasPrefix("kimi-") { return "moonshot" }
+        if value.hasPrefix("grok-") { return "xai" }
+        if value.hasPrefix("gemini-") { return "google" }
+        if value.hasPrefix("minimax-") { return "minimax" }
+        return nil
+    }
+
+    /// Looks up an exact event-time version. When the source did not record its
+    /// provider, a unique exact model match is safe; ambiguous names are unpriced.
+    public func quote(provider rawProvider: String? = nil, model: String,
+                      input: Int64, output: Int64, cacheRead: Int64 = 0,
+                      cacheWrite: Int64 = 0, eventAtMs: Int64 = 0,
+                      intervalStartMs: Int64? = nil) -> PriceQuote? {
+        let modelKey = Self.normalizeModel(model)
+        guard !modelKey.isEmpty else { return nil }
+        let normalizedProvider = rawProvider.map { Self.normalizeProvider($0) } ?? ""
+        let provider = normalizedProvider.isEmpty ? nil : normalizedProvider
+        let matchingModels = versions.filter { version in
+            let names = [version.model] + version.aliases
+            return names.contains { Self.normalizeModel($0) == modelKey }
+                && (provider == nil || Self.normalizeProvider(version.provider) == provider)
+        }
+        guard !matchingModels.isEmpty else { return nil }
+        let providers = Set(matchingModels.map { Self.normalizeProvider($0.provider) })
+        guard provider != nil || providers.count == 1 else { return nil }
+        let at = eventAtMs > 0 ? eventAtMs : Int64.max
+        let candidates = matchingModels.filter { $0.effectiveAtMs <= at }
+        guard let selected = candidates.max(by: { $0.effectiveAtMs < $1.effectiveAtMs }) else { return nil }
+        if let start = intervalStartMs, start > 0, start < at,
+           matchingModels.contains(where: { start < $0.effectiveAtMs && $0.effectiveAtMs <= at }) {
+            return nil
+        }
+        let inputCost = Double(input) * selected.rates.input
+        let outputCost = Double(output) * selected.rates.output
+        let cacheReadCost = Double(cacheRead) * selected.rates.cacheRead
+        let cacheWriteCost = Double(cacheWrite) * selected.rates.cacheWrite
+        let rawCost = (inputCost + outputCost + cacheReadCost + cacheWriteCost) / 1_000_000
+        // Match Python's round(..., 8), which uses half-even rounding.
+        let cost = (rawCost * 1e8).rounded(.toNearestOrEven) / 1e8
+        return PriceQuote(cost: cost, provider: Self.normalizeProvider(selected.provider),
+                          priceVersionID: selected.id, conditions: selected.conditions)
+    }
+
+    /// Convenience for non-event UI calculations. Callers that persist an event
+    /// should use `quote` so the provider and price version are saved with it.
     public func cost(for model: String, input: Int64, output: Int64,
                      cacheRead: Int64 = 0, cacheWrite: Int64 = 0) -> Double? {
-        guard !model.isEmpty else { return nil }
-        let m = model.lowercased()
-        var rate = models[m]
-        if rate == nil {
-            // 子串匹配取最长命中键，避免 "gpt-5" 抢先命中 "gpt-5.6-luna"
-            var best = -1
-            for (key, value) in models where m.contains(key.lowercased()) {
-                let k = key.count
-                if k > best {
-                    best = k
-                    rate = value
-                }
-            }
-        }
-        guard let resolved = rate ?? fallback else { return nil }
-        let cost = (Double(input) * resolved.input
-                    + Double(output) * resolved.output
-                    + Double(cacheRead) * resolved.cacheRead
-                    + Double(cacheWrite) * resolved.cacheWrite) / 1e6
-        // Python round(x, 8) 是 half-even；不能用默认的 half-away。
-        return (cost * 1e8).rounded(.toNearestOrEven) / 1e8
+        quote(model: model, input: input, output: output,
+              cacheRead: cacheRead, cacheWrite: cacheWrite)?.cost
+    }
+
+    private static func normalizeModel(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

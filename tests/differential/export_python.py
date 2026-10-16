@@ -88,7 +88,8 @@ def export() -> dict:
         events = [dict(r) for r in conn.execute(
             "SELECT tool,src_key,session_id,project,ts,model,input,output,"
             "cache_read,cache_write,cost,time_quality,interval_start,cost_source,"
-            "source_kind,source_scope FROM usage_events ORDER BY tool,src_key")]
+            "source_kind,source_scope,provider,price_version_id "
+            "FROM usage_events ORDER BY tool,src_key")]
         for e in events:
             e["cost"] = round6(e["cost"])
         activities = [dict(r) for r in conn.execute(
@@ -137,7 +138,7 @@ def export() -> dict:
     finally:
         conn.close()
         tmp.cleanup()
-    return {"format_version": 3, "events": events, "activities": activities,
+    return {"format_version": 4, "events": events, "activities": activities,
             "session_meta": meta,
             "scan_results": scan_results, "snapshots": snapshots}
 

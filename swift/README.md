@@ -30,10 +30,14 @@ Tests/
 swift build --package-path swift
 swift test --package-path swift
 ./scripts/build_swift_app.sh
-open dist/TokenTracker.app
+./scripts/run_swift_dev.sh
 ```
 
-打包结果使用 bundle ID `com.tokentracker.desktop.v2`，最低支持 macOS 14。
+默认打包结果 `dist/TokenTracker.app` 使用生产 bundle ID
+`com.tokentracker.desktop.v2`。本地运行入口会在独立目录构建并启动
+`build/TokenTracker Dev.app`，其 bundle ID 为
+`com.tokentracker.desktop.v2.dev`，避免开发副本改变生产菜单栏身份。
+两者最低支持 macOS 14。
 发布 DMG 使用 `./scripts/release_swift.sh`。
 
 ## 差分验证
@@ -44,8 +48,9 @@ open dist/TokenTracker.app
 
 Python CLI 与 Swift 共用以下兼容数据：
 
-- `~/.tokentracker/usage.db`（schema v4；兼容迁移 v3 的 Agent Activity）
+- `~/.tokentracker/usage.db`（schema v6；用量事件保留供应商和费率版本）
 - `~/.tokentracker/settings.json`
+- `~/.tokentracker/prices.json`（供应商官方公开费率目录，按事件时间版本化）
 - `~/.tokentracker/official_cache.json`
 - `~/.tokentracker/claude_cred_backup.json`
 

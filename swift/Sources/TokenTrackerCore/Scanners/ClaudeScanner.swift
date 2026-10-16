@@ -85,12 +85,14 @@ public struct ClaudeScanner: ScannerAdapter {
                 return (0, 0, activityAdded, activityUpdated, title.isEmpty ? nil : title)
             }
         }
-        let cost = prices.cost(for: model, input: inp, output: outp, cacheRead: cr, cacheWrite: cw)
+        let quote = prices.quote(provider: "anthropic", model: model, input: inp, output: outp,
+                                 cacheRead: cr, cacheWrite: cw, eventAtMs: ts)
         let added = try store.putEvent(tool: name, srcKey: sourceKey,
                                        sessionID: sessionID, project: slug, ts: ts,
                                        model: model, input: inp, output: outp,
-                                       cacheRead: cr, cacheWrite: cw, cost: cost,
-                                       replace: old != nil)
+                                       cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
+                                       replace: old != nil,
+                                       provider: "anthropic", priceVersionID: quote?.priceVersionID)
         return old == nil
             ? (added, 0, activityAdded, activityUpdated, title.isEmpty ? nil : title)
             : (0, 1, activityAdded, activityUpdated, title.isEmpty ? nil : title)

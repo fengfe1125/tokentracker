@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 5
+    public static let schemaVersion: Int32 = 6
     public static let tokenColumns = ["input", "output", "cache_read", "cache_write"]
     public static let tokensExpr = "(input+output+cache_read+cache_write)"
 
@@ -27,6 +27,7 @@ public final class UsageStore {
         input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
         cache_read INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0,
         cost REAL, src_key TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT '', price_version_id TEXT,
         time_quality TEXT NOT NULL DEFAULT 'exact', interval_start INTEGER,
         cost_source TEXT NOT NULL DEFAULT 'estimate',
         source_kind TEXT NOT NULL DEFAULT '', source_scope TEXT NOT NULL DEFAULT '',
@@ -162,8 +163,21 @@ public final class UsageStore {
             _ = try conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_activity_kind_time "
                     + "ON agent_activity_events(event_kind, started_at)")
+            let eventColumns = Set(try conn.query("PRAGMA table_info(usage_events)")
+                .map { $0.string("name") })
+            if !eventColumns.contains("provider") {
+                _ = try conn.execute("ALTER TABLE usage_events ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+            }
+            if !eventColumns.contains("price_version_id") {
+                _ = try conn.execute("ALTER TABLE usage_events ADD COLUMN price_version_id TEXT")
+            }
+            if legacy && version < 6 {
+                _ = try conn.execute("UPDATE usage_events SET provider='anthropic' WHERE tool='claude' AND provider=''")
+                _ = try conn.execute("UPDATE usage_events SET provider='openai' WHERE tool='codex' AND provider=''")
+                _ = try conn.execute("UPDATE usage_events SET provider='moonshot' WHERE tool='kimi' AND provider=''")
+                _ = try conn.execute("UPDATE usage_events SET provider='deepseek' WHERE tool='dsh' AND provider='' AND lower(model) LIKE 'deepseek-%'")
+            }
             if legacy && version < 1 {
-                let prices = priceTableForMigration
                 for row in try conn.query(
                     "SELECT * FROM usage_events WHERE tool IN ('codex','opencode','hermes')") {
                     let original = row.values.compactMapValues { $0 }
@@ -172,21 +186,17 @@ public final class UsageStore {
                     _ = try conn.execute("INSERT INTO migration_history VALUES (?,?,?,?,?)", [
                         Int64(UsageStore.schemaVersion), nowMs(), row.intOrNil("id") as Any,
                         originalJSON,
-                        "Preserved original counters; Codex prices recalculated using the current price table (not a historical bill).",
+                        "Preserved original counters and cost as an unversioned historical estimate.",
                     ])
                     if row.string("tool") == "codex" {
                         let inp = max(0, row.int("input") - row.int("cache_read") - row.int("cache_write"))
-                        let cost = prices.cost(for: row.string("model"), input: inp,
-                                               output: row.int("output"),
-                                               cacheRead: row.int("cache_read"),
-                                               cacheWrite: row.int("cache_write"))
                         let quality = row.string("src_key").hasPrefix("legacy|") ? "unallocated" : "exact"
                         _ = try conn.execute(
-                            "UPDATE usage_events SET input=?,cost=?,cost_source='recomputed',time_quality=? WHERE id=?",
-                            [inp, cost as Any, quality, row.int("id")])
+                            "UPDATE usage_events SET input=?,cost_source='legacy_unversioned',time_quality=? WHERE id=?",
+                            [inp, quality, row.int("id")])
                     } else {
                         _ = try conn.execute(
-                            "UPDATE usage_events SET time_quality='unallocated',cost_source='legacy' WHERE id=?",
+                            "UPDATE usage_events SET time_quality='unallocated',cost_source='legacy_unversioned' WHERE id=?",
                             [row.int("id")])
                     }
                 }
@@ -246,7 +256,8 @@ public final class UsageStore {
                          cost: Double? = nil, replace: Bool = false,
                          timeQuality: String = "exact", intervalStart: Int64? = nil,
                          costSource: String = "estimate", sourceKind: String = "",
-                         sourceScope: String = "") throws -> Int {
+                         sourceScope: String = "", provider inputProvider: String = "",
+                         priceVersionID: String? = nil) throws -> Int {
         var quality = timeQuality
         var ts = input0
         if let putEventHook { try putEventHook(tool, sourceKind) }
@@ -257,12 +268,19 @@ public final class UsageStore {
             quality = "unallocated"
         }
         if ts <= 0 { ts = nowMs() }
+        var provider = PriceTable.normalizeProvider(inputProvider)
+        if provider.isEmpty {
+            provider = ["claude": "anthropic", "codex": "openai", "kimi": "moonshot"][tool] ?? ""
+            if tool == "dsh" && model.lowercased().hasPrefix("deepseek-") { provider = "deepseek" }
+        }
         let verb = replace ? "INSERT OR REPLACE" : "INSERT OR IGNORE"
         let changed = try conn.execute(
             "\(verb) INTO usage_events (tool,src_key,session_id,project,ts,model,input,output,cache_read,cache_write,cost,"
-                + "time_quality,interval_start,cost_source,source_kind,source_scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                + "time_quality,interval_start,cost_source,source_kind,source_scope,provider,price_version_id) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [tool, srcKey, sessionID, project, ts, model, input, output, cacheRead, cacheWrite,
-             cost as Any, quality, intervalStart as Any, costSource, sourceKind, sourceScope])
+             cost as Any, quality, intervalStart as Any, costSource, sourceKind, sourceScope,
+             provider, priceVersionID as Any])
         if ["codex", "pi", "dsh", "kimi"].contains(tool), project.hasPrefix("/"), !srcKey.hasPrefix("cli|") {
             try recordProjectPath(tool: tool, srcKey: srcKey, path: project)
         }
@@ -379,7 +397,7 @@ public final class UsageStore {
                             cacheRead: Int64 = 0, cacheWrite: Int64 = 0,
                             nativeCost: Double? = nil, costSource: String = "native",
                             prices: PriceTable = .default, legacyKey: String? = nil,
-                            observedAt: Int64? = nil) throws -> (added: Int, counterResets: Int) {
+                            observedAt: Int64? = nil, provider: String = "") throws -> (added: Int, counterResets: Int) {
         if !conn.inTransaction { try conn.beginImmediate() }
         let now = observedAt ?? nowMs()
         let digest = sha256Hex(pythonJSONDumps([sourceScope, identity]))
@@ -448,9 +466,13 @@ public final class UsageStore {
         for k in UsageStore.tokenColumns {
             delta[k] = ((values[k] as? Int64) ?? 0) - (previous != nil ? prevInt(k) : 0)
         }
+        let inferredProvider = provider.isEmpty
+            ? prices.quote(model: model, input: 0, output: 0, eventAtMs: now)?.provider : nil
+        let storedProvider = provider.isEmpty ? (inferredProvider ?? "") : provider
 
         var added = 0
-        func emit(_ counters: [String: Int64], _ cost: Double?, _ origin: String, _ quality: String) throws {
+        func emit(_ counters: [String: Int64], _ cost: Double?, _ origin: String, _ quality: String,
+                  _ versionID: String? = nil, _ resolvedProvider: String? = nil) throws {
             revision += 1
             added += try putEvent(
                 tool: tool, srcKey: "aggregate|\(digest)|\(revision)",
@@ -459,7 +481,8 @@ public final class UsageStore {
                 cacheRead: counters["cache_read"] ?? 0, cacheWrite: counters["cache_write"] ?? 0,
                 cost: cost, timeQuality: quality,
                 intervalStart: quality == "observed" ? start : nil,
-                costSource: origin, sourceKind: "aggregate_snapshot", sourceScope: sourceScope)
+                costSource: origin, sourceKind: "aggregate_snapshot", sourceScope: sourceScope,
+                provider: resolvedProvider ?? storedProvider, priceVersionID: versionID)
         }
 
         if !reset {
@@ -474,18 +497,26 @@ public final class UsageStore {
             }
             let cost: Double?
             let origin: String
+            let versionID: String?
+            let resolvedProvider: String?
             if nativeCost != nil && (previous == nil || continuousNative) {
                 cost = nativeCost! - (prevNative ?? 0)
                 origin = costSource
+                versionID = nil
+                resolvedProvider = storedProvider
             } else {
-                cost = prices.cost(for: model, input: delta["input"] ?? 0,
-                                   output: delta["output"] ?? 0,
-                                   cacheRead: delta["cache_read"] ?? 0,
-                                   cacheWrite: delta["cache_write"] ?? 0)
+                let quote = prices.quote(provider: provider.isEmpty ? nil : provider,
+                    model: model, input: delta["input"] ?? 0, output: delta["output"] ?? 0,
+                    cacheRead: delta["cache_read"] ?? 0, cacheWrite: delta["cache_write"] ?? 0,
+                    eventAtMs: now, intervalStartMs: start)
+                cost = quote?.cost
+                versionID = quote?.priceVersionID
+                resolvedProvider = quote?.provider
                 origin = "estimate"
             }
             if delta.values.contains(where: { $0 != 0 }) || (cost != nil && cost != 0) {
-                try emit(delta, cost, origin, start != nil ? "observed" : "unallocated")
+                try emit(delta, cost, origin, start != nil ? "observed" : "unallocated",
+                         versionID, resolvedProvider)
                 accounted += cost ?? 0
             }
             if previous != nil && nativeCost != nil && !continuousNative {
@@ -507,10 +538,12 @@ public final class UsageStore {
             if let nativeCost {
                 accounted = nativeCost
             } else {
-                accounted = prices.cost(for: model, input: values["input"] as? Int64 ?? 0,
-                                        output: values["output"] as? Int64 ?? 0,
-                                        cacheRead: values["cache_read"] as? Int64 ?? 0,
-                                        cacheWrite: values["cache_write"] as? Int64 ?? 0) ?? 0
+                accounted = prices.quote(provider: provider.isEmpty ? nil : provider,
+                    model: model, input: values["input"] as? Int64 ?? 0,
+                    output: values["output"] as? Int64 ?? 0,
+                    cacheRead: values["cache_read"] as? Int64 ?? 0,
+                    cacheWrite: values["cache_write"] as? Int64 ?? 0,
+                    eventAtMs: now)?.cost ?? 0
             }
             let ledger = try ledgerCost()
             values["cost_offset"] = ledger - accounted
@@ -774,13 +807,17 @@ public final class UsageStore {
     @discardableResult
     public func reprice(_ prices: PriceTable) throws -> Int {
         var n = 0
-        for row in try conn.query("SELECT * FROM usage_events WHERE cost IS NULL") {
-            if let cost = prices.cost(for: row.string("model"), input: row.int("input"),
-                                      output: row.int("output"),
-                                      cacheRead: row.int("cache_read"),
-                                      cacheWrite: row.int("cache_write")) {
-                _ = try conn.execute("UPDATE usage_events SET cost=?,cost_source='estimate' WHERE id=?",
-                                     [cost, row.int("id")])
+        for row in try conn.query("SELECT * FROM usage_events WHERE cost IS NULL AND price_version_id IS NULL "
+                                  + "AND cost_source IN ('estimate','priced')") {
+            let provider = row.string("provider")
+            let quote = prices.quote(provider: provider.isEmpty ? nil : provider,
+                model: row.string("model"), input: row.int("input"), output: row.int("output"),
+                cacheRead: row.int("cache_read"), cacheWrite: row.int("cache_write"),
+                eventAtMs: row.int("ts"),
+                intervalStartMs: row.string("time_quality") == "observed" ? row.intOrNil("interval_start") : nil)
+            if let quote {
+                _ = try conn.execute("UPDATE usage_events SET cost=?,cost_source='estimate',provider=?,price_version_id=? WHERE id=?",
+                                     [quote.cost, quote.provider, quote.priceVersionID, row.int("id")])
                 n += 1
             }
         }

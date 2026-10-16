@@ -16,19 +16,73 @@ from tokentracker import db, pricing  # noqa: E402
 
 
 class PricingTest(unittest.TestCase):
-    def test_longest_substring_match(self):
-        prices = {"default": {"input": 1, "output": 1},
-                  "models": {"gpt-5": {"input": 2, "output": 2},
-                             "gpt-5.6-luna": {"input": 9, "output": 9}}}
-        cost, _ = pricing.cost_for(prices, "gpt-5.6-luna", 1_000_000, 0)
-        self.assertEqual(cost, 9.0)   # 不能被 "gpt-5" 抢先命中
-        cost, _ = pricing.cost_for(prices, "gpt-5", 1_000_000, 0)
-        self.assertEqual(cost, 2.0)
+    def test_exact_provider_model_and_explicit_aliases(self):
+        prices = {"schema_version": 1, "versions": [
+            {"id": "v1", "provider": "openai", "model": "gpt-5", "aliases": ["GPT 5"],
+             "effective_at_ms": 0, "rates": {"input": 2, "output": 2}},
+            {"id": "v2", "provider": "openai", "model": "gpt-5.6-luna",
+             "effective_at_ms": 0, "rates": {"input": 9, "output": 9}},
+        ]}
+        self.assertEqual(pricing.cost_for(prices, "gpt-5.6-luna", 1_000_000, 0,
+                                          provider="openai")[0], 9.0)
+        self.assertEqual(pricing.cost_for(prices, "GPT 5", 1_000_000, 0,
+                                          provider="openai")[0], 2.0)
+        self.assertIsNone(pricing.cost_for(prices, "gpt-5.6-luna-preview", 1_000_000, 0,
+                                           provider="openai")[0])
+        self.assertIsNone(pricing.cost_for(prices, "gpt-5", 1_000_000, 0,
+                                           provider="openrouter")[0])
+        self.assertIsNone(pricing.cost_for({"default": {"input": 1}, "models": {}},
+                                           "unknown-model", 1_000_000, 0)[0])
 
-    def test_default_fallback(self):
-        prices = {"default": {"input": 1, "output": 0}, "models": {}}
-        cost, _ = pricing.cost_for(prices, "unknown-model", 1_000_000, 0)
-        self.assertEqual(cost, 1.0)
+    def test_event_time_and_crossing_observation_interval(self):
+        prices = {"schema_version": 1, "versions": [
+            {"id": "v1", "provider": "openai", "model": "gpt-5",
+             "effective_at_ms": 100, "rates": {"input": 1}},
+            {"id": "v2", "provider": "openai", "model": "gpt-5",
+             "effective_at_ms": 200, "rates": {"input": 2}},
+        ]}
+        self.assertEqual(pricing.cost_for(prices, "gpt-5", 1_000_000, 0,
+                                          provider="openai", event_ts=150)[0], 1.0)
+        self.assertEqual(pricing.cost_for(prices, "gpt-5", 1_000_000, 0,
+                                          provider="openai", event_ts=250)[0], 2.0)
+        self.assertEqual(pricing.cost_for(prices, "gpt-5", 1_000_000, 0,
+                                          provider="openai", event_ts=250,
+                                          interval_start=150)[0], None)
+
+    def test_unknown_model_keeps_tokens_without_a_guessed_cost(self):
+        conn = db.connect(":memory:")
+        try:
+            db.put_event(conn, "fixture", "unknown", model="new-provider-model",
+                         input=12, output=8, cache_read=3, cost=None)
+            rows, total = db.stats(conn)
+            self.assertEqual(total["tokens"], 23)
+            self.assertEqual(total["unpriced"], 1)
+            self.assertEqual(total["cost"], 0)
+            self.assertEqual(rows[0]["tokens"], 23)
+        finally:
+            conn.close()
+
+    def test_reprice_persists_event_time_version_and_leaves_crossing_interval_unpriced(self):
+        conn = db.connect(":memory:")
+        prices = {"schema_version": 1, "versions": [
+            {"id": "v1", "provider": "openai", "model": "gpt-5",
+             "effective_at_ms": 100, "rates": {"input": 1}},
+            {"id": "v2", "provider": "openai", "model": "gpt-5",
+             "effective_at_ms": 200, "rates": {"input": 2}},
+        ]}
+        try:
+            db.put_event(conn, "codex", "exact", ts=150, model="gpt-5", input=1_000_000,
+                         provider="openai")
+            db.put_event(conn, "opencode", "crossing", ts=250, model="gpt-5", input=1_000_000,
+                         provider="openai", time_quality="observed", interval_start=150)
+            self.assertEqual(db.reprice(conn, prices), 1)
+            exact = conn.execute("SELECT cost,price_version_id FROM usage_events WHERE src_key='exact'").fetchone()
+            crossing = conn.execute("SELECT cost,price_version_id FROM usage_events WHERE src_key='crossing'").fetchone()
+            self.assertEqual((exact["cost"], exact["price_version_id"]), (1.0, "v1"))
+            self.assertIsNone(crossing["cost"])
+            self.assertIsNone(crossing["price_version_id"])
+        finally:
+            conn.close()
 
 
 class DbTest(unittest.TestCase):

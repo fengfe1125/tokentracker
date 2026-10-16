@@ -20,6 +20,7 @@ public struct SettingsStore {
         "terminal_app": "auto",         // 继续会话用哪个终端
         "unit_yi": false,               // 大数以「亿」显示
         "scan_interval": 60,            // 自动扫描/刷新节奏（秒）
+        "price_sync_enabled": true,     // 每 24 小时自动同步官方公开 API 费率
 
         // 公开统计上报。默认关闭不可协商 —— 这是个把数据发到公网的开关。
         "publish_enabled": false,       // 扫描结束后自动上报
@@ -78,7 +79,8 @@ public struct SettingsStore {
             guard let v = value as? String else { return false }
             let range = NSRange(v.startIndex..., in: v)
             return providerPattern.firstMatch(in: v, range: range)?.range == range
-        case "menubar_compact", "menubar_ring", "launch_at_login", "unit_yi", "publish_enabled":
+        case "menubar_compact", "menubar_ring", "launch_at_login", "unit_yi", "publish_enabled",
+             "price_sync_enabled":
             return (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
         case "publish_endpoint":
             guard let v = value as? String else { return false }

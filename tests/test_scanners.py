@@ -13,8 +13,24 @@ from tokentracker.scanners import claude, codex, dsh, kimi, pi
 from tokentracker.scanners._util import iter_jsonl
 
 
-PRICES = {"models": {"test-model": {"input": 2, "output": 10,
-                                    "cache_read": .2, "cache_write": 2}}}
+_RATE = {"input": 2, "output": 10, "cache_read": .2, "cache_write": 2}
+PRICES = {"schema_version": 1, "versions": [
+    {"id": f"test:{provider}:test-model", "provider": provider,
+     "model": "test-model", "aliases": [], "effective_at_ms": 0,
+     "fetched_at_ms": 0, "source_url": "fixture://prices", "rates": _RATE,
+     "conditions": []}
+    for provider in ("anthropic", "openai", "deepseek", "moonshot", "xai")
+] + [
+    {"id": "test:openai:gpt-5", "provider": "openai", "model": "gpt-5",
+     "aliases": [], "effective_at_ms": 0, "fetched_at_ms": 0,
+     "source_url": "fixture://prices", "rates": _RATE, "conditions": []},
+    {"id": "test:openai:gpt-5.6-luna", "provider": "openai", "model": "gpt-5.6-luna",
+     "aliases": [], "effective_at_ms": 0, "fetched_at_ms": 0,
+     "source_url": "fixture://prices", "rates": _RATE, "conditions": []},
+    {"id": "test:deepseek:deepseek-v4-pro", "provider": "deepseek", "model": "deepseek-v4-pro",
+     "aliases": [], "effective_at_ms": 0, "fetched_at_ms": 0,
+     "source_url": "fixture://prices", "rates": _RATE, "conditions": []},
+]}
 TS = "2026-08-25T01:00:00Z"
 TS_MS = 1787619600000
 
