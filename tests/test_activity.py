@@ -40,6 +40,16 @@ class ActivityCase(unittest.TestCase):
             args = (agent,)
         return [dict(r) for r in self.conn.execute(sql + " ORDER BY id", args)]
 
+    def test_completion_targets_newest_matching_call_across_agents(self):
+        for agent, key, start in [("codex", "older", 10), ("codex", "newer", 20), ("claude", "other", 30)]:
+            db.put_activity_event(self.conn, agent, key, raw_name="shell", call_id="reused", started_at=start)
+        self.assertEqual(db.complete_activity_event(self.conn, "codex", "reused", ended_at=45), 1)
+        rows = {r["src_key"]: r for r in self.activities()}
+        self.assertEqual(rows["newer"]["duration_ms"], 25)
+        self.assertIsNone(rows["older"]["ended_at"])
+        self.assertIsNone(rows["other"]["ended_at"])
+        self.assertEqual(db.complete_activity_event(self.conn, "codex", "missing", ended_at=50), 0)
+
     def test_store_is_metadata_only_idempotent_and_separates_evidence(self):
         db.put_activity_event(self.conn, "codex", "one", raw_name="exec", call_id="c1",
                               confidence="exact", status="unknown", skill_name="research",

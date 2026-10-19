@@ -109,6 +109,49 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(backups2.count, 1)
     }
 
+    /// 对齐 test_current_version_gains_call_index_without_backup。
+    func testCurrentVersionGainsCallIndexWithoutBackup() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("usage.db")
+        _ = try UsageStore(path: path).conn.execute("DROP INDEX idx_activity_call")
+        let store = try UsageStore(path: path)
+        XCTAssertEqual(try store.conn.scalarInt("PRAGMA user_version"), Int64(UsageStore.schemaVersion))
+        let plan = try store.conn.query(
+            "EXPLAIN QUERY PLAN SELECT id FROM agent_activity_events "
+                + "WHERE agent='codex' AND call_id='c' ORDER BY id DESC LIMIT 1")
+            .map { $0.string("detail") }.joined(separator: " ")
+        XCTAssertTrue(plan.contains("idx_activity_call"), plan)
+        let backups = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+            .filter { $0.contains(".backup-") }
+        XCTAssertEqual(backups, [])
+    }
+
+    /// 对齐 test_upgrade_keeps_only_newest_migration_backups。
+    func testUpgradeKeepsOnlyNewestMigrationBackups() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("usage.db")
+        try makeOldDatabase(at: path)
+        let stale = ["usage.db.v5.backup-3.db", "usage.db.v4.backup-2.db", "usage.db.v3.backup-1.db"]
+        for (age, name) in stale.enumerated() {
+            FileManager.default.createFile(atPath: tmp.path(name), contents: Data())
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: 1_000_000 - Double(age + 1))],
+                ofItemAtPath: tmp.path(name))
+        }
+        let manual = tmp.path("usage.db.bak-manual")
+        FileManager.default.createFile(atPath: manual, contents: Data())
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: manual)
+
+        _ = try UsageStore(path: path)
+        let kept = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+            .filter { $0.hasPrefix("usage.db.v") && $0.contains(".backup-") }
+        XCTAssertEqual(kept.count, UsageStore.migrationBackupsKept)
+        XCTAssertTrue(kept.contains("usage.db.v5.backup-3.db"))
+        XCTAssertTrue(kept.contains { $0.hasPrefix("usage.db.v0.backup-") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manual))
+    }
+
     /// 对齐 test_failed_upgrade_rolls_back_schema_and_values。
     func testFailedUpgradeRollsBack() throws {
         let tmp = try TempDir()

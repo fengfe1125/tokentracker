@@ -17,6 +17,11 @@ import Darwin
 
 public final class UsageStore {
     public static let schemaVersion: Int32 = 6
+    public static let migrationBackupsKept = 2
+    /// Completion lookups otherwise scan an agent's whole history (or the whole
+    /// table) for every tool result during a backfill.
+    static let activityCallIndex =
+        "CREATE INDEX IF NOT EXISTS idx_activity_call ON agent_activity_events(agent, call_id)"
     public static let tokenColumns = ["input", "output", "cache_read", "cache_write"]
     public static let tokensExpr = "(input+output+cache_read+cache_write)"
 
@@ -66,6 +71,7 @@ public final class UsageStore {
     CREATE INDEX IF NOT EXISTS idx_activity_session ON agent_activity_events(agent, session_id, started_at);
     CREATE INDEX IF NOT EXISTS idx_activity_tool ON agent_activity_events(canonical_name, started_at);
     CREATE INDEX IF NOT EXISTS idx_activity_skill ON agent_activity_events(skill_name, started_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_call ON agent_activity_events(agent, call_id);
     """
 
     public let conn: SQLiteConnection
@@ -85,18 +91,20 @@ public final class UsageStore {
         }
         conn = try SQLiteConnection(path: path)
         let version = Int32(try conn.scalarInt("PRAGMA user_version"))
-        if version != UsageStore.schemaVersion {
+        let missingIndex = try version == UsageStore.schemaVersion && conn.queryOne(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_activity_call'") == nil
+        if version != UsageStore.schemaVersion || missingIndex {
             if path == ":memory:" {
-                try upgrade(from: version)
+                try upgrade()
             } else {
                 let lockPath = path + ".migrate.lock"
                 let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
                 if fd >= 0 {
                     flock(fd, LOCK_EX)
                     defer { flock(fd, LOCK_UN); close(fd) }
-                    try upgrade(from: version)
+                    try upgrade()
                 } else {
-                    try upgrade(from: version)
+                    try upgrade()
                 }
             }
         }
@@ -106,15 +114,25 @@ public final class UsageStore {
 
     // ------------------------------------------------------------ 迁移 ----
 
-    private func upgrade(from version: Int32) throws {
+    private func upgrade() throws {
+        // Re-read under the migration lock: another process may have finished
+        // the upgrade while this one waited.
+        let version = Int32(try conn.scalarInt("PRAGMA user_version"))
         if version > UsageStore.schemaVersion {
             throw SQLiteError(message: "Database version \(version) is newer than supported \(UsageStore.schemaVersion)")
         }
-        if version == UsageStore.schemaVersion { return }
+        if version == UsageStore.schemaVersion {
+            // Same-version indexes stay readable by older builds, so they need
+            // no version bump or backup.
+            _ = try conn.execute(UsageStore.activityCallIndex)
+            return
+        }
         let legacy = try conn.queryOne(
             "SELECT 1 FROM sqlite_master WHERE name='usage_events'") != nil
         if legacy {
-            let backupPath = "\(path).v\(version).backup-\(DispatchTime.now().uptimeNanoseconds).db"
+            // Wall-clock nanoseconds, matching Python's time.time_ns().
+            let stamp = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+            let backupPath = "\(path).v\(version).backup-\(stamp).db"
             let backup = try SQLiteConnection(path: backupPath)
             try conn.backup(to: backup)
         }
@@ -206,6 +224,26 @@ public final class UsageStore {
         } catch {
             try conn.rollback()
             throw error
+        }
+        if legacy { pruneMigrationBackups() }
+    }
+
+    /// Keep only the newest automatic backups once an upgrade has committed.
+    /// Manually named copies never match the pattern and are left alone.
+    private func pruneMigrationBackups() {
+        let url = URL(fileURLWithPath: path)
+        let directory = url.deletingLastPathComponent().path
+        let name = NSRegularExpression.escapedPattern(for: url.lastPathComponent)
+        guard let pattern = try? NSRegularExpression(pattern: "^\(name)\\.v\\d+\\.backup-\\d+\\.db$"),
+              let files = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return }
+        let backups = files.filter {
+            pattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
+        }.map { (directory as NSString).appendingPathComponent($0) }
+        func modified(_ file: String) -> Date {
+            ((try? FileManager.default.attributesOfItem(atPath: file))?[.modificationDate] as? Date) ?? .distantPast
+        }
+        for old in backups.sorted(by: { modified($0) > modified($1) }).dropFirst(UsageStore.migrationBackupsKept) {
+            try? FileManager.default.removeItem(atPath: old)
         }
     }
 

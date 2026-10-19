@@ -2,6 +2,19 @@ import XCTest
 @testable import TokenTrackerCore
 
 final class ActivityTests: XCTestCase {
+    func testCompletionStillTargetsNewestMatchingCallAcrossAgents() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+        try store.recordActivity(agent: "codex", srcKey: "older", rawName: "shell", sessionID: "older", callID: "reused", startedAt: 10)
+        try store.recordActivity(agent: "codex", srcKey: "newer", rawName: "shell", sessionID: "newer", callID: "reused", startedAt: 20)
+        try store.recordActivity(agent: "claude", srcKey: "other", rawName: "shell", sessionID: "other", callID: "reused", startedAt: 30)
+        XCTAssertEqual(try store.completeActivity(agent: "codex", callID: "reused", endedAt: 45), 1)
+        XCTAssertEqual(try store.activityTimeline(sessionID: "newer").first?.durationMs, 25)
+        XCTAssertNil(try store.activityTimeline(sessionID: "older").first?.endedAt)
+        XCTAssertNil(try store.activityTimeline(sessionID: "other").first?.endedAt)
+        XCTAssertEqual(try store.completeActivity(agent: "codex", callID: "missing", endedAt: 50), 0)
+    }
+
     func testRecordActivityIsIdempotentAndResultEnrichesCall() throws {
         let temp = try TempDir()
         let store = try temp.store()

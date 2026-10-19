@@ -24,7 +24,7 @@
 - Codex：主路 GET https://chatgpt.com/backend-api/wham/usage（CodexBar docs/codex.md +
   headroom subscription/codex_rate_limits.py；Bearer 用 ~/.codex/auth.json 的 access_token
   + ChatGPT-Account-Id 头；401 时向 auth.openai.com/oauth/token 刷新并原子写回）。
-  兑底 spawn `codex -s read-only -a untrusted app-server` JSON-RPC over stdio
+  兑底 spawn `codex -s read-only -a never app-server` JSON-RPC over stdio
   （新版 codex-cli 上 RPC 协议不稳定，故降为兑底）。结果带 _via 标明走的那条路。
 
 凭据过期/无效时返回 {"error": ...}，由上层降级为本地窗口估算，绝不阻塞。
@@ -813,6 +813,10 @@ def kimi_usage() -> dict:
 
 
 # ------------------------------------------------------------------ Codex ----
+def _numeric_version_key(name: str) -> list:
+    return [int(part) for part in re.findall(r"\d+", name)]
+
+
 def _extra_bin_dirs() -> list:
     """图形化启动（.app / Finder）时 PATH 只有 /usr/bin:/bin…，Node 工具链找不到。
     补齐常见安装位置（codex 是 npm 全局脚本，shebang 为 #!/usr/bin/env node）。"""
@@ -820,10 +824,10 @@ def _extra_bin_dirs() -> list:
     dirs = [f"{home}/.npm-global/bin", f"{home}/.local/bin", f"{home}/.volta/bin",
             f"{home}/.bun/bin", f"{home}/Library/pnpm", f"{home}/.yarn/bin",
             "/opt/homebrew/bin", "/usr/local/bin"]
-    # nvm：取最新一个版本的 bin
+    # nvm：取最新一个版本的 bin（按数字比较，v22 排在 v9 之后）
     try:
         nvm = os.path.join(home, ".nvm", "versions", "node")
-        vers = sorted(os.listdir(nvm))
+        vers = sorted(os.listdir(nvm), key=_numeric_version_key)
         if vers:
             dirs.insert(0, os.path.join(nvm, vers[-1], "bin"))
     except OSError:
@@ -846,7 +850,8 @@ def _codex_rpc(bin_path: str) -> dict:
     """JSON-RPC over stdio 调 codex app-server，返回 account/rateLimits/read 的 result。"""
     env = _spawn_env()
     proc = subprocess.Popen(
-        [bin_path, "-s", "read-only", "-a", "untrusted", "app-server"],
+        # 新版 codex-cli 的 -a 只接受 on-request/never；untrusted 会直接 code 2 退出。
+        [bin_path, "-s", "read-only", "-a", "never", "app-server"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1, env=env)
     got_any_line = False
@@ -912,11 +917,24 @@ def _codex_debug(err, bin_path, env, proc, got_any_line):
             if r:
                 lines.append("  stderr: " + (proc.stderr.readline() or "").strip()[:200])
         p = os.path.join(os.path.expanduser("~"), ".tokentracker", "codex_debug.log")
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        _append_debug_log(p, "\n".join(lines) + "\n")
     except Exception:  # noqa: BLE001
         pass
+
+
+_DEBUG_LOG_MAX_BYTES = 256 * 1024
+
+
+def _append_debug_log(path: str, text: str) -> None:
+    """追加诊断；超过上限先轮转为 .1（只留一份旧档），避免反复失败时无限增长。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        if os.path.getsize(path) > _DEBUG_LOG_MAX_BYTES:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(text)
 
 
 def _codex_auth_path() -> str:

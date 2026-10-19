@@ -74,6 +74,37 @@ class DatabaseAccountingTest(unittest.TestCase):
         self.assertEqual(db.stats(again)[1]["tokens"], 1001000)
         self.assertEqual(len(glob.glob(self.path + ".v0.backup-*.db")), 1)
 
+    def test_current_version_gains_call_index_without_backup(self):
+        conn = db.connect(self.path)
+        conn.execute("DROP INDEX idx_activity_call")
+        conn.close()
+        conn = self.connect()
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
+        plan = " ".join(r[3] for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM agent_activity_events "
+            "WHERE agent='codex' AND call_id='c' ORDER BY id DESC LIMIT 1"))
+        self.assertIn("idx_activity_call", plan)
+        self.assertEqual(glob.glob(self.path + ".v*.backup-*.db"), [])
+
+    def test_upgrade_keeps_only_newest_migration_backups(self):
+        self.old_database()
+        for age, name in enumerate(["usage.db.v5.backup-3.db", "usage.db.v4.backup-2.db",
+                                    "usage.db.v3.backup-1.db"], start=1):
+            stale = os.path.join(self.tmp.name, name)
+            with open(stale, "w"):
+                pass
+            os.utime(stale, (1_000_000 - age, 1_000_000 - age))
+        manual = os.path.join(self.tmp.name, "usage.db.bak-manual")
+        with open(manual, "w"):
+            pass
+        os.utime(manual, (1, 1))
+        self.connect()
+        kept = sorted(os.path.basename(p) for p in glob.glob(self.path + ".v*.backup-*.db"))
+        self.assertEqual(len(kept), db.MIGRATION_BACKUPS_KEPT)
+        self.assertIn("usage.db.v5.backup-3.db", kept)
+        self.assertTrue(any(name.startswith("usage.db.v0.backup-") for name in kept))
+        self.assertTrue(os.path.exists(manual))
+
     def test_failed_upgrade_rolls_back_schema_and_values(self):
         self.old_database(fail=True)
         with self.assertRaises(sqlite3.DatabaseError):
