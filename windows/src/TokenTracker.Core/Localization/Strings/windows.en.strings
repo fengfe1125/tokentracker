@@ -1,0 +1,18 @@
+/* Windows-only strings (overlay on the shared swift/Sources/TokenTrackerApp/Resources strings). Keys are the Chinese source text. */
+"托盘" = "Tray";
+"托盘显示" = "Tray display";
+"托盘提示显示" = "Tray tooltip shows";
+"Windows 托盘只显示图标：圆环表示所选配额的最紧窗口，今日用量在鼠标悬停提示里。" = "The Windows tray shows only an icon: the ring is the tightest window of the selected quota; today's usage is in the hover tooltip.";
+"在资源管理器中打开本地数据目录" = "Open local data folder in File Explorer";
+"在资源管理器中打开项目目录" = "Open project folder in File Explorer";
+"在资源管理器中打开" = "Open in File Explorer";
+"原始用量日志始终只在本机读取和保存。设置保存在 %USERPROFILE%\\.tokentracker\\settings.json。" = "Raw usage logs are read and stored locally. Usage settings are saved in %USERPROFILE%\\.tokentracker\\settings.json.";
+"TokenTracker 仍在托盘运行" = "TokenTracker is still running in the tray";
+"关闭窗口不会退出。可把托盘图标从溢出区拖到任务栏，方便随时查看。" = "Closing the window doesn't quit. Drag the tray icon out of the overflow area to keep it visible.";
+"检查中…" = "Checking…";
+"检查失败，请稍后重试" = "Check failed. Please try again later.";
+"打开发布页" = "Open releases page";
+"官方配额为只读：登录令牌过期时显示本地估算，运行一次对应 CLI 后自动恢复。" = "Official quotas are read-only: when a sign-in token expires, local estimates are shown until you run the CLI again.";
+"复制" = "Copy";
+"版本" = "Version";
+"开机自动启动失败：无法写入注册表" = "Couldn't enable launch at login: the registry could not be updated";

@@ -20,6 +20,12 @@ assets/TokenTracker.iconset/
 # Swift
 swift/.build/
 
+# Windows (.NET)
+windows/**/bin/
+windows/**/obj/
+windows/artifacts/
+windows/**/TestResults/
+
 # 差分语料（生成物，可重复生成）
 tests/differential/corpus/
 

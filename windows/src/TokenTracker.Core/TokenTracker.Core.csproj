@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>TokenTracker.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="ZstdSharp.Port" />
+  </ItemGroup>
+
+  <!-- 共享资源在构建时嵌入，不在 windows/ 下复制一份。 -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(RepoRoot)prices.json" LogicalName="TokenTracker.prices.json" />
+    <EmbeddedResource Include="$(RepoRoot)swift\Sources\TokenTrackerApp\Resources\zh-Hans.lproj\Localizable.strings" LogicalName="TokenTracker.zh-Hans.strings" />
+    <EmbeddedResource Include="$(RepoRoot)swift\Sources\TokenTrackerApp\Resources\en.lproj\Localizable.strings" LogicalName="TokenTracker.en.strings" />
+    <EmbeddedResource Include="Localization\Strings\windows.zh-Hans.strings" LogicalName="TokenTracker.windows.zh-Hans.strings" />
+    <EmbeddedResource Include="Localization\Strings\windows.en.strings" LogicalName="TokenTracker.windows.en.strings" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TokenTracker.Core.Tests" />
+  </ItemGroup>
+
+</Project>

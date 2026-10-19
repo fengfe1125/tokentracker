@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{FE194A30-1611-41BE-879D-5A3EBE87BE4B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenTracker.Core", "src\TokenTracker.Core\TokenTracker.Core.csproj", "{768F71BA-8EE1-4275-8894-EFC8DE4220A0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenTracker.Cli", "src\TokenTracker.Cli\TokenTracker.Cli.csproj", "{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{58CF4C2D-F11C-45A5-9A6D-23EFF4C5E5FA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenTracker.Core.Tests", "tests\TokenTracker.Core.Tests\TokenTracker.Core.Tests.csproj", "{576533DA-350B-44A1-84A1-1A993125E836}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenTracker.Windows", "src\TokenTracker.Windows\TokenTracker.Windows.csproj", "{8C3277F8-18EF-424E-A601-D329C11AB9E3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{768F71BA-8EE1-4275-8894-EFC8DE4220A0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{768F71BA-8EE1-4275-8894-EFC8DE4220A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{768F71BA-8EE1-4275-8894-EFC8DE4220A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{768F71BA-8EE1-4275-8894-EFC8DE4220A0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{576533DA-350B-44A1-84A1-1A993125E836}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{576533DA-350B-44A1-84A1-1A993125E836}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{576533DA-350B-44A1-84A1-1A993125E836}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{576533DA-350B-44A1-84A1-1A993125E836}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C3277F8-18EF-424E-A601-D329C11AB9E3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C3277F8-18EF-424E-A601-D329C11AB9E3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C3277F8-18EF-424E-A601-D329C11AB9E3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C3277F8-18EF-424E-A601-D329C11AB9E3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{768F71BA-8EE1-4275-8894-EFC8DE4220A0} = {FE194A30-1611-41BE-879D-5A3EBE87BE4B}
+		{07B08352-49E2-4C0D-B9AC-464B2CF3C6A7} = {FE194A30-1611-41BE-879D-5A3EBE87BE4B}
+		{576533DA-350B-44A1-84A1-1A993125E836} = {58CF4C2D-F11C-45A5-9A6D-23EFF4C5E5FA}
+		{8C3277F8-18EF-424E-A601-D329C11AB9E3} = {FE194A30-1611-41BE-879D-5A3EBE87BE4B}
+	EndGlobalSection
+EndGlobal

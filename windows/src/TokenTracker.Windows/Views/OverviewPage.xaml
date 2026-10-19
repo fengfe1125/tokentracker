@@ -1,0 +1,203 @@
+<UserControl x:Class="TokenTracker.Windows.Views.OverviewPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:l="clr-namespace:TokenTracker.Windows.Localization"
+             xmlns:c="clr-namespace:TokenTracker.Windows.Controls">
+    <DockPanel>
+        <!-- 顶栏：标题 + 时间范围 + 刷新间隔 + 扫描 -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource PageHeader}">
+            <DockPanel VerticalAlignment="Center">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="6" Padding="2" Margin="0,0,10,0">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource Segment}" Content="{l:Tr 今天}"
+                                         IsChecked="{Binding Range, Converter={StaticResource EqualsTo}, ConverterParameter=day}" />
+                            <RadioButton Style="{StaticResource Segment}" Content="{l:Tr 近 7 天}"
+                                         IsChecked="{Binding Range, Converter={StaticResource EqualsTo}, ConverterParameter=week}" />
+                            <RadioButton Style="{StaticResource Segment}" Content="{l:Tr 本月}"
+                                         IsChecked="{Binding Range, Converter={StaticResource EqualsTo}, ConverterParameter=month}" />
+                            <RadioButton Style="{StaticResource Segment}" Content="{l:Tr 全部}"
+                                         IsChecked="{Binding Range, Converter={StaticResource EqualsTo}, ConverterParameter=all}" />
+                        </StackPanel>
+                    </Border>
+                    <ComboBox SelectedIndex="{Binding IntervalIndex}" MinWidth="96" Margin="0,0,10,0" ToolTip="{l:Tr 刷新间隔}">
+                        <ComboBoxItem Content="30s" />
+                        <ComboBoxItem Content="{l:Tr 1分钟}" />
+                        <ComboBoxItem Content="{l:Tr 5分钟}" />
+                        <ComboBoxItem Content="{l:Tr 10分钟}" />
+                    </ComboBox>
+                    <ui:Button Appearance="Primary" Command="{Binding ScanCommand}"
+                               Icon="{ui:SymbolIcon ArrowSync24}" Content="{Binding ScanButtonText}"
+                               IsEnabled="{Binding Scanning, Converter={StaticResource EqualsTo}, ConverterParameter=False}" />
+                </StackPanel>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{l:Tr 用量概览}" Style="{StaticResource Title}" />
+                    <TextBlock Text="{Binding UpdatedText}" Style="{StaticResource Tertiary}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="20" MaxWidth="1100">
+                <!-- 总览大卡 -->
+                <Border Style="{StaticResource Card}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Right" Style="{StaticResource SubtleCard}" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <StackPanel MinWidth="80">
+                                    <TextBlock Text="{l:Tr 用量记录数}" Style="{StaticResource Secondary}" />
+                                    <TextBlock Text="{Binding EventsText}" Style="{StaticResource Numeric}" FontSize="18" Foreground="#3B82F6" />
+                                </StackPanel>
+                                <Rectangle Width="1" Margin="14,2" Fill="{DynamicResource DividerStrokeColorDefaultBrush}" />
+                                <StackPanel MinWidth="100">
+                                    <TextBlock Text="{l:Tr 费用合计}" Style="{StaticResource Secondary}" />
+                                    <TextBlock Text="{l:Tr 含估算，非订阅账单}" Style="{StaticResource Tertiary}" />
+                                    <TextBlock Text="{Binding TotalCostText}" Style="{StaticResource Numeric}" FontSize="18" Foreground="#22A55B" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="46" Height="46" CornerRadius="12" Background="#1F3B82F6" Margin="0,0,16,0" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Flash24" Filled="True" FontSize="22" Foreground="#3B82F6" />
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{l:Tr 真实消耗 Tokens}" Style="{StaticResource Secondary}" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding TotalTokensText}" Style="{StaticResource Numeric}" FontSize="30" />
+                                <TextBlock Text="{Binding TotalTokensSub}" Style="{StaticResource Secondary}" Margin="10,0,0,6" VerticalAlignment="Bottom" />
+                            </StackPanel>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- 2×2 明细卡 -->
+                <ItemsControl ItemsSource="{Binding DetailCards}" Margin="-6,6,-6,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource Card}" Margin="6" Padding="14">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="8" Height="8" Fill="{Binding Tint}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Title}" Style="{StaticResource Secondary}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Value}" Style="{StaticResource Numeric}" FontSize="22" Margin="0,6,0,2" />
+                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Tertiary}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 缓存命中率 -->
+                <Border Style="{StaticResource Card}" Margin="0,6,0,0">
+                    <StackPanel>
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding HitRateText}" Foreground="#22A55B" FontWeight="SemiBold" />
+                            <TextBlock Text="{l:Tr 缓存命中率}" Style="{StaticResource Secondary}" />
+                        </DockPanel>
+                        <ProgressBar Value="{Binding HitRate, Mode=OneWay}" Maximum="100" Height="6" Margin="0,8,0,0" Foreground="#22A55B" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 使用趋势 -->
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,8">
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding RangeLabel}" Style="{StaticResource Tertiary}" VerticalAlignment="Center" />
+                            <TextBlock Text="{l:Tr 使用趋势}" Style="{StaticResource Title}" />
+                        </DockPanel>
+                        <StackPanel Visibility="{Binding HasTrend, Converter={StaticResource HiddenWhen}}" Height="160" VerticalAlignment="Center">
+                            <TextBlock Text="{l:Tr 暂无数据}" Style="{StaticResource Title}" HorizontalAlignment="Center" Margin="0,50,0,4" />
+                            <TextBlock Text="{l:Tr 点右上角「扫描」}" Style="{StaticResource Secondary}" HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Visibility="{Binding HasTrend, Converter={StaticResource VisibleWhen}}">
+                            <c:TrendChart Points="{Binding TrendPoints}" IsHourly="{Binding Range, Converter={StaticResource EqualsTo}, ConverterParameter=day}" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                                <Ellipse Width="7" Height="7" Fill="#EF4444" Margin="0,0,4,0" /><TextBlock Text="{l:Tr 成本}" Style="{StaticResource Tertiary}" Margin="0,0,14,0" />
+                                <Ellipse Width="7" Height="7" Fill="#F59E0B" Margin="0,0,4,0" /><TextBlock Text="{l:Tr 缓存创建}" Style="{StaticResource Tertiary}" Margin="0,0,14,0" />
+                                <Ellipse Width="7" Height="7" Fill="#A855F7" Margin="0,0,4,0" /><TextBlock Text="{l:Tr 缓存命中}" Style="{StaticResource Tertiary}" Margin="0,0,14,0" />
+                                <Ellipse Width="7" Height="7" Fill="#3B82F6" Margin="0,0,4,0" /><TextBlock Text="{l:Tr 非缓存输入}" Style="{StaticResource Tertiary}" Margin="0,0,14,0" />
+                                <Ellipse Width="7" Height="7" Fill="#22C55E" Margin="0,0,4,0" /><TextBlock Text="{l:Tr 输出}" Style="{StaticResource Tertiary}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 订阅配额 -->
+                <TextBlock Text="{l:Tr 订阅配额}" Style="{StaticResource Title}" Margin="0,20,0,4" />
+                <TextBlock Text="{l:Tr 官方配额为只读：登录令牌过期时显示本地估算，运行一次对应 CLI 后自动恢复。}" Style="{StaticResource Tertiary}" Margin="0,0,0,4" />
+                <TextBlock Text="{l:Tr 未配置配额}" Style="{StaticResource Secondary}"
+                           Visibility="{Binding HasQuotas, Converter={StaticResource HiddenWhen}}" />
+                <ItemsControl ItemsSource="{Binding QuotaCards}" Margin="-6,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource Card}" Margin="6" Padding="14">
+                                <DockPanel>
+                                    <c:QuotaRing DockPanel.Dock="Left" Width="46" Height="46" Pct="{Binding RingPct}" Role="{Binding RingRole}"
+                                                 VerticalAlignment="Top" Margin="0,0,14,0" />
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <Border DockPanel.Dock="Right" Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="8" Padding="6,1">
+                                                <TextBlock Text="{Binding Badge}" Style="{StaticResource Tertiary}" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource Primary}" FontWeight="SemiBold" />
+                                        </DockPanel>
+                                        <ItemsControl ItemsSource="{Binding Windows}" Margin="0,4,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <DockPanel Margin="0,1">
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Value}" Foreground="{Binding Brush}" FontSize="12" />
+                                                        <TextBlock Text="{Binding Label}" Style="{StaticResource Secondary}" />
+                                                    </DockPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="{Binding Note}" Style="{StaticResource Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                                   Visibility="{Binding HasNote, Converter={StaticResource VisibleWhen}}" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 模型榜 -->
+                <TextBlock Text="{l:Tr 模型榜}" Style="{StaticResource Title}" Margin="0,20,0,8" />
+                <TextBlock Text="{l:Tr 暂无数据}" Style="{StaticResource Secondary}"
+                           Visibility="{Binding HasModels, Converter={StaticResource HiddenWhen}}" />
+                <Border Style="{StaticResource Card}" Padding="4" Visibility="{Binding HasModels, Converter={StaticResource VisibleWhen}}">
+                    <ItemsControl ItemsSource="{Binding TopModels}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="10,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="24" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="80" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Rank}" Style="{StaticResource Tertiary}" VerticalAlignment="Center" />
+                                    <Ellipse Grid.Column="1" Width="8" Height="8" Fill="{Binding ToolBrush}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Text="{Binding DisplayModel}" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="3" Text="{Binding Tokens}" Style="{StaticResource Primary}" />
+                                    <TextBlock Grid.Column="4" Text="{Binding Cost}" Style="{StaticResource Secondary}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

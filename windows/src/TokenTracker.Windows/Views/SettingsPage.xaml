@@ -1,0 +1,88 @@
+<UserControl x:Class="TokenTracker.Windows.Views.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:l="clr-namespace:TokenTracker.Windows.Localization">
+    <UserControl.Resources>
+        <Style x:Key="Row" TargetType="DockPanel">
+            <Setter Property="Margin" Value="0,6" />
+            <Setter Property="LastChildFill" Value="True" />
+        </Style>
+    </UserControl.Resources>
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource PageHeader}">
+            <TextBlock Text="{l:Tr 设置}" Style="{StaticResource Title}" VerticalAlignment="Center" />
+        </Border>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="20" MaxWidth="760" HorizontalAlignment="Left" MinWidth="520">
+
+                <!-- 托盘 -->
+                <TextBlock Text="{l:Tr 托盘}" Style="{StaticResource Title}" Margin="0,0,0,8" />
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <ComboBox DockPanel.Dock="Right" MinWidth="220" ItemsSource="{Binding ProviderOptions}"
+                                      DisplayMemberPath="Label" SelectedValuePath="Id" SelectedValue="{Binding ProviderSetting}" />
+                            <TextBlock Text="{l:Tr 托盘提示显示}" Style="{StaticResource Primary}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding RingSetting}" />
+                            <TextBlock Text="{l:Tr 圆环显示配额}" Style="{StaticResource Primary}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding UnitYiSetting}" IsEnabled="{Binding IsChinese}" />
+                            <TextBlock Text="{l:Tr 大数以「亿」显示}" Style="{StaticResource Primary}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <TextBlock Text="{l:Tr 中文使用万／亿；英文使用 K/M/B。}" Style="{StaticResource Tertiary}" />
+                        <TextBlock Text="{l:Tr Windows 托盘只显示图标：圆环表示所选配额的最紧窗口，今日用量在鼠标悬停提示里。}"
+                                   Style="{StaticResource Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 通用 -->
+                <TextBlock Text="{l:Tr 通用}" Style="{StaticResource Title}" Margin="0,20,0,8" />
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <ComboBox DockPanel.Dock="Right" MinWidth="220" ItemsSource="{Binding LanguageOptions}"
+                                      DisplayMemberPath="Label" SelectedValuePath="Id" SelectedValue="{Binding LanguagePreference}" />
+                            <TextBlock Text="{l:Tr 语言 / Language}" Style="{StaticResource Primary}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding LaunchAtLoginSetting}" />
+                            <TextBlock Text="{l:Tr 开机自动启动}" Style="{StaticResource Primary}" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 数据 -->
+                <TextBlock Text="{l:Tr 数据}" Style="{StaticResource Title}" Margin="0,20,0,8" />
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <ui:Button Content="{l:Tr 在资源管理器中打开本地数据目录}" Icon="{ui:SymbolIcon FolderOpen24}" Click="OnOpenDataFolder" />
+                        <TextBlock Text="{l:Tr 原始用量日志始终只在本机读取和保存。设置保存在 %USERPROFILE%\\.tokentracker\\settings.json。}"
+                                   Style="{StaticResource Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 关于 -->
+                <TextBlock Text="{l:Tr 关于}" Style="{StaticResource Title}" Margin="0,20,0,8" />
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <DockPanel Style="{StaticResource Row}">
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding Version, StringFormat=v{0}}" Style="{StaticResource Secondary}" />
+                            <TextBlock Text="TokenTracker" Style="{StaticResource Primary}" />
+                        </DockPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <ui:Button Content="{l:Tr 检查更新}" Command="{Binding CheckUpdateCommand}" Margin="0,0,10,0" />
+                            <ui:HyperlinkButton Content="{l:Tr 打开发布页}" NavigateUri="{Binding ReleasesUrl}" Margin="0,0,10,0" />
+                            <ui:HyperlinkButton Content="{l:Tr 作者主页}" NavigateUri="https://sakuramu.edu.kg/" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding UpdateStatus}" Style="{StaticResource Secondary}" Margin="0,6,0,0"
+                                   Visibility="{Binding UpdateStatus, Converter={StaticResource VisibleWhen}}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

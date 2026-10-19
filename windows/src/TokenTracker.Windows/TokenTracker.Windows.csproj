@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>TokenTracker</AssemblyName>
+    <RootNamespace>TokenTracker.Windows</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\TokenTracker.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="H.NotifyIcon.Wpf" />
+    <PackageReference Include="WPF-UI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TokenTracker.Core\TokenTracker.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\TokenTracker.ico" />
+  </ItemGroup>
+
+</Project>
