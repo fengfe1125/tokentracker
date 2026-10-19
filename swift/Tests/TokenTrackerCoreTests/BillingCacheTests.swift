@@ -248,3 +248,17 @@ final class ProviderRetryPortTests: XCTestCase {
         XCTAssertEqual((goResult["_retry_after"] as? NSNumber)?.intValue, 300)
     }
 }
+
+/// 对齐 test_debug_log_rotates_once_over_limit：诊断日志超过上限只轮转一份旧档。
+final class CodexDebugLogTests: XCTestCase {
+    func testDebugLogRotatesOnceOverLimit() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("codex_debug.log")
+        let large = String(repeating: "x", count: CodexBilling.debugLogMaxBytes + 1)
+        CodexBilling.appendDebugLog(large, to: path)
+        CodexBilling.appendDebugLog("second\n", to: path)
+        CodexBilling.appendDebugLog("third\n", to: path)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "second\nthird\n")
+        XCTAssertEqual(try String(contentsOfFile: path + ".1", encoding: .utf8), large)
+    }
+}

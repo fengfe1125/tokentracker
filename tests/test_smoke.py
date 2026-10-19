@@ -15,6 +15,17 @@ os.environ["TOKENTRACKER_QUOTAS"] = os.path.join(_TMP, "quotas.json")
 from tokentracker import db, pricing  # noqa: E402
 
 
+class VersionTest(unittest.TestCase):
+    def test_python_version_matches_desktop_release(self):
+        import re
+        import tokentracker
+        core = os.path.join(os.path.dirname(__file__), "..", "swift", "Sources",
+                            "TokenTrackerCore", "TokenTrackerCore.swift")
+        with open(core, encoding="utf-8") as f:
+            swift_version = re.search(r'public static let version = "([^"]+)"', f.read()).group(1)
+        self.assertEqual(tokentracker.__version__, swift_version)
+
+
 class PricingTest(unittest.TestCase):
     def test_exact_provider_model_and_explicit_aliases(self):
         prices = {"schema_version": 1, "versions": [

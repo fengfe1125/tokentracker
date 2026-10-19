@@ -11,17 +11,22 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
 
 SCHEMA_VERSION = 6
+MIGRATION_BACKUPS_KEPT = 2
 _MIGRATION_LOCK = threading.Lock()
 TOKEN_COLUMNS = ("input", "output", "cache_read", "cache_write")
 TOKENS = "(input+output+cache_read+cache_write)"
 _ACTIVITY_KINDS = {"tool", "skill", "agent"}
 _ACTIVITY_LAYERS = {"execution", "request_fallback", "lifecycle"}
+# Completion lookups otherwise scan an agent's whole history (or the whole
+# table) for every tool result during a backfill.
+_ACTIVITY_CALL_INDEX = "CREATE INDEX IF NOT EXISTS idx_activity_call ON agent_activity_events(agent, call_id)"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_events (
     id INTEGER PRIMARY KEY, tool TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '',
@@ -78,6 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_agent_time ON agent_activity_events(agen
 CREATE INDEX IF NOT EXISTS idx_activity_session ON agent_activity_events(agent, session_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_activity_tool ON agent_activity_events(canonical_name, started_at);
 CREATE INDEX IF NOT EXISTS idx_activity_skill ON agent_activity_events(skill_name, started_at);
+CREATE INDEX IF NOT EXISTS idx_activity_call ON agent_activity_events(agent, call_id);
 """
 
 SCHEMA += """
@@ -108,6 +114,10 @@ def _upgrade(conn, path):
     if version > SCHEMA_VERSION:
         raise RuntimeError(f"Database version {version} is newer than supported {SCHEMA_VERSION}")
     if version == SCHEMA_VERSION:
+        # Same-version indexes stay readable by older builds, so they need no
+        # version bump or backup.
+        conn.execute(_ACTIVITY_CALL_INDEX)
+        conn.commit()
         return
     legacy = conn.execute("SELECT 1 FROM sqlite_master WHERE name='usage_events'").fetchone()
     if legacy:
@@ -180,6 +190,22 @@ def _upgrade(conn, path):
     except BaseException:
         conn.rollback()
         raise
+    if legacy:
+        _prune_migration_backups(path)
+
+
+def _prune_migration_backups(path):
+    """Keep only the newest automatic backups once an upgrade has committed.
+    Manually named copies never match the pattern and are left alone."""
+    directory, name = os.path.split(os.path.abspath(path))
+    pattern = re.compile(re.escape(name) + r"\.v\d+\.backup-\d+\.db")
+    try:
+        backups = [os.path.join(directory, f) for f in os.listdir(directory) if pattern.fullmatch(f)]
+        backups.sort(key=os.path.getmtime, reverse=True)
+        for old in backups[MIGRATION_BACKUPS_KEPT:]:
+            os.remove(old)
+    except OSError:
+        pass
 
 
 def _validate_residual_activity_table(conn):
@@ -220,7 +246,9 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version != SCHEMA_VERSION:
+        missing_index = version == SCHEMA_VERSION and not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_activity_call'").fetchone()
+        if version != SCHEMA_VERSION or missing_index:
             with _MIGRATION_LOCK:
                 if path == ":memory:":
                     _upgrade(conn, path)

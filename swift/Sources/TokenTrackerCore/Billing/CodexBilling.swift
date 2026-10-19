@@ -137,8 +137,9 @@ public struct CodexBilling {
                     "\(home)/.bun/bin", "\(home)/Library/pnpm", "\(home)/.yarn/bin",
                     "/opt/homebrew/bin", "/usr/local/bin"]
         let nvm = "\(home)/.nvm/versions/node"
+        // 按数字比较，v22 排在 v9 之后（对齐 _numeric_version_key）
         if let vers = try? FileManager.default.contentsOfDirectory(atPath: nvm),
-           let latest = vers.sorted().last {
+           let latest = vers.max(by: { $0.compare($1, options: .numeric) == .orderedAscending }) {
             dirs.insert("\(nvm)/\(latest)/bin", at: 0)
         }
         let existing = dirs.filter { FileManager.default.fileExists(atPath: $0) }
@@ -146,7 +147,8 @@ public struct CodexBilling {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binPath)
-        process.arguments = ["-s", "read-only", "-a", "untrusted", "app-server"]
+        // 新版 codex-cli 的 -a 只接受 on-request/never；untrusted 会直接 code 2 退出。
+        process.arguments = ["-s", "read-only", "-a", "never", "app-server"]
         process.environment = env
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -248,18 +250,31 @@ public struct CodexBilling {
     /// 失败诊断落盘：~/.tokentracker/codex_debug.log
     private func debugLog(_ error: Error, binPath: String) {
         let path = ctx.home + "/.tokentracker/codex_debug.log"
-        try? FileManager.default.createDirectory(
-            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         let lines = "[\(fmt.string(from: Date()))] \(String(describing: error))\n"
             + "  bin=\(binPath)\n"
+        Self.appendDebugLog(lines, to: path)
+    }
+
+    static let debugLogMaxBytes = 256 * 1024
+
+    /// 追加诊断；超过上限先轮转为 .1（只留一份旧档），避免反复失败时无限增长。
+    static func appendDebugLog(_ text: String, to path: String) {
+        let fm = FileManager.default
+        try? fm.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, size > debugLogMaxBytes {
+            let rotated = path + ".1"
+            try? fm.removeItem(atPath: rotated)
+            try? fm.moveItem(atPath: path, toPath: rotated)
+        }
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
-            handle.write(Data(lines.utf8))
+            handle.write(Data(text.utf8))
             try? handle.close()
         } else {
-            FileManager.default.createFile(atPath: path, contents: Data(lines.utf8))
+            fm.createFile(atPath: path, contents: Data(text.utf8))
         }
     }
 

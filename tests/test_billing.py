@@ -558,3 +558,25 @@ class BillingCacheTest(unittest.TestCase):
             saved = json.load(f)
         self.assertEqual(set(saved), {str(i) for i in range(5)})
         self.assertTrue(all(record[1]["sequence"] == 14 for record in saved.values()))
+
+
+class CodexSpawnHelpersTest(unittest.TestCase):
+    def test_debug_log_rotates_once_over_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "codex_debug.log")
+            with patch.object(billing, "_DEBUG_LOG_MAX_BYTES", 10):
+                billing._append_debug_log(path, "first entry\n")
+                billing._append_debug_log(path, "second\n")
+                billing._append_debug_log(path, "third\n")
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "second\nthird\n")
+            with open(path + ".1", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "first entry\n")
+
+    def test_nvm_prefers_highest_numeric_node_version(self):
+        with tempfile.TemporaryDirectory() as home:
+            for version in ("v9.11.2", "v22.11.0", "v18.20.4"):
+                os.makedirs(os.path.join(home, ".nvm", "versions", "node", version, "bin"))
+            with patch.dict(os.environ, {"HOME": home}):
+                dirs = billing._extra_bin_dirs()
+        self.assertEqual(dirs[0], os.path.join(home, ".nvm", "versions", "node", "v22.11.0", "bin"))
