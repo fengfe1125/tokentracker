@@ -22,6 +22,7 @@ final class AppState: ObservableObject {
     // 状态栏数据
     @Published var today: MenuBarToday?
     @Published var quotaEntries: [MenuBarQuotaEntry] = []
+    @Published var subscriptionCards: [SubscriptionCard] = []
     @Published var scanning = false
     @Published var lastScan: ScanSchedulerStatus.Last?
 
@@ -94,6 +95,7 @@ final class AppState: ObservableObject {
     private var dataGeneration = 0
     private var sessionsGeneration = 0
     private var quotaBusy = false
+    private var subscriptionService: SubscriptionService?
     private let quotaQueue = DispatchQueue(label: "tokentracker.quotas")
     private let detailQueue = DispatchQueue(label: "tokentracker.details")
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
@@ -147,6 +149,7 @@ final class AppState: ObservableObject {
         scanRoots = ScanRoots()
         accountSwitcher = preview ? CodexAccountSwitcher(ctx: BillingContext(home:previewHome,env:["CODEX_HOME":previewHome+"/.codex"])) : CodexAccountSwitcher()
         self.officialQuotaService = preview ? nil : officialQuotaService
+        self.subscriptionService = preview ? nil : SubscriptionService()
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
         let priceStatus = PriceCatalogDocument.load(from: priceCatalogPath)
@@ -512,6 +515,10 @@ final class AppState: ObservableObject {
     func refreshQuotas() {
         guard !quotaBusy else { return }
         quotaBusy = true
+        if let subscriptionService {
+            let cards = subscriptionService.refresh()
+            DispatchQueue.main.async { self.subscriptionCards = cards }
+        }
         let accountID = activeCodexAccountID ?? "unknown"
         let path = readStore.path
         let officialService = officialQuotaService
@@ -552,6 +559,14 @@ final class AppState: ObservableObject {
             } catch {
                 DispatchQueue.main.async { self.quotaBusy = false }
             }
+        }
+    }
+
+    func refreshSubscriptions() {
+        guard let service = subscriptionService else { return }
+        quotaQueue.async { [weak self] in
+            let cards = service.refresh()
+            DispatchQueue.main.async { self?.subscriptionCards = cards }
         }
     }
 

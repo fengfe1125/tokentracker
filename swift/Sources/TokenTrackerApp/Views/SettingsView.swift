@@ -67,6 +67,11 @@ struct SettingsPanelView: View {
                     .disabled(L10n.isEnglish)
                 Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
             }
+            Section(L10n.text("订阅配额")) {
+                Button(L10n.text("重新发现本机账号")) { state.refreshSubscriptions() }
+                Text(L10n.text("只读取已知本机配置和钥匙串；不会扫描浏览器、执行配置脚本或替换其他工具登录态。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section(L10n.text("刘海圆环")) {
                 Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
                 Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {

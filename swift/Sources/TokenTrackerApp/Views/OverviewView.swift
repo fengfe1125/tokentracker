@@ -297,22 +297,54 @@ struct OverviewView: View {
 
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.text("订阅配额"))
-                .font(.headline)
-            if state.quotaEntries.isEmpty {
-                Text(L10n.text("未配置配额"))
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
+            Text(L10n.text("订阅配额与余额")).font(.headline)
+            if state.subscriptionCards.isEmpty {
+                Text(L10n.text("未发现本机订阅配置")).foregroundStyle(.secondary).font(.callout)
             } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
-                                    GridItem(.flexible(), spacing: 12)],
-                          spacing: 12) {
-                    ForEach(state.quotaEntries, id: \.id) { entry in
-                        QuotaCard(entry: entry)
-                    }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(state.subscriptionCards) { card in SubscriptionCardView(card: card) }
                 }
             }
         }
+    }
+
+    private struct SubscriptionCardView: View {
+        let card: SubscriptionCard
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(card.account.providerName).font(.callout.weight(.semibold))
+                    Spacer()
+                    Text(card.snapshot.status.label).font(.caption2).foregroundStyle(statusColor)
+                }
+                Text(card.account.displayLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if !card.snapshot.plan.isEmpty { Text(card.snapshot.plan).font(.caption2).foregroundStyle(.secondary) }
+                if !card.snapshot.balances.isEmpty {
+                    ForEach(card.snapshot.balances) { balance in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("余额 · \(balance.currency)").font(.caption).foregroundStyle(.secondary)
+                            Text(decimal(balance.total)).font(.title3.monospacedDigit())
+                            Text("赠送 \(decimal(balance.granted)) · 充值 \(decimal(balance.toppedUp))").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                } else if card.snapshot.windows.isEmpty {
+                    Text(card.snapshot.message.isEmpty ? "—" : card.snapshot.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else {
+                    ForEach(card.snapshot.windows) { window in
+                        HStack {
+                            Text(window.label).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if let pct = window.usedPercent { Text("已用 \(pct, specifier: "%.0f")%") .font(.caption.monospacedDigit()) } else { Text("—").font(.caption.monospacedDigit()) }
+                        }
+                    }
+                }
+                if let sampled = card.snapshot.sampledAt { Text("更新于 \(sampled.formatted(date: .omitted, time: .shortened))") .font(.caption2).foregroundStyle(.tertiary) }
+            }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 150, alignment: .top)
+            .background(.background).clipShape(RoundedRectangle(cornerRadius: 10)).shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        }
+        private var statusColor: Color { switch card.snapshot.status { case .current: return .green; case .stale: return .orange; case .signedOut,.expired,.forbidden,.failed,.unsupported: return .secondary; case .loading: return .secondary } }
+        private func decimal(_ d: Decimal?) -> String { d.map { NSDecimalNumber(decimal: $0).stringValue } ?? "—" }
     }
 
     // -------------------------------------------------------- 模型榜 ----

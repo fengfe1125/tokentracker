@@ -590,3 +590,6 @@
 "验收记录仅对应列出的版本，不代表当前会话已连接或其他版本已验收。" = "Validation applies only to the listed versions. It does not establish a current connection or validation of other versions.";
 
 "仅显示 Token 数字" = "Token numbers only";
+"重新发现本机账号" = "Rediscover local accounts";
+"订阅配额" = "Subscription quota";
+"只读取已知本机配置和钥匙串；不会扫描浏览器、执行配置脚本或替换其他工具登录态。" = "Reads known local config and Keychain only; does not scan browser cookies, execute config scripts, or replace another tool's login.";
