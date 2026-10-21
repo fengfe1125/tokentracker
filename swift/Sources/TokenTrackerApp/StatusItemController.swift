@@ -69,7 +69,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         appState.settings["menubar_provider"] as? String ?? MenuBarFmt.defaultProvider
     }
     private var compact: Bool { (appState.settings["menubar_compact"] as? NSNumber)?.boolValue ?? false }
-    private var ring: Bool { (appState.settings["menubar_ring"] as? NSNumber)?.boolValue ?? true }
+    private var ring: Bool { provider != "tokens" && ((appState.settings["menubar_ring"] as? NSNumber)?.boolValue ?? true) }
     private var yi: Bool { (appState.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
     // ------------------------------------------------------------ 颜色 ----
@@ -179,7 +179,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// 因此只在内容或动画值变化时才写 button。
     func render(spin: Int? = nil, flash: Double? = nil, pulse: Double? = nil) {
         guard let button = statusItem?.button else { return }
-        if appState.scanning {
+        if appState.scanning && provider != "tokens" {
             let frame = spin.map(MenuBarFmt.spinnerFrame) ?? "⟳"
             let plain = L10n.text("\(frame) 扫描中…")
             let key = "\(plain)|\(spin ?? -1)"
@@ -422,7 +422,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func recreateStatusItem() {
         let old = statusItem
         statusItem = nil
-        old?.isVisible = false
+        if let old { NSStatusBar.system.removeStatusItem(old) }
         install()
         lastPlain = nil
         lastAnimKey = nil
@@ -509,6 +509,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         if !appState.quotaEntries.isEmpty { sub.addItem(.separator()) }
         addProviderItem(sub, pid: "off", title: L10n.text("仅今日用量"), dot: "dot_off")
+        addProviderItem(sub, pid: "tokens", title: L10n.text("仅显示 Token 数字"), dot: nil)
         displayItem?.submenu = sub
     }
 

@@ -168,6 +168,10 @@ extension MenuBarFmt {
     public static func fmtSegments(today: MenuBarToday?, entries: [MenuBarQuotaEntry]?,
                                    provider: String?, compact: Bool = false,
                                    yi: Bool = false, ring: Bool = false) -> [MenuBarSegment] {
+        if provider == "tokens" {
+            return [MenuBarSegment(today.map { fmtTokens(Double($0.tokens), yi: yi) } ?? "—",
+                                   today == nil ? "dim" : "tokens")]
+        }
         let sep = compact ? "" : " "
         let lead = ring ? "" : sep     // 圆环模式下图标与标题的间距由 AppKit 排版负责
         var segs: [MenuBarSegment] = ring ? [] : [MenuBarSegment("⚡", "bolt")]

@@ -217,3 +217,17 @@ final class YiFormatPortTests: XCTestCase {
             .contains(MenuBarSegment("3.30亿", "tokens")))
     }
 }
+
+final class TokenNumbersOnlyTests: XCTestCase {
+    func testNumbersOnlyIgnoresQuotaAndDecorations() {
+        for ring in [false, true] {
+            let parts = MenuBarFmt.fmtSegments(today: .init(tokens: 1234, cost: 99),
+                entries: [entry("codex", pct: 95)], provider: "tokens", ring: ring)
+            XCTAssertEqual(parts, [MenuBarSegment(MenuBarFmt.fmtTokens(1234), "tokens")])
+        }
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: nil, entries: nil, provider: "tokens"), "—")
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: .init(tokens: 0, cost: 0), entries: nil,
+                                         provider: "tokens"), "0")
+        XCTAssertTrue(SettingsStore.isValid(key: "menubar_provider", value: "tokens"))
+    }
+}

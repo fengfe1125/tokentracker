@@ -588,3 +588,5 @@
 "验收记录：Codex 桌面 26.1007.71326 / 引擎 0.162.0-alpha.17.2" = "Validated: Codex desktop 26.1007.71326 / engine 0.162.0-alpha.17.2";
 "验收记录：Claude 桌面 2.37337.1 / 引擎 2.1.295" = "Validated: Claude desktop 2.37337.1 / engine 2.1.295";
 "验收记录仅对应列出的版本，不代表当前会话已连接或其他版本已验收。" = "Validation applies only to the listed versions. It does not establish a current connection or validation of other versions.";
+
+"仅显示 Token 数字" = "Token numbers only";

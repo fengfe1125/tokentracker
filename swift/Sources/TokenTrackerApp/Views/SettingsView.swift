@@ -58,8 +58,10 @@ struct SettingsPanelView: View {
                         LocalizedText("今日用量 + \(entry.name)").tag(entry.id)
                     }
                     Text(L10n.text("仅今日用量")).tag("off")
+                    Text(L10n.text("仅显示 Token 数字")).tag("tokens")
                 }
                 Toggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
+                    .disabled(provider == "tokens")
                 Toggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
                 Toggle(L10n.text("大数以「亿」显示"), isOn: binding("unit_yi"))
                     .disabled(L10n.isEnglish)
