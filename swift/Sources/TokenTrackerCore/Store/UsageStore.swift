@@ -795,10 +795,13 @@ public final class UsageStore {
             }
     }
 
-    public struct ModelRow: Equatable, Sendable {
+    public struct ModelRow: Equatable, Sendable, Identifiable {
         public var tool: String
         public var model: String
         public var stats: ToolStats
+
+        // Match the query's GROUP BY tool,model: model names can span tools.
+        public var id: [String] { [tool, model] }
     }
 
     public func models(rangeKey: String = "all", tool: String? = nil) throws -> [ModelRow] {

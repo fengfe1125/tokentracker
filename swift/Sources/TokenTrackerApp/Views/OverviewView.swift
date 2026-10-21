@@ -328,7 +328,7 @@ struct OverviewView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(state.modelRows.prefix(10).enumerated()),
-                            id: \.element.model) { index, row in
+                            id: \.element.id) { index, row in
                         HStack {
                             Text("\(index + 1)")
                                 .font(.caption)
