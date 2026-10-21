@@ -30,6 +30,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window.minSize = NSSize(width: 820, height: 520)
             window.styleMask.formUnion([.miniaturizable, .resizable])
             window.isReleasedWhenClosed = false     // 关闭只隐藏
+            window.isRestorable = false             // 启动显示由 AppLaunchPolicy 管理
             window.delegate = self
             self.window = window
         }

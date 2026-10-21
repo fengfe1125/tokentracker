@@ -33,6 +33,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FileHandle.standardError.write(Data("[tt] \(message)\n".utf8))
     }
 
+    // MainWindowController owns launch/reopen presentation. In a Settings-only
+    // SwiftUI scene, AppKit's default window creation/restoration can otherwise
+    // bring back Settings alongside the dashboard (or during a login launch).
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldRestoreApplicationState(_ app: NSApplication, coder: NSCoder) -> Bool { false }
+
+    func applicationShouldSaveApplicationState(_ app: NSApplication, coder: NSCoder) -> Bool { false }
+
+    func applicationShouldRestoreSecureApplicationState(_ app: NSApplication, coder: NSCoder) -> Bool { false }
+
+    func applicationShouldSaveSecureApplicationState(_ app: NSApplication, coder: NSCoder) -> Bool { false }
+
     func applicationDidFinishLaunching(_: Notification) {
         let showOnLaunch = AppLaunchPolicy.showsMainWindow(for: NSAppleEventManager.shared().currentAppleEvent)
         dbg("AppDelegate.start")
@@ -145,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow?.show()
     }
 
-    private func openSettings() {
+    func openSettings() {
         showMainPanel()
         appState.selection = .settings
     }

@@ -495,14 +495,3 @@ struct SettingsPanelView: View {
         }
     }
 }
-
-/// 供 Settings 场景使用（⌘,）：与主面板设置页同一份实现。
-struct SettingsSceneView: View {
-    @ObservedObject private var language = LanguageManager.shared
-    @ObservedObject var state: AppState
-
-    var body: some View {
-        SettingsPanelView(state: state)
-            .frame(width: 520, height: 560)
-    }
-}
