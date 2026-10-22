@@ -259,13 +259,13 @@ enum SubscriptionText {
 
     static func problem(_ snapshot: SubscriptionSnapshot) -> String? {
         guard let problem = snapshot.problem else {
-            return snapshot.status == .signedOut ? L10n.text("未找到可用登录态，请在来源工具中登录") : nil
+            return snapshot.status == .signedOut ? L10n.text("未找到可用凭据，请在设置中重新登录") : nil
         }
         let text: String
         switch problem {
-        case .noCredential: text = L10n.text("未找到可用登录态，请在来源工具中登录")
-        case .credentialExpired: text = L10n.text("登录态已过期，打开来源工具后会自动续期")
-        case .unauthorized: text = L10n.text("凭据失效，请在来源工具中重新登录")
+        case .noCredential: text = L10n.text("未找到可用凭据，请在设置中重新登录")
+        case .credentialExpired: text = L10n.text("登录已过期且无法自动续期，请在设置中重新登录")
+        case .unauthorized: text = L10n.text("凭据失效，请在设置中重新登录")
         case .forbidden: text = L10n.text("账号没有读取额度的权限")
         case .rateLimited: text = L10n.text("接口限流，稍后自动重试")
         case .timeout: text = L10n.text("请求超时，稍后自动重试")
@@ -292,8 +292,15 @@ enum SubscriptionText {
 
     static func sources(_ sources: [SubscriptionSource]) -> String {
         guard let first = sources.first else { return "" }
-        let builtins: Set<String> = ["钥匙串", "已保存的 Codex 账号", "环境变量", "自定义目录"]
-        func text(_ value: String) -> String { builtins.contains(value) ? L10n.label(value) : value }
+        let builtins: Set<String> = ["自有登录", "手动添加"]
+        func text(_ value: String) -> String {
+            if builtins.contains(value) { return L10n.label(value) }
+            if value.hasPrefix("导入自 ") {
+                let from = String(value.dropFirst(4))
+                return L10n.text("导入自 \(from == "本机配置" ? L10n.label(from) : from)")
+            }
+            return value
+        }
         let main = text(first.tool) + " · " + text(first.location)
         return sources.count > 1 ? L10n.text("来源：\(L10n.Template(verbatim: main)) 等 \(sources.count) 处")
             : L10n.text("来源：\(L10n.Template(verbatim: main))")

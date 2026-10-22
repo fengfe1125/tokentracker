@@ -2,10 +2,11 @@
 //  SubscriptionService.swift
 //  TokenTrackerCore
 //
-//  发现 + 查询调度：成功结果缓存 5 分钟；单请求 15 秒超时；最多 4 个并发；
-//  遵守 Retry-After；账号独立缓存，单家失败不阻塞其他卡片。失败时可展示
-//  24 小时内的上一份官方结果并标注过期，超过期限只显示状态。登录态变化
-//  （凭据指纹改变）立即失效该账号缓存。
+//  查询调度：账号只来自 TokenTracker 自己的账号库（自有登录与用户添加/导入的
+//  API Key），不读取其他软件的配置。会话临近过期时由 TokenTracker 自行续期。
+//  成功结果缓存 5 分钟；单请求 15 秒超时；最多 4 个并发；遵守 Retry-After；
+//  账号独立缓存，单家失败不阻塞其他卡片。失败时可展示 24 小时内的上一份官方
+//  结果并标注过期。重新登录（新的账号记录）即为新缓存。
 //
 
 import Foundation
@@ -23,48 +24,74 @@ public final class SubscriptionService: @unchecked Sendable {
         var nextAttempt: Date
     }
 
-    private let discovery: SubscriptionDiscovery
+    private let store: SubscriptionAccountStore
     private let transport: SubscriptionTransport
     private let clock: () -> Date
     private let cachePath: String?
     private let lock = NSLock()
     private var accounts: [SubscriptionAccount] = []
+    private var stored: [String: StoredSubscriptionAccount] = [:]
     private var entries: [String: Entry] = [:]
     private var inFlight: Set<String> = []
 
-    public convenience init(home: String = NSHomeDirectory(),
-                            env: [String: String] = ProcessInfo.processInfo.environment,
+    public convenience init(store: SubscriptionAccountStore = SubscriptionAccountStore(),
                             transport: @escaping SubscriptionTransport = SubscriptionHTTP.live,
                             cachePath: String? = NSHomeDirectory() + "/.tokentracker/subscription_cache.json") {
-        self.init(discovery: SubscriptionDiscovery(home: home, env: env), transport: transport,
-                  cachePath: cachePath, clock: Date.init)
+        self.init(store: store, transport: transport, cachePath: cachePath, clock: Date.init)
     }
 
-    init(discovery: SubscriptionDiscovery, transport: @escaping SubscriptionTransport,
+    init(store: SubscriptionAccountStore, transport: @escaping SubscriptionTransport,
          cachePath: String?, clock: @escaping () -> Date) {
-        self.discovery = discovery
+        self.store = store
         self.transport = transport
         self.cachePath = cachePath
         self.clock = clock
         loadPersisted()
     }
 
-    // ------------------------------------------------------------ 发现 ----
+    public var accountStore: SubscriptionAccountStore { store }
 
-    /// 重新发现本机账号；返回账号或登录态是否变化。
+    // ------------------------------------------------------------ 账号 ----
+
+    /// 重新读取账号库；返回账号是否变化。
     @discardableResult
-    public func discover(extraDirectories: [String] = []) -> Bool {
-        let found = discovery.discover(extraDirectories: extraDirectories)
+    public func discover() -> Bool {
+        let records = store.load()
+        let found = Self.accounts(records)
         lock.lock(); defer { lock.unlock() }
+        stored = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         guard found != accounts else { return false }
         accounts = found
-        // 登录态变化：指纹不同的旧条目（含过期备份）一并丢弃。
-        for account in found {
-            if let entry = entries[account.id], entry.fingerprint != Self.fingerprint(account) {
-                entries[account.id] = nil
-            }
-        }
+        let ids = Set(found.map(\.id))
+        entries = entries.filter { ids.contains($0.key) }
         return true
+    }
+
+    static func accountID(_ record: StoredSubscriptionAccount) -> String {
+        record.provider.rawValue + ":" + record.id
+    }
+
+    /// 账号库记录 → 展示账号。菜单栏账号：用户指定的那个；未指定且该供应商只有一个账号时就是它。
+    static func accounts(_ records: [StoredSubscriptionAccount]) -> [SubscriptionAccount] {
+        records.map { record in
+            let siblings = records.filter { $0.provider == record.provider }
+            let chosen = siblings.contains { $0.menuBar }
+            let location: String
+            switch record.origin {
+            case .login: location = "自有登录"
+            case .manual: location = "手动添加"
+            case .imported: location = "导入自 " + (record.importedFrom ?? "本机配置")
+            }
+            var account = SubscriptionAccount(
+                provider: record.provider, label: record.label,
+                source: SubscriptionSource(tool: "TokenTracker", location: location),
+                isActive: chosen ? record.menuBar : siblings.count == 1,
+                credential: record.credential, providerAccountID: record.accountID,
+                discoveryProblem: record.provider == .zenFree ? .freeModel : nil)
+            account.id = accountID(record)
+            return account
+        }.sorted { SubscriptionCard.ordered(SubscriptionCard(account: $0, snapshot: .init(status: .loading)),
+                                            SubscriptionCard(account: $1, snapshot: .init(status: .loading))) }
     }
 
     // ------------------------------------------------------------ 查询 ----
@@ -90,8 +117,7 @@ public final class SubscriptionService: @unchecked Sendable {
         for account in due {
             queue.addOperation { [self] in
                 let started = clock()
-                let snapshot = SubscriptionAdapters.fetch(account, SubscriptionFetchContext(
-                    transport: transport, now: started, env: discovery.env))
+                let snapshot = fetch(account, at: started)
                 lock.lock()
                 inFlight.remove(account.id)
                 var entry = entries[account.id].flatMap { $0.fingerprint == Self.fingerprint(account) ? $0 : nil }
@@ -111,6 +137,37 @@ public final class SubscriptionService: @unchecked Sendable {
         queue.waitUntilAllOperationsAreFinished()
     }
 
+    /// 续期（需要时）→ 查询；401 时用刷新令牌再试一次。刷新结果写回账号库。
+    private func fetch(_ account: SubscriptionAccount, at now: Date) -> SubscriptionSnapshot {
+        lock.lock(); var record = stored[String(account.id.split(separator: ":", maxSplits: 1).last ?? "")]; lock.unlock()
+        var current = account
+        func renew() -> SubscriptionAuth.RefreshResult {
+            guard var updated = record else { return .notNeeded }
+            let result = SubscriptionAuth.refresh(&updated, now: now, transport: transport)
+            if result == .refreshed {
+                try? store.updateTokens(updated)
+                record = updated
+                current.credential = updated.credential
+                lock.lock(); stored[updated.id] = updated; lock.unlock()
+            }
+            return result
+        }
+        var renewed = false
+        if let r = record, SubscriptionAuth.needsRefresh(r, now: now) {
+            switch renew() {
+            case .refreshed: renewed = true
+            case .rejected: return .failure(.expired, .unauthorized)
+            case .failed, .notNeeded: break
+            }
+        }
+        let context = SubscriptionFetchContext(transport: transport, now: now)
+        var snapshot = SubscriptionAdapters.fetch(current, context)
+        if snapshot.problem == .unauthorized, !renewed, record?.refreshToken != nil, renew() == .refreshed {
+            snapshot = SubscriptionAdapters.fetch(current, context)
+        }
+        return snapshot
+    }
+
     static func nextAttempt(after snapshot: SubscriptionSnapshot, at time: Date) -> Date {
         var next = time.addingTimeInterval(ttl)
         if snapshot.problem == .network || snapshot.problem == .timeout {
@@ -120,8 +177,9 @@ public final class SubscriptionService: @unchecked Sendable {
         return next
     }
 
+    /// 账号记录 id 稳定（自行续期不改变）；重新登录生成新记录。
     static func fingerprint(_ account: SubscriptionAccount) -> String {
-        account.credential?.fingerprint ?? "none:" + (account.discoveryProblem?.rawValue ?? "")
+        account.id + ":" + (account.discoveryProblem?.rawValue ?? "")
     }
 
     // ------------------------------------------------------------ 展示 ----

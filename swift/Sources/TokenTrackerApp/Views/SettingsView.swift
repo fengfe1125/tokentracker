@@ -67,33 +67,7 @@ struct SettingsPanelView: View {
                     .disabled(L10n.isEnglish)
                 Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
             }
-            Section(L10n.text("订阅配额与余额")) {
-                HStack {
-                    Button(L10n.text("重新发现")) { state.refreshQuotas(force: true) }
-                        .disabled(state.subscriptionRefreshing)
-                    Button(L10n.text("添加配置目录…")) { chooseSubscriptionDirectory() }
-                    if state.subscriptionRefreshing { ProgressView().controlSize(.small) }
-                }
-                ForEach(state.subscriptionDirectories, id: \.self) { path in
-                    HStack {
-                        Text(path).font(.caption).textSelection(.enabled)
-                        Spacer()
-                        Button(L10n.text("移除")) { state.removeSubscriptionDirectory(path) }
-                            .buttonStyle(.borderless)
-                    }
-                }
-                ForEach(state.subscriptionCards) { card in
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(card.account.provider.displayName)
-                        Text(SubscriptionText.account(card.account)).foregroundStyle(.secondary)
-                        Spacer()
-                        Text(SubscriptionText.status(card.snapshot.status)).foregroundStyle(.secondary)
-                    }
-                    .font(.caption)
-                }
-                Text(L10n.text("只读取已知本机配置和钥匙串；不会扫描浏览器、执行配置脚本或替换其他工具登录态。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            SubscriptionAccountsSection(state: state)
             Section(L10n.text("刘海圆环")) {
                 Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
                 Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
@@ -226,17 +200,6 @@ struct SettingsPanelView: View {
         } message: {
             Text(L10n.text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。"))
         }
-    }
-
-    private func chooseSubscriptionDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.showsHiddenFiles = true
-        panel.prompt = L10n.text("添加")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        state.addSubscriptionDirectory(url.path)
     }
 
     private var notchProviders: [MenuBarQuotaEntry] {

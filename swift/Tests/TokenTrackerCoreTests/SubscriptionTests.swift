@@ -305,18 +305,20 @@ final class SubscriptionTests: XCTestCase {
 
     // ---------------------------------------------------------- 服务 ----
 
-    private func service(_ fake: FakeTransport, clock: Clock, env: [String: String] = [:],
-                         cachePath: String? = nil) -> SubscriptionService {
-        SubscriptionService(discovery: discovery(env: env), transport: fake.transport, cachePath: cachePath,
-                            clock: { clock.now })
+    private var storePath: String { home.appendingPathComponent(".tokentracker/subscription_accounts.json").path }
+    private var store: SubscriptionAccountStore { SubscriptionAccountStore(path: storePath) }
+
+    private func service(_ fake: FakeTransport, clock: Clock, cachePath: String? = nil) -> SubscriptionService {
+        SubscriptionService(store: store, transport: fake.transport, cachePath: cachePath, clock: { clock.now })
     }
 
     private let goOK = SubscriptionResponse(status: 200, json: ["usage": ["rolling": ["percent": 25]]])
 
-    func testCachesFiveMinutesAndInvalidatesOnLoginChange() throws {
+    func testCachesFiveMinutesAndNewSignInStartsFresh() throws {
         let clock = Clock()
-        let fake = FakeTransport { [goOK] _ in goOK }
-        try write(".local/share/opencode/auth.json", ["opencode-go": ["type": "api", "key": "go-1"]])
+        let goOK = self.goOK
+        let fake = FakeTransport { _ in goOK }
+        let first = try store.addAPIKey(provider: .go, key: "go-1")
         let s = service(fake, clock: clock)
         s.discover()
         XCTAssertEqual(s.cards().first?.snapshot.status, .loading)
@@ -325,10 +327,11 @@ final class SubscriptionTests: XCTestCase {
         clock.now += 60
         s.refresh()
         XCTAssertEqual(fake.count, 1, "5 分钟内使用缓存")
-        // 登录态变化：立即失效并重新查询。
-        try write(".local/share/opencode/auth.json", ["opencode-go": ["type": "api", "key": "go-2"]])
+        try store.remove(id: first.id)
+        try store.addAPIKey(provider: .go, key: "go-2")
         XCTAssertTrue(s.discover())
-        XCTAssertEqual(s.cards().first?.snapshot.status, .loading)
+        XCTAssertEqual(s.cards().count, 1)
+        XCTAssertEqual(s.cards().first?.snapshot.status, .loading, "新账号记录不沿用旧缓存")
         s.refresh()
         XCTAssertEqual(fake.count, 2)
         XCTAssertEqual(fake.requests.last?.headers["Authorization"], "Bearer go-2")
@@ -337,12 +340,23 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertEqual(fake.count, 3)
     }
 
+    func testOnlyStoredAccountsAreQueriedNeverOtherAppsConfigs() throws {
+        try write(".local/share/opencode/auth.json", ["opencode-go": ["type": "api", "key": "foreign-key"]])
+        try write(".codex/auth.json", ["tokens": ["access_token": "foreign-codex", "account_id": "x"]])
+        let fake = FakeTransport { _ in SubscriptionResponse(status: 200) }
+        let s = service(fake, clock: Clock())
+        s.discover()
+        s.refresh()
+        XCTAssertTrue(s.cards().isEmpty)
+        XCTAssertEqual(fake.count, 0)
+    }
+
     func testStaleWithin24HoursThenStatusOnly() throws {
         let clock = Clock()
         var fail = false
         let goOK = self.goOK
         let fake = FakeTransport { _ in fail ? SubscriptionResponse(status: 0, failure: .network) : goOK }
-        try write(".local/share/opencode/auth.json", ["opencode-go": ["type": "api", "key": "go-1"]])
+        try store.addAPIKey(provider: .go, key: "go-1")
         let cache = home.appendingPathComponent("cache.json").path
         let s = service(fake, clock: clock, cachePath: cache)
         s.discover()
@@ -354,9 +368,8 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertEqual(card.snapshot.status, .stale)
         XCTAssertEqual(card.snapshot.problem, .network)
         XCTAssertEqual(card.snapshot.windows.first?.usedPercent, 25)
-        // 重启后仍可展示过期结果；缓存不含凭据。
         let text = try String(contentsOfFile: cache, encoding: .utf8)
-        XCTAssertFalse(text.contains("go-1"))
+        XCTAssertFalse(text.contains("go-1"), "缓存不含凭据")
         let restarted = service(fake, clock: clock, cachePath: cache)
         restarted.discover()
         XCTAssertEqual(restarted.cards().first?.snapshot.status, .stale)
@@ -370,7 +383,7 @@ final class SubscriptionTests: XCTestCase {
     func testForceRefreshStillHonorsRetryAfter() throws {
         let clock = Clock()
         let fake = FakeTransport { _ in SubscriptionResponse(status: 429, retryAfter: 900) }
-        try write(".local/share/opencode/auth.json", ["opencode-go": ["type": "api", "key": "go-1"]])
+        try store.addAPIKey(provider: .go, key: "go-1")
         let s = service(fake, clock: clock)
         s.discover()
         s.refresh()
@@ -383,46 +396,231 @@ final class SubscriptionTests: XCTestCase {
     }
 
     func testAtMostFourConcurrentRequestsAndFailuresAreIsolated() throws {
-        let clock = Clock()
-        // 9 把不同的 DeepSeek Key（Magpie providers.json）。
-        try write(".config/magpie/providers.json", ["providers": (0..<9).map { ["id": "deepseek", "key": "sk-\($0)"] }])
+        for i in 0..<9 { try store.addAPIKey(provider: .deepseek, key: "sk-\(i)") }
         let fake = FakeTransport { request in
             request.headers["Authorization"] == "Bearer sk-3"
                 ? SubscriptionResponse(status: 500)
                 : SubscriptionResponse(status: 200, json: ["balance_infos": [["currency": "CNY", "total_balance": "1.00"]]])
         }
         fake.delay = 0.05
-        let s = service(fake, clock: clock)
+        let s = service(fake, clock: Clock())
         s.discover()
         s.refresh()
         XCTAssertEqual(fake.count, 9)
         XCTAssertLessThanOrEqual(fake.maxActive, SubscriptionService.maxConcurrentRequests)
         let cards = s.cards()
-        XCTAssertEqual(cards.count, 9)
+        XCTAssertEqual(cards.count, 9, "多把 Key 分别展示，不叠加")
         XCTAssertEqual(cards.filter { $0.snapshot.status == .current }.count, 8)
         XCTAssertEqual(cards.filter { $0.snapshot.status == .failed }.count, 1)
     }
 
-    func testQueriedAccountIDMergesCardsAcrossSources() throws {
-        let clock = Clock()
-        try write(".config/magpie/logins.json", [["agent": "claude", "user": "me@example.com",
-            "auth": ["claudeAiOauth": ["accessToken": "magpie-token"]], "profile": ["accountUuid": "uuid-9"]]])
-        let fake = FakeTransport { request in
-            if request.url.path.hasSuffix("/profile") {
-                return SubscriptionResponse(status: 200, json: ["account": ["uuid": "uuid-9"]])
+    // ------------------------------------------------------ 自有续期 ----
+
+    private func claudeRecord(expires: Date, refresh: String? = "rt-1") -> StoredSubscriptionAccount {
+        StoredSubscriptionAccount(provider: .claude, label: "me@example.com", kind: .oauth, origin: .login,
+                                  token: "at-1", refreshToken: refresh, expiresAt: expires, accountID: "uuid-1")
+    }
+
+    private func claudeServer(refreshStatus: Int = 200, rejectFirstUsage: Bool = false) -> FakeTransport {
+        var usageCalls = 0
+        return FakeTransport { request in
+            if request.url.path == "/v1/oauth/token" {
+                return refreshStatus == 200
+                    ? SubscriptionResponse(status: 200, json: ["access_token": "at-2", "refresh_token": "rt-2", "expires_in": 28_800])
+                    : SubscriptionResponse(status: refreshStatus, json: ["error": "invalid_grant"])
             }
-            return SubscriptionResponse(status: 200, json: ["five_hour": ["utilization": 10]])
+            usageCalls += 1
+            if rejectFirstUsage && usageCalls == 1 { return SubscriptionResponse(status: 401) }
+            return SubscriptionResponse(status: 200, json: ["five_hour": ["utilization": 12]])
         }
-        let s = SubscriptionService(discovery: discovery(keychain: ["claudeAiOauth": ["accessToken": "keychain-token"]]),
-                                    transport: fake.transport, cachePath: nil, clock: { clock.now })
+    }
+
+    func testRenewsOwnSessionBeforeExpiryAndPersistsTokens() throws {
+        let clock = Clock()
+        try store.upsert(claudeRecord(expires: clock.now.addingTimeInterval(60)))
+        let fake = claudeServer()
+        let s = service(fake, clock: clock)
         s.discover()
-        XCTAssertEqual(s.cards().count, 2, "查询前没有可靠 ID，不合并")
         s.refresh()
-        let cards = s.cards()
-        XCTAssertEqual(cards.count, 1)
-        XCTAssertTrue(cards[0].account.isActive)
-        XCTAssertEqual(cards[0].account.label, "me@example.com")
-        XCTAssertEqual(Set(cards[0].account.sources.map(\.tool)), ["Claude Code", "Magpie"])
+        XCTAssertEqual(fake.requests.first?.url.host, "platform.claude.com")
+        XCTAssertEqual(fake.requests.last?.headers["Authorization"], "Bearer at-2")
+        XCTAssertEqual(s.cards().first?.snapshot.status, .current)
+        let saved = try XCTUnwrap(store.load().first)
+        XCTAssertEqual(saved.token, "at-2")
+        XCTAssertEqual(saved.refreshToken, "rt-2")
+        XCTAssertEqual(saved.expiresAt, clock.now.addingTimeInterval(28_800))
+    }
+
+    func testUnauthorizedTriggersOneRenewalAndRetry() throws {
+        let clock = Clock()
+        try store.upsert(claudeRecord(expires: clock.now.addingTimeInterval(3600)))
+        let fake = claudeServer(rejectFirstUsage: true)
+        let s = service(fake, clock: clock)
+        s.discover()
+        s.refresh()
+        XCTAssertEqual(fake.count, 3)
+        XCTAssertEqual(s.cards().first?.snapshot.status, .current)
+    }
+
+    func testRejectedRenewalAsksToSignInAgainWithoutQuerying() throws {
+        let clock = Clock()
+        try store.upsert(claudeRecord(expires: clock.now.addingTimeInterval(-60)))
+        let fake = claudeServer(refreshStatus: 400)
+        let s = service(fake, clock: clock)
+        s.discover()
+        s.refresh()
+        XCTAssertEqual(fake.count, 1)
+        XCTAssertEqual(s.cards().first?.snapshot.status, .expired)
+        XCTAssertEqual(s.cards().first?.snapshot.problem, .unauthorized)
+    }
+
+    // ------------------------------------------------------ 账号库 ----
+
+    func testStoreIsOwnerOnlyAndUpsertKeepsOneRecordPerAccount() throws {
+        let first = try store.upsert(claudeRecord(expires: Date()))
+        try store.setMenuBar(id: first.id)
+        var again = claudeRecord(expires: Date().addingTimeInterval(100), refresh: "rt-new")
+        again.label = ""
+        let saved = try store.upsert(again)
+        XCTAssertEqual(saved.id, first.id)
+        XCTAssertTrue(saved.menuBar)
+        XCTAssertEqual(saved.label, "me@example.com")
+        XCTAssertEqual(store.load().count, 1)
+        let mode = try FileManager.default.attributesOfItem(atPath: storePath)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600)
+    }
+
+    func testImportCopiesOnlyQueryableAPIKeysOnce() throws {
+        try write(".local/share/opencode/auth.json", [
+            "opencode-go": ["type": "api", "key": "go-key"],
+            "anthropic": ["type": "oauth", "access": "foreign-oauth", "expires": 1],
+        ])
+        try writeText(".dsh/.credentials.yaml", "refs:\n  DEEPSEEK_API_KEY: sk-deepseek\n")
+        try writeText(".hermes/.env", "DEEPSEEK_API_KEY=sk-relay\nDEEPSEEK_BASE_URL=https://relay.example.net\n")
+        let source = discovery()
+        XCTAssertEqual(try store.importAPIKeys(from: source), 2)
+        XCTAssertEqual(try store.importAPIKeys(from: source), 0, "重复导入不新增")
+        let records = store.load()
+        XCTAssertEqual(Set(records.map(\.provider)), [.go, .deepseek])
+        XCTAssertTrue(records.allSatisfy { $0.kind == .apiKey && $0.origin == .imported })
+        XCTAssertFalse(records.contains { $0.token == "foreign-oauth" || $0.token == "sk-relay" })
+        XCTAssertEqual(records.first { $0.provider == .deepseek }?.importedFrom, "DSH")
+    }
+
+    func testMenuBarAccountIsChosenOrTheOnlyOne() throws {
+        let a = try store.upsert(claudeRecord(expires: Date()))
+        var other = claudeRecord(expires: Date())
+        other.accountID = "uuid-2"
+        other.token = "at-other"
+        let b = try store.upsert(other)
+        var accounts = SubscriptionService.accounts(store.load())
+        XCTAssertEqual(accounts.filter(\.isActive).count, 0, "两个账号且未指定：不确定")
+        try store.setMenuBar(id: b.id)
+        accounts = SubscriptionService.accounts(store.load())
+        XCTAssertEqual(accounts.filter(\.isActive).map(\.id), [SubscriptionService.accountID(b)])
+        try store.remove(id: b.id)
+        accounts = SubscriptionService.accounts(store.load())
+        XCTAssertEqual(accounts.filter(\.isActive).map(\.id), [SubscriptionService.accountID(a)])
+    }
+
+    // ---------------------------------------------------------- 登录 ----
+
+    func testDeviceCodeLoginPollsUntilAuthorized() throws {
+        var polls = 0
+        let fake = FakeTransport { request in
+            switch request.url.absoluteString {
+            case "https://github.com/login/device/code":
+                return SubscriptionResponse(status: 200, json: ["device_code": "dc", "user_code": "ABCD-1234",
+                                                                "verification_uri": "https://github.com/login/device", "interval": 1])
+            case "https://github.com/login/oauth/access_token":
+                polls += 1
+                return polls < 3 ? SubscriptionResponse(status: 200, json: ["error": "authorization_pending"])
+                    : SubscriptionResponse(status: 200, json: ["access_token": "gho_new"])
+            default:
+                XCTAssertEqual(request.url.absoluteString, "https://api.github.com/user")
+                return SubscriptionResponse(status: 200, json: ["login": "octo", "id": 42])
+            }
+        }
+        let flow = try SubscriptionAuth.start(.copilot, transport: fake.transport, sleep: { _ in })
+        XCTAssertEqual(flow.prompt, .deviceCode(userCode: "ABCD-1234", url: URL(string: "https://github.com/login/device")!))
+        let account = try flow.complete()
+        XCTAssertEqual(account.token, "gho_new")
+        XCTAssertEqual(account.label, "octo")
+        XCTAssertEqual(account.accountID, "42")
+        XCTAssertEqual(account.origin, .login)
+        XCTAssertEqual(polls, 3)
+    }
+
+    func testLoginCanBeCancelledAndDeclined() throws {
+        let pending = FakeTransport { request in
+            request.url.path == "/oauth2/device/code"
+                ? SubscriptionResponse(status: 200, json: ["device_code": "d", "user_code": "U",
+                                                           "verification_uri_complete": "https://accounts.x.ai/device?code=U"])
+                : SubscriptionResponse(status: 400, json: ["error": "authorization_pending"])
+        }
+        let flow = try SubscriptionAuth.start(.grok, transport: pending.transport, sleep: { _ in })
+        var checks = 0
+        XCTAssertThrowsError(try flow.complete { checks += 1; return checks > 3 }) {
+            XCTAssertEqual($0 as? SubscriptionAuthError, .cancelled)
+        }
+        let denied = FakeTransport { request in
+            request.url.path == "/oauth2/device/code"
+                ? SubscriptionResponse(status: 200, json: ["device_code": "d", "user_code": "U",
+                                                           "verification_uri": "https://accounts.x.ai/device"])
+                : SubscriptionResponse(status: 400, json: ["error": "access_denied"])
+        }
+        XCTAssertThrowsError(try SubscriptionAuth.start(.grok, transport: denied.transport, sleep: { _ in }).complete()) {
+            XCTAssertEqual($0 as? SubscriptionAuthError, .declined)
+        }
+    }
+
+    func testPastedCodeLoginChecksStateAndUsesPKCE() throws {
+        let fake = FakeTransport { request in
+            XCTAssertEqual(request.url.absoluteString, "https://platform.claude.com/v1/oauth/token")
+            let body = try! JSONSerialization.jsonObject(with: request.body ?? Data()) as! [String: Any]
+            XCTAssertEqual(body["grant_type"] as? String, "authorization_code")
+            XCTAssertEqual(body["code"] as? String, "the-code")
+            XCTAssertNotNil(body["code_verifier"])
+            return SubscriptionResponse(status: 200, json: ["access_token": "at", "refresh_token": "rt", "expires_in": 3600,
+                                                            "account": ["uuid": "uuid-7", "email_address": "me@example.com"]])
+        }
+        let flow = try SubscriptionAuth.start(.claude, transport: fake.transport)
+        guard case .pasteCode(let link) = flow.prompt else { return XCTFail("expected paste flow") }
+        let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let state = try XCTUnwrap(query.first { $0.name == "state" }?.value)
+        XCTAssertEqual(query.first { $0.name == "code_challenge_method" }?.value, "S256")
+        XCTAssertThrowsError(try flow.complete(pastedCode: "the-code#wrong-state")) {
+            XCTAssertEqual($0 as? SubscriptionAuthError, .invalidCode)
+        }
+        XCTAssertEqual(fake.count, 0, "state 不符时不提交授权码")
+        let account = try flow.complete(pastedCode: "the-code#" + state)
+        XCTAssertEqual(account.accountID, "uuid-7")
+        XCTAssertEqual(account.label, "me@example.com")
+        XCTAssertEqual(account.refreshToken, "rt")
+    }
+
+    func testBrowserLoginPollsWorkBuddyUntilReady() throws {
+        var tokenPolls = 0
+        let fake = FakeTransport { request in
+            switch request.url.path {
+            case "/v2/plugin/auth/state":
+                return SubscriptionResponse(status: 200, json: ["code": 0, "data": ["state": "st", "authUrl": "https://copilot.tencent.com/login"]])
+            case "/v2/plugin/auth/token":
+                tokenPolls += 1
+                return tokenPolls == 1 ? SubscriptionResponse(status: 200, json: ["code": 11217, "msg": "pending"])
+                    : SubscriptionResponse(status: 200, json: ["code": 0, "data": ["accessToken": "wb-at", "refreshToken": "wb-rt", "expiresIn": 3600]])
+            default:
+                XCTAssertEqual(request.headers["Authorization"], "Bearer wb-at")
+                return SubscriptionResponse(status: 200, json: ["code": 0, "data": ["uid": "uid-9", "nickname": "WB 用户"]])
+            }
+        }
+        let flow = try SubscriptionAuth.start(.workbuddy, transport: fake.transport, sleep: { _ in })
+        guard case .browser(let link) = flow.prompt else { return XCTFail("expected browser flow") }
+        XCTAssertEqual(link.host, "copilot.tencent.com")
+        let account = try flow.complete()
+        XCTAssertEqual(account.token, "wb-at")
+        XCTAssertEqual(account.extra["uid"], "uid-9")
+        XCTAssertEqual(account.label, "WB 用户")
     }
 
     func testMenuBarBindsOnlyUnambiguousActiveAccount() {

@@ -7,6 +7,7 @@
 //  对齐 Python 版数据流：menubar 轮询 /api/scan/status、60s 拉统计与配额。
 //
 
+import AppKit
 import Combine
 import Foundation
 import TokenTrackerCore
@@ -24,11 +25,10 @@ final class AppState: ObservableObject {
     @Published var quotaEntries: [MenuBarQuotaEntry] = []
     @Published var subscriptionCards: [SubscriptionCard] = []
     @Published private(set) var subscriptionRefreshing = false
-    /// 用户指定的额外配置目录（App 偏好，不写入共享 settings.json）
-    @Published private(set) var subscriptionDirectories: [String] {
-        didSet { UserDefaults.standard.set(subscriptionDirectories, forKey: Self.subscriptionDirectoriesKey) }
-    }
-    nonisolated static let subscriptionDirectoriesKey = "tt.subscriptions.directories"
+    /// 进行中的订阅登录（设置页弹窗）
+    @Published private(set) var subscriptionLogin: SubscriptionLoginState?
+    @Published private var subscriptionNoticeTemplate: L10n.Template?
+    var subscriptionNotice: String? { subscriptionNoticeTemplate.map(L10n.text) }
     @Published var scanning = false
     @Published var lastScan: ScanSchedulerStatus.Last?
 
@@ -155,7 +155,6 @@ final class AppState: ObservableObject {
         scanRoots = ScanRoots()
         accountSwitcher = preview ? CodexAccountSwitcher(ctx: BillingContext(home:previewHome,env:["CODEX_HOME":previewHome+"/.codex"])) : CodexAccountSwitcher()
         subscriptionService = preview ? nil : SubscriptionService()
-        subscriptionDirectories = preview ? [] : UserDefaults.standard.stringArray(forKey: Self.subscriptionDirectoriesKey) ?? []
         if preview {
             subscriptionCards = SubscriptionCard.previewCards()
             quotaEntries = QuotaRefresh.menuEntries(subscriptionCards)
@@ -529,10 +528,9 @@ final class AppState: ObservableObject {
         guard !quotaBusy else { quotaPending = quotaPending || force; return }
         quotaBusy = true
         subscriptionRefreshing = force
-        let directories = subscriptionDirectories
         let path = readStore.path
         quotaQueue.async { [weak self] in
-            service.discover(extraDirectories: directories)
+            service.discover()
             let initial = service.cards()
             DispatchQueue.main.async { self?.publishSubscriptions(initial) }
             service.refresh(force: force) { cards in
@@ -560,14 +558,113 @@ final class AppState: ObservableObject {
         if quotaEntries != entries { quotaEntries = entries }
     }
 
-    func addSubscriptionDirectory(_ path: String) {
-        guard !subscriptionDirectories.contains(path) else { return }
-        subscriptionDirectories.append(path)
+    // ------------------------------------------------------ 订阅账号 ----
+
+    /// 发起 TokenTracker 自己的登录：设备码/浏览器流程自动等待完成，粘贴授权码流程等用户提交。
+    func startSubscriptionLogin(_ provider: SubscriptionProvider, region: String? = nil) {
+        guard subscriptionService != nil else { return }
+        cancelSubscriptionLogin()
+        let login = SubscriptionLoginState(provider: provider)
+        subscriptionLogin = login
+        let cancelled = login.cancelled
+        quotaQueue.async { [weak self] in
+            do {
+                let flow = try SubscriptionAuth.start(provider, region: region)
+                DispatchQueue.main.async {
+                    guard let self, self.subscriptionLogin?.id == login.id else { return }
+                    self.subscriptionLogin?.flow = flow
+                    self.subscriptionLogin?.phase = .waiting
+                    if let url = flow.prompt.url { NSWorkspace.shared.open(url) }
+                    if !flow.needsPastedCode { self.finishSubscriptionLogin(flow, code: nil, login: login) }
+                }
+            } catch {
+                DispatchQueue.main.async { self?.failSubscriptionLogin(login, error) }
+            }
+            _ = cancelled
+        }
+    }
+
+    func submitSubscriptionCode(_ code: String) {
+        guard let login = subscriptionLogin, let flow = login.flow else { return }
+        subscriptionLogin?.phase = .finishing
+        finishSubscriptionLogin(flow, code: code, login: login)
+    }
+
+    private func finishSubscriptionLogin(_ flow: SubscriptionLoginFlow, code: String?, login: SubscriptionLoginState) {
+        guard let service = subscriptionService else { return }
+        let cancelled = login.cancelled
+        // 设备码轮询可能持续数分钟，不占用配额查询队列。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let account = try flow.complete(pastedCode: code) { cancelled.isSet }
+                try service.accountStore.upsert(account)
+                DispatchQueue.main.async {
+                    guard let self, self.subscriptionLogin?.id == login.id else { return }
+                    self.subscriptionLogin = nil
+                    self.subscriptionNoticeTemplate = "已登录 \(flow.provider.displayName)"
+                    self.refreshQuotas(force: true)
+                }
+            } catch {
+                DispatchQueue.main.async { self?.failSubscriptionLogin(login, error) }
+            }
+        }
+    }
+
+    private func failSubscriptionLogin(_ login: SubscriptionLoginState, _ error: Error) {
+        guard subscriptionLogin?.id == login.id else { return }
+        if (error as? SubscriptionAuthError) == .cancelled { subscriptionLogin = nil; return }
+        if login.flow?.needsPastedCode == true, (error as? SubscriptionAuthError) == .invalidCode {
+            subscriptionLogin?.phase = .waiting
+            subscriptionLogin?.error = (error as? SubscriptionAuthError)
+            return
+        }
+        subscriptionLogin?.phase = .failed
+        subscriptionLogin?.error = (error as? SubscriptionAuthError) ?? .network
+    }
+
+    func cancelSubscriptionLogin() {
+        subscriptionLogin?.cancelled.set()
+        subscriptionLogin = nil
+    }
+
+    func addSubscriptionKey(provider: SubscriptionProvider, key: String, label: String, region: String?) -> Bool {
+        guard let service = subscriptionService else { return false }
+        do {
+            try service.accountStore.addAPIKey(provider: provider, key: key, label: label, region: region)
+            subscriptionNoticeTemplate = "已添加 \(provider.displayName) API Key"
+            refreshQuotas(force: true)
+            return true
+        } catch {
+            subscriptionNoticeTemplate = "API Key 无效，未保存"
+            return false
+        }
+    }
+
+    func importSubscriptionKeys() {
+        guard let service = subscriptionService else { return }
+        quotaQueue.async { [weak self] in
+            let count = (try? service.accountStore.importAPIKeys()) ?? 0
+            DispatchQueue.main.async {
+                self?.subscriptionNoticeTemplate = count > 0 ? "已导入 \(count) 个 API Key" : "没有可导入的新 API Key"
+                self?.refreshQuotas(force: true)
+            }
+        }
+    }
+
+    /// 卡片 id 为 "provider:记录 id"。
+    private func subscriptionRecordID(_ cardID: String) -> String {
+        String(cardID.split(separator: ":", maxSplits: 1).last ?? "")
+    }
+
+    func removeSubscriptionAccount(_ cardID: String) {
+        guard let service = subscriptionService else { return }
+        try? service.accountStore.remove(id: subscriptionRecordID(cardID))
         refreshQuotas(force: true)
     }
 
-    func removeSubscriptionDirectory(_ path: String) {
-        subscriptionDirectories.removeAll { $0 == path }
+    func setSubscriptionMenuBarAccount(_ cardID: String) {
+        guard let service = subscriptionService else { return }
+        try? service.accountStore.setMenuBar(id: subscriptionRecordID(cardID))
         refreshQuotas(force: true)
     }
 

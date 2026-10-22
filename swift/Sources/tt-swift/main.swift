@@ -261,7 +261,7 @@ case "quotas":
     }
 
 case "subscriptions":
-    // 只读：发现本机账号并查询官方配额/余额；输出不含令牌、邮箱或原始账号 ID。
+    // 只查 TokenTracker 账号库中的账号（自有登录与 API Key）；输出不含令牌、邮箱或原始账号 ID。
     // --debug：只打印主机、路径、状态码、顶层键名与错误码字段，不打印凭据或数据值。
     let debug = args.contains("--debug")
     let service = SubscriptionService(transport: { request in
@@ -277,8 +277,12 @@ case "subscriptions":
         }
         return response
     }, cachePath: nil)
+    if args.contains("--import-keys") {
+        let count = try service.accountStore.importAPIKeys()
+        print("已导入 \(count) 个 API Key")
+    }
     service.discover()
-    if !args.contains("--discover-only") { service.refresh(force: true) }
+    if !args.contains("--list-only") { service.refresh(force: true) }
     for card in service.cards() {
         let account = card.account
         let windows = card.snapshot.windows.map { w in
@@ -304,8 +308,8 @@ default:
       tt-swift activity [--range day|week|month|all] [--group agent|tool|skill]
                         [--agent NAME] [--confidence exact|derived|all] [--json]
       tt-swift quotas            终端查看全部配额窗口
-      tt-swift subscriptions [--discover-only] [--debug]
-                                 发现本机订阅账号并只读查询官方配额/余额
+      tt-swift subscriptions [--list-only] [--import-keys] [--debug]
+                                 查询 TokenTracker 账号库中的官方配额/余额
       tt-swift export-public [--days 365] [--pretty]
                                  生成公开统计载荷到 stdout（不联网）
       tt-swift publish [--dry-run|--force|--status]
