@@ -39,43 +39,11 @@ public struct TaskClientSource: Codable, Sendable, Equatable {
         self.client = client; self.location = location; self.confidence = confidence
         self.configurationRoot = configurationRoot; self.engineVersion = engineVersion
     }
-    public static func launchMode(provider: TaskProvider, arguments: [String]) -> String? {
-        guard !arguments.isEmpty else { return nil }
-        func has(_ option: String) -> Bool {
-            arguments.contains { $0 == option || $0.hasPrefix(option + "=") }
-        }
-        if provider == .codex {
-            // Desktop puts global configuration overrides before app-server.
-            // Skip only known options so an option value cannot masquerade as
-            // a subcommand or silently establish desktop provenance.
-            let values = ["-c", "--config", "--enable", "--disable", "-C", "--cd",
-                          "-m", "--model", "-p", "--profile", "-s", "--sandbox",
-                          "-a", "--ask-for-approval", "--add-dir"]
-            let switches = ["--no-alt-screen", "--search", "--full-auto"]
-            var index = 1
-            while index < arguments.count, arguments[index].hasPrefix("-") {
-                let option = arguments[index]
-                if values.contains(option) {
-                    guard index + 1 < arguments.count else { return nil }
-                    index += 2
-                } else if values.contains(where: { option.hasPrefix($0 + "=") }) || switches.contains(option) {
-                    index += 1
-                } else { return nil }
-            }
-            let command = index < arguments.count ? arguments[index] : nil
-            if command == "app-server" { return "app-server" }
-            if command == "exec" { return "exec" }
-            if ["app-server-daemon", "mcp-server", "debug", "login", "logout"].contains(command ?? "")
-                || has("--version") { return nil }
-            guard command == nil else { return nil }
-            return "interactive"
-        }
-        if has("--permission-prompt-tool") && has("--input-format") && has("--output-format") {
-            return "desktop-stream"
-        }
-        return has("--print") || has("-p") ? nil : "interactive"
-    }
-    public static func identify(provider: TaskProvider, enginePath: String?, mode: String?,
+    /// Identifies the client from the nearest engine process. Only signals that the
+    /// engine itself establishes count: its executable location, the subcommand it
+    /// runs, Claude's own entrypoint variable and the hosting App. Anything ambiguous
+    /// stays unknown; the result only labels reminders and never gates approvals.
+    public static func identify(provider: TaskProvider, enginePath: String?, arguments: [String],
                                 entrypoint: String?, host: String?, configurationRoot: String?,
                                 home: String) -> Self {
         guard let enginePath else { return Self() }
@@ -84,20 +52,27 @@ public struct TaskClientSource: Codable, Sendable, Equatable {
         var version: String?
         if provider == .claude, binary == "claude" {
             let desktopPrefix = home + "/Library/Application Support/Claude/claude-code/"
-            if entrypoint == "claude-desktop", host == "com.anthropic.claudefordesktop",
-               enginePath.hasPrefix(desktopPrefix), mode == "desktop-stream" {
-                client = .claudeDesktop
-                version = String(enginePath.dropFirst(desktopPrefix.count).prefix(while: { $0 != "/" }))
-            } else if entrypoint != "claude-desktop", mode == "interactive" {
+            if enginePath.hasPrefix(desktopPrefix) {
+                if entrypoint == "claude-desktop", host == "com.anthropic.claudefordesktop" {
+                    client = .claudeDesktop
+                    version = String(enginePath.dropFirst(desktopPrefix.count).prefix(while: { $0 != "/" }))
+                }
+            } else if entrypoint == nil || entrypoint == "cli" {
+                // A CLI started from a desktop shell inherits CLAUDE_CODE_ENTRYPOINT=claude-desktop
+                // but runs the user's own engine; that combination stays unknown.
                 client = .claudeCLI
             }
         } else if provider == .codex, binary == "codex" {
-            // A CLI launched by a desktop tool runner remains a CLI. A daemon
-            // without independently established desktop provenance stays unknown.
-            if mode == "app-server", host == "com.openai.codex",
-               enginePath.contains("/Contents/Resources/codex-cli/") {
-                client = .codexDesktop
-            } else if mode == "interactive" || mode == "exec" {
+            let servers: Set = ["app-server", "app-server-daemon", "exec-server", "mcp-server"]
+            let subcommands = servers.union(["exec", "e", "resume", "fork", "review", "login", "logout", "mcp",
+                                             "debug", "sandbox", "apply", "cloud", "completion"])
+            let command = arguments.dropFirst().first(where: subcommands.contains)
+            if command == "app-server" {
+                // A daemon without the desktop host and bundled engine stays unknown.
+                if host == "com.openai.codex", enginePath.contains("/Contents/Resources/codex-cli/") {
+                    client = .codexDesktop
+                }
+            } else if !servers.contains(command ?? "") {
                 client = .codexCLI
             }
         }

@@ -73,7 +73,7 @@ public struct TaskHookConfiguration {
             for event in events {
                 var groups = hooks[event] as? [[String: Any]] ?? []
                 var group: [String: Any] = ["hooks": [["type": "command", "command": command,
-                    "timeout": event == "PermissionRequest" ? 130 : (event == "SessionEnd" || event == "Interrupt" ? 1 : 3)]]]
+                    "timeout": event == "PermissionRequest" ? TaskSocket.hookTimeout : (event == "SessionEnd" || event == "Interrupt" ? 1 : 3)]]]
                 if event == "Notification" { group["matcher"] = "permission_prompt" }
                 groups.append(group); hooks[event] = groups
             }

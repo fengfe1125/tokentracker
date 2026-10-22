@@ -34,7 +34,7 @@ struct TaskReminderCard: View {
                     }
                 }
                 if row.state == .waiting {
-                    Text(L10n.text("仅处理当前请求；关闭卡片不会批准或拒绝。"))
+                    Text(L10n.text("仅处理当前请求；关闭卡片不会批准或拒绝。前往原任务会把审批交回原工具。"))
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(L10n.text("拒绝一次")) { model.decide(id, .deny) }

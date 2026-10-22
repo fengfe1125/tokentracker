@@ -110,7 +110,38 @@ final class TaskReminderModel: ObservableObject {
                 .map { $0.provider.rawValue + ":" + $0.session + ":" + $0.turn })
         }
     }
+    static var helperURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(channel == "development" ? "TokenTracker Dev" : "TokenTracker")
+            .appendingPathComponent("Hooks/TokenTrackerHook")
+    }
+    private static var bundledHelper: URL? {
+        Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("TokenTrackerHook")
+    }
+    /// Copies the bundled helper to the stable path the installed hooks reference.
+    static func installHelper() throws {
+        guard let executable = bundledHelper, FileManager.default.isExecutableFile(atPath: executable.path)
+        else { throw TaskBridgeError.unavailable }
+        try FileManager.default.createDirectory(at: helperURL.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
+        let staging = helperURL.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.copyItem(at: executable, to: staging)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        if FileManager.default.fileExists(atPath: helperURL.path) {
+            _ = try FileManager.default.replaceItemAt(helperURL, withItemAt: staging)
+        } else { try FileManager.default.moveItem(at: staging, to: helperURL) }
+    }
+    /// An App update must also update an already installed helper; otherwise the old
+    /// helper keeps using a transport the new App may no longer serve. Hooks are never
+    /// installed here, only an existing copy is refreshed.
+    static func refreshInstalledHelper() {
+        guard let bundled = bundledHelper, FileManager.default.isExecutableFile(atPath: bundled.path),
+              FileManager.default.fileExists(atPath: helperURL.path),
+              !FileManager.default.contentsEqual(atPath: bundled.path, andPath: helperURL.path) else { return }
+        try? installHelper()
+    }
     func start() {
+        Self.refreshInstalledHelper()
         prune(); persist()
         server.onEvent = { [weak self] event in Task { @MainActor in
             guard let self else { return }
@@ -179,7 +210,7 @@ final class TaskReminderModel: ObservableObject {
         }
         var reminder = TaskReminder(id: event.id, provider: event.provider, session: event.session, turn: event.turn,
             tool: event.tool, project: URL(fileURLWithPath: event.cwd).lastPathComponent, at: event.at,
-            deadline: state == .waiting ? event.at.addingTimeInterval(120) : nil, sourceApp: event.sourceApp,
+            deadline: state == .waiting ? event.at.addingTimeInterval(server.approvalTimeout) : nil, sourceApp: event.sourceApp,
             call: event.call.isEmpty ? nil : event.call,
             agent: event.agent.isEmpty ? nil : event.agent,
             state: state, arguments: state == .waiting ? event.arguments : nil)
@@ -234,7 +265,15 @@ final class TaskReminderModel: ObservableObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: history.path)
         } catch { notice = L10n.text("任务提醒历史保存失败") }
     }
+    /// Handing a waiting request back to the original task releases the hook at once.
+    /// Codex only shows its own approval prompt after hooks finish, so keeping the
+    /// connection open would hold that prompt until the approval timeout.
+    func returnToOriginal(_ id: String) {
+        guard let row = reminders.first(where: { $0.id == id }), row.state == .waiting else { return }
+        _ = server.resolve(id, decision: .pass); expire(id)
+    }
     func navigate(_ row: TaskReminder) {
+        returnToOriginal(row.id)
         let allowed = ["com.apple.Terminal", "com.googlecode.iterm2", "com.github.wez.wezterm", "com.mitchellh.ghostty",
                        "com.openai.codex", "com.anthropic.claudefordesktop"]
         let bundle = row.sourceApp.flatMap { allowed.contains($0) ? $0 : nil }

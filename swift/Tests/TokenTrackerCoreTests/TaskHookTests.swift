@@ -4,39 +4,39 @@ import Darwin
 
 final class TaskHookTests: XCTestCase {
     func testDesktopSourceRequiresEngineContextAndInnerCLIIsNotDesktop() {
-        XCTAssertEqual(TaskClientSource.launchMode(provider: .codex, arguments:
-            ["codex", "-c", "fixture=true", "app-server", "--analytics-default-enabled"]), "app-server")
-        XCTAssertEqual(TaskClientSource.launchMode(provider: .codex, arguments:
-            ["codex", "--config=fixture=true", "exec", "app-server"]), "exec")
-        XCTAssertEqual(TaskClientSource.launchMode(provider: .codex, arguments:
-            ["codex", "-c", "app-server"]), "interactive")
-        XCTAssertNil(TaskClientSource.launchMode(provider: .codex, arguments:
-            ["codex", "--unknown-option", "app-server"]))
-        XCTAssertEqual(TaskClientSource.launchMode(provider: .claude, arguments:
-            ["claude", "--permission-prompt-tool=stdio", "--input-format", "stream-json", "--output-format", "stream-json"]), "desktop-stream")
-        XCTAssertEqual(TaskClientSource.launchMode(provider: .claude, arguments: ["claude"]), "interactive")
-        XCTAssertNil(TaskClientSource.launchMode(provider: .claude, arguments: ["claude", "--print=fixture"]))
         let home = "/Users/fixture"
-        let claudePath = home + "/Library/Application Support/Claude/claude-code/2.1.295/hash/claude.app/Contents/MacOS/claude"
-        let desktop = TaskClientSource.identify(provider: .claude, enginePath: claudePath, mode: "desktop-stream",
-            entrypoint: "claude-desktop", host: "com.anthropic.claudefordesktop", configurationRoot: "/fixture/.claude", home: home)
+        func claude(_ path: String, _ entrypoint: String?, host: String? = "com.anthropic.claudefordesktop") -> TaskClientSource {
+            TaskClientSource.identify(provider: .claude, enginePath: path, arguments: [], entrypoint: entrypoint,
+                                      host: host, configurationRoot: "/fixture/.claude", home: home)
+        }
+        let bundled = home + "/Library/Application Support/Claude/claude-code/2.1.295/hash/claude.app/Contents/MacOS/claude"
+        let desktop = claude(bundled, "claude-desktop")
         XCTAssertEqual(desktop.client, .claudeDesktop)
         XCTAssertEqual(desktop.engineVersion, "2.1.295")
         XCTAssertEqual(desktop.confidence, .launchContext)
-        let inner = TaskClientSource.identify(provider: .claude, enginePath: "/opt/homebrew/bin/claude", mode: "interactive",
-            entrypoint: "cli", host: "com.anthropic.claudefordesktop", configurationRoot: nil, home: home)
-        XCTAssertEqual(inner.client, .claudeCLI)
-        let inherited = TaskClientSource.identify(provider: .claude, enginePath: "/opt/homebrew/bin/claude", mode: "interactive",
-            entrypoint: "claude-desktop", host: "com.anthropic.claudefordesktop", configurationRoot: nil, home: home)
-        XCTAssertEqual(inherited.client, .unknown)
-        let codex = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
-        XCTAssertEqual(TaskClientSource.identify(provider: .codex, enginePath: codex, mode: "interactive",
-            entrypoint: nil, host: "com.openai.codex", configurationRoot: nil, home: home).client, .codexCLI)
-        XCTAssertEqual(TaskClientSource.identify(provider: .codex, enginePath: codex, mode: "app-server",
-            entrypoint: nil, host: "com.openai.codex", configurationRoot: nil, home: home).client, .codexDesktop)
-        XCTAssertEqual(TaskClientSource.identify(provider: .codex, enginePath: "/fixture/app-server-daemon/bin/codex", mode: "app-server",
-            entrypoint: nil, host: nil, configurationRoot: nil, home: home).client, .unknown)
-        XCTAssertEqual(TaskClientSource.identify(provider: .codex, enginePath: nil, mode: nil,
+        XCTAssertEqual(claude(bundled, "claude-desktop", host: nil).client, .unknown)
+        XCTAssertEqual(claude(bundled, "cli").client, .unknown, "Bundled engine without desktop entrypoint")
+        XCTAssertEqual(claude("/opt/homebrew/bin/claude", "cli").client, .claudeCLI)
+        XCTAssertEqual(claude("/opt/homebrew/bin/claude", nil, host: "com.apple.Terminal").client, .claudeCLI)
+        XCTAssertEqual(claude("/opt/homebrew/bin/claude", "claude-desktop").client, .unknown,
+                       "A CLI launched inside the desktop inherits the entrypoint but is not desktop")
+        XCTAssertEqual(claude("/opt/homebrew/bin/claude", "claude-vscode").client, .unknown)
+
+        func codex(_ path: String, _ arguments: [String], host: String? = "com.openai.codex") -> TaskClient {
+            TaskClientSource.identify(provider: .codex, enginePath: path, arguments: arguments, entrypoint: nil,
+                                      host: host, configurationRoot: nil, home: home).client
+        }
+        let engine = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        XCTAssertEqual(codex(engine, ["codex", "-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"]),
+                       .codexDesktop)
+        XCTAssertEqual(codex(engine, ["codex"]), .codexCLI)
+        XCTAssertEqual(codex("/opt/homebrew/bin/codex", ["codex", "--config=fixture=true", "exec", "app-server"]), .codexCLI,
+                       "A prompt after exec is not a subcommand")
+        XCTAssertEqual(codex("/opt/homebrew/bin/codex", ["codex", "app-server"]), .unknown)
+        XCTAssertEqual(codex(engine, ["codex", "app-server"], host: nil), .unknown)
+        XCTAssertEqual(codex(engine, ["codex", "exec-server", "--remote", "https://fixture"]), .unknown, "Cloud is unsupported")
+        XCTAssertEqual(codex(engine, ["codex", "mcp-server"]), .unknown)
+        XCTAssertEqual(TaskClientSource.identify(provider: .codex, enginePath: nil, arguments: [],
             entrypoint: nil, host: "com.openai.codex", configurationRoot: nil, home: home).location, .unknown)
     }
 
@@ -128,7 +128,8 @@ final class TaskHookTests: XCTestCase {
         let hooks = object["hooks"] as! [String: [[String: Any]]]
         XCTAssertEqual(hooks["Stop"]?.count, 2)
         let permission = hooks["PermissionRequest"]![0]["hooks"] as! [[String: Any]]
-        XCTAssertEqual(permission[0]["timeout"] as? Int, 130)
+        XCTAssertEqual(permission[0]["timeout"] as? Int, TaskSocket.hookTimeout)
+        XCTAssertGreaterThan(Double(TaskSocket.hookTimeout), TaskSocket.approvalTimeout)
         let removal = try TaskHookConfiguration.preview(provider: .claude, path: path, helper: "/tmp/helper", channel: "development", installing: false)
         try removal.apply()
         let restored = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! NSDictionary
@@ -151,6 +152,13 @@ final class TaskHookTests: XCTestCase {
         XCTAssertThrowsError(try TaskSocket.receive(fds[1], deadline: Date().addingTimeInterval(0.02)))
         shutdown(fds[0], SHUT_RDWR)
         XCTAssertThrowsError(try TaskSocket.receive(fds[1], deadline: Date().addingTimeInterval(1)))
+    }
+    func testSocketLivesInPerUserTemporaryDirectory() {
+        let path = TaskSocket.path(channel: "development")
+        XCTAssertFalse(path.hasPrefix("/tmp/"))
+        XCTAssertTrue(path.hasSuffix("tt-tasks-\(getuid())-dev/events.sock"))
+        XCTAssertNotEqual(path, TaskSocket.path(channel: "production"))
+        XCTAssertLessThan(path.utf8.count, 104, "sockaddr_un.sun_path limit")
     }
     func testUnsafeDirectoryIsRejected() throws {
         let path = "/tmp/tt-task-unsafe-" + UUID().uuidString

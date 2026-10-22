@@ -165,6 +165,31 @@ final class TaskReminderTests: XCTestCase {
         Darwin.close(closed)
         await fulfillment(of: [expired], timeout: 2)
     }
+    func testReturningToOriginalTaskReleasesHookImmediately() async throws {
+        let root = URL(fileURLWithPath: "/tmp/tt-bridge-test-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("events.sock").path
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let prefs = TaskReminderPreferences(defaults: defaults)
+        prefs.enabled = true; prefs.claude = true
+        let model = TaskReminderModel(preferences: prefs, history: root.appendingPathComponent("history.json"),
+                                      server: TaskHookServer(channel: "test", path: path))
+        model.start(); defer { model.stop() }
+        let request = try event("PermissionRequest")
+        let fd = try TaskSocket.connect(path: path); defer { Darwin.close(fd) }
+        try TaskSocket.send(JSONEncoder().encode(request), fd: fd, deadline: Date().addingTimeInterval(1))
+        for _ in 0..<100 where !model.reminders.contains(where: { $0.id == request.id }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(model.reminders.first?.state, .waiting)
+        model.returnToOriginal(request.id)
+        let reply = try JSONDecoder().decode(TaskHookReply.self, from: TaskSocket.receive(fd, deadline: Date().addingTimeInterval(1)))
+        XCTAssertEqual(reply.decision, .pass, "The original tool gets control back without a decision")
+        XCTAssertEqual(model.reminders.first?.state, .expired)
+        XCTAssertNil(model.reminders.first?.arguments)
+        model.decide(request.id, .allow)
+        XCTAssertEqual(model.reminders.first?.state, .expired, "A late decision cannot follow a hand-back")
+    }
     func testSocketTimeoutAbstainsAndLateDecisionFails() async throws {
         let path = "/tmp/tt-bridge-test-" + UUID().uuidString + "/events.sock"
         defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent()) }

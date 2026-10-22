@@ -9,10 +9,10 @@ final class TaskHookServer: @unchecked Sendable {
     private var pending: [String: Pending] = [:]
     private let queue = DispatchQueue(label: "tt.task.socket", attributes: .concurrent)
     let path: String
-    private let approvalTimeout: TimeInterval
+    let approvalTimeout: TimeInterval
     var onEvent: (@Sendable (TaskHookEvent) -> Void)?
     var onExpire: (@Sendable (String) -> Void)?
-    init(channel: String, path: String? = nil, approvalTimeout: TimeInterval = 120) {
+    init(channel: String, path: String? = nil, approvalTimeout: TimeInterval = TaskSocket.approvalTimeout) {
         self.path = path ?? TaskSocket.path(channel: channel); self.approvalTimeout = approvalTimeout
     }
 

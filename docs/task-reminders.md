@@ -13,18 +13,18 @@
 
 系统通知需要 macOS 授权；点击通知只打开对应卡片。通知仅含工具和状态，不含项目名、路径、命令、参数或回复正文。专注模式可能阻止横幅展示。
 
-「前往原任务」当前提供已识别原应用的激活回退，并明确提示用户在应用内选择原任务。尚无通过验收的精确会话链接或窗口定位，因此不会声称已打开某个具体会话，也不会调用 resume 创建等待会话的副本。
+「前往原任务」当前提供已识别原应用的激活回退，并明确提示用户在应用内选择原任务。对仍在等待的审批，它会立即放弃代答、把审批交回原工具：Codex 只在 Hooks 结束后才显示自己的审批框，保持连接会让原生审批最多推迟 120 秒。尚无通过验收的精确会话链接或窗口定位，因此不会声称已打开某个具体会话，也不会调用 resume 创建等待会话的副本。
 
 ## 接入与数据边界
 
 - `TokenTrackerHook` 是随 App 打包的原生 Swift 可执行文件。配置安装时复制到 App 专属 Application Support 下的稳定路径，避免开发包移动后 Hook 失效。产品运行不依赖 Python，也不开 TCP/HTTP 服务。
-- 桌面来源由最近引擎的启动模式、已验证路径、宿主共同确定；Codex 的全局配置参数可以位于 app-server 子命令前。桌面内启动的交互 CLI／exec 保留 CLI 身份，不能仅凭父应用或 SessionStart.source 判定桌面；缺失或不明确的上下文保持「来源未确认」。新增来源字段可选，兼容历史事件。
+- 来源只取引擎自身确立的信号：Claude 看引擎是否位于桌面内置目录、`CLAUDE_CODE_ENTRYPOINT` 和宿主 App；Codex 看引擎是否为桌面内置、宿主 App，以及参数中第一个已知子命令是否为 `app-server`（`exec-server`、`mcp-server` 等服务模式为「来源未确认」）。不维护上游参数白名单。桌面内启动的 CLI 使用用户自己的引擎，保留 CLI 或「来源未确认」，不能仅凭父应用或 SessionStart.source 判定桌面。来源只用于标签和设置页状态，不参与审批。新增来源字段可选，兼容历史事件。
 - 同一实际配置目录仅安装一份；项目 Hooks 收到事件不代表用户级配置文件已安装。已观察的配置根只保存在运行内存；用户选择保存在 App 本地偏好。Claude 显式禁用／只允许受管理 Hooks、Codex features.hooks=false 会阻止安装；上游策略、信任和沙箱限制仍由原工具执行，不写入信任记录或绕过检查。
 - Helper 先尝试连接 App；App 不在时立即返回空 JSON，不启动 App。仅读取官方 Hook stdin，不读取会话正文或 transcript 文件。
-- Helper 与 App 使用当前用户的 Unix Socket。目录权限 0700、Socket 权限 0600，两端核对 peer UID；单个报文最多 1 MiB，审批最多同时等待 32 个连接。
+- Helper 与 App 使用当前用户的 Unix Socket，位于每用户私有临时目录（`confstr(_CS_DARWIN_USER_TEMP_DIR)`，即 `/var/folders/…/T/tt-tasks-<uid>-dev|app`），不再放在 `/tmp`。目录权限 0700、Socket 权限 0600，两端核对 peer UID；App 启动时若已安装的 Helper 与包内版本不同则自动替换，避免升级后旧 Helper 连接旧路径；单个报文最多 1 MiB，审批最多同时等待 32 个连接。
 - 官方事件在 `TaskHookEvent` 中归一化。共同接入 SessionStart、UserPromptSubmit、PermissionRequest、PostToolUse、Stop、SessionEnd；Codex 另接 Interrupt，Claude 另接 PostToolUseFailure、PermissionDenied 和 permission_prompt 通知。
 - 不依据 Token 增长停顿推断完成。主会话 Stop 每轮提醒一次，文案为「本轮回复结束」。带子代理身份的 Stop 不生成主会话完成提醒；子会话结束不会取消父会话的待审批连接。
-- 只有活跃 PermissionRequest 连接可以代答，随机请求 ID 与连接绑定，单次消费。审批最多等待 120 秒，上游配置 timeout 为 130 秒。过期、断连、取消、禁用功能或 App 退出均放弃代答，由原工具继续自己的审批流程。
+- 只有活跃 PermissionRequest 连接可以代答，随机请求 ID 与连接绑定，单次消费。审批最多等待 120 秒，上游配置 timeout 为 130 秒，两者由 `TaskSocket.approvalTimeout`／`hookTimeout` 统一定义。过期、断连、取消、禁用功能或 App 退出均放弃代答，由原工具继续自己的审批流程。
 - 决定输出仅包含官方 PermissionRequest 的 allow／deny，不改命令、规则或审批模式。通知型请求仅提供「前往原任务」。
 - 点击决定后显示「决定已发送」或「拒绝决定已发送」。只有后续工具事件含可精确匹配的调用 ID，且唯一匹配当前会话、轮次、代理和工具时，才更新执行结果。缺少调用 ID 时不会猜测已经继续执行。
 - 原用量通知和任务通知共用 `NotificationRouter`，由它持有唯一 `UNUserNotificationCenterDelegate`；原用量通知的导航与声音行为保留。

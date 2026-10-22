@@ -33,12 +33,12 @@ func clientSource(provider: TaskProvider, host: String?, environment: [String: S
             let path = String(decoding: pathBytes.prefix(while: { $0 != 0 }), as: UTF8.self)
             let name = URL(fileURLWithPath: path).lastPathComponent
             if name == (provider == .codex ? "codex" : "claude") {
-                let args = processArguments(pid)
-                let mode = TaskClientSource.launchMode(provider: provider, arguments: args)
+                // Only Codex needs argv (its subcommand); Claude is identified without it.
+                let args = provider == .codex ? processArguments(pid) : []
                 let home = NSHomeDirectory()
                 let root = environment[provider == .codex ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]
                     ?? home + (provider == .codex ? "/.codex" : "/.claude")
-                return TaskClientSource.identify(provider: provider, enginePath: path, mode: mode,
+                return TaskClientSource.identify(provider: provider, enginePath: path, arguments: args,
                     entrypoint: environment["CLAUDE_CODE_ENTRYPOINT"], host: host,
                     configurationRoot: root.hasPrefix("/") ? root : nil, home: home)
             }
@@ -93,7 +93,7 @@ func run() {
     input.removeAll(keepingCapacity: false)
     do {
         try TaskSocket.send(data, fd: fd, deadline: Date().addingTimeInterval(1))
-        let response = try TaskSocket.receive(fd, deadline: Date().addingTimeInterval(event.requiresReply ? 120 : 2))
+        let response = try TaskSocket.receive(fd, deadline: Date().addingTimeInterval(event.requiresReply ? TaskSocket.approvalTimeout : 2))
         let reply = try JSONDecoder().decode(TaskHookReply.self, from: response)
         guard reply.id == event.id else { return }
         if event.requiresReply, reply.decision != .pass { output = reply.output() }

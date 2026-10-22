@@ -548,7 +548,7 @@
 "请回原任务处理" = "Continue in the original task";
 "需要你在原任务处理" = "Action needed in the original task";
 "查看完整请求" = "View full request";
-"仅处理当前请求；关闭卡片不会批准或拒绝。" = "Applies to this request only. Closing the card does not approve or reject it.";
+"仅处理当前请求；关闭卡片不会批准或拒绝。前往原任务会把审批交回原工具。" = "Applies to this request only. Closing the card does not approve or reject it. Go to original task hands the approval back to the original tool.";
 "拒绝一次" = "Reject once";
 "允许一次" = "Allow once";
 "前往原任务" = "Go to original task";

@@ -9,11 +9,6 @@ struct TaskReminderSettings: View {
     @State private var selected: TaskProvider = .codex
     @State private var installing = true
     @State private var notice: String?
-    private var helperURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(TaskReminderModel.channel == "development" ? "TokenTracker Dev" : "TokenTracker")
-            .appendingPathComponent("Hooks/TokenTrackerHook")
-    }
     var body: some View {
         Section(L10n.text("任务提醒与审批")) {
             Toggle(L10n.text("启用任务提醒"), isOn: $preferences.enabled)
@@ -135,24 +130,13 @@ struct TaskReminderSettings: View {
         }
         selected = provider; self.installing = installing
         let path = root.configurationPath(provider: provider)
-        do { preview = try TaskHookConfiguration.preview(provider: provider, path: path, helper: helperURL.path,
+        do { preview = try TaskHookConfiguration.preview(provider: provider, path: path, helper: TaskReminderModel.helperURL.path,
                                                           channel: TaskReminderModel.channel, installing: installing) }
         catch { notice = L10n.text("无法读取 Hooks 配置；未修改原文件") }
     }
     private func apply(_ preview: TaskHookConfiguration) {
         do {
-            if installing {
-                guard let executable = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("TokenTrackerHook"),
-                      FileManager.default.isExecutableFile(atPath: executable.path) else { throw TaskBridgeError.unavailable }
-                try FileManager.default.createDirectory(at: helperURL.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                       attributes: [.posixPermissions: 0o700])
-                let staging = helperURL.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
-                try FileManager.default.copyItem(at: executable, to: staging)
-                defer { try? FileManager.default.removeItem(at: staging) }
-                if FileManager.default.fileExists(atPath: helperURL.path) {
-                    _ = try FileManager.default.replaceItemAt(helperURL, withItemAt: staging)
-                } else { try FileManager.default.moveItem(at: staging, to: helperURL) }
-            }
+            if installing { try TaskReminderModel.installHelper() }
             try preview.apply()
             providerBinding(selected).wrappedValue = installing
             notice = L10n.text(installing ? "配置已保存；请在原工具检查并信任 Hooks，重新开始会话后验证接入。" : "已移除 TokenTracker Hooks；其他配置已保留。")

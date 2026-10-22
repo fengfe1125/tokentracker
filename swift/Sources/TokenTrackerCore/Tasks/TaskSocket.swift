@@ -4,8 +4,18 @@ import Darwin
 /// Same-user, framed local transport. No raw payloads or errors are logged.
 public enum TaskSocket {
     public static let maximumFrame = 1_048_576
+    /// How long a PermissionRequest waits for a card decision before abstaining.
+    public static let approvalTimeout: TimeInterval = 120
+    /// Upstream hook timeout; longer than approvalTimeout so the helper always abstains first.
+    public static let hookTimeout = Int(approvalTimeout) + 10
     public static func directory(channel: String) -> String {
-        "/tmp/tt-tasks-\(getuid())-" + (channel == "development" ? "dev" : "app")
+        // Per-user private temp root (/var/folders/…/T). It is the same for the App and
+        // every hook process regardless of TMPDIR, and unlike /tmp other users cannot
+        // pre-create it or have it swept away by periodic /tmp cleanup.
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        var base = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count) > 0 ? String(cString: buffer) : "/tmp"
+        if !base.hasSuffix("/") { base += "/" }
+        return base + "tt-tasks-\(getuid())-" + (channel == "development" ? "dev" : "app")
     }
     public static func path(channel: String) -> String { directory(channel: channel) + "/events.sock" }
 
