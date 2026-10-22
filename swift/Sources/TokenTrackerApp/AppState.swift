@@ -23,6 +23,12 @@ final class AppState: ObservableObject {
     @Published var today: MenuBarToday?
     @Published var quotaEntries: [MenuBarQuotaEntry] = []
     @Published var subscriptionCards: [SubscriptionCard] = []
+    @Published private(set) var subscriptionRefreshing = false
+    /// 用户指定的额外配置目录（App 偏好，不写入共享 settings.json）
+    @Published private(set) var subscriptionDirectories: [String] {
+        didSet { UserDefaults.standard.set(subscriptionDirectories, forKey: Self.subscriptionDirectoriesKey) }
+    }
+    nonisolated static let subscriptionDirectoriesKey = "tt.subscriptions.directories"
     @Published var scanning = false
     @Published var lastScan: ScanSchedulerStatus.Last?
 
@@ -88,14 +94,14 @@ final class AppState: ObservableObject {
     let priceCatalogPath: String
     /// Codex 多账号切换：快照当前登录 + 一键原子替换 auth.json
     let accountSwitcher: CodexAccountSwitcher
-    /// 官方配额抓取（注入缝：测试可换成假实现；nil = 仅本地估算）
-    var officialQuotaService: OfficialQuotaService?
     private(set) var scheduler: ScanScheduler!
 
     private var dataGeneration = 0
     private var sessionsGeneration = 0
     private var quotaBusy = false
-    private var subscriptionService: SubscriptionService?
+    private var quotaPending = false
+    /// 订阅查询（预览模式为 nil，改用虚构卡片）
+    private let subscriptionService: SubscriptionService?
     private let quotaQueue = DispatchQueue(label: "tokentracker.quotas")
     private let detailQueue = DispatchQueue(label: "tokentracker.details")
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
@@ -126,7 +132,7 @@ final class AppState: ObservableObject {
     func showActivityDetail() { onActivityDetail?() }
     func showPublishHistory() { onPublishHistory?() }
 
-    init(dbPath: String? = nil, officialQuotaService: OfficialQuotaService? = OfficialQuotaService(currentLoginOnly: true)) {
+    init(dbPath: String? = nil) {
         let env = ProcessInfo.processInfo.environment
         let path = dbPath ?? env["TOKENTRACKER_DB"]
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
@@ -148,8 +154,12 @@ final class AppState: ObservableObject {
                                          history: historyStore)
         scanRoots = ScanRoots()
         accountSwitcher = preview ? CodexAccountSwitcher(ctx: BillingContext(home:previewHome,env:["CODEX_HOME":previewHome+"/.codex"])) : CodexAccountSwitcher()
-        self.officialQuotaService = preview ? nil : officialQuotaService
-        self.subscriptionService = preview ? nil : SubscriptionService()
+        subscriptionService = preview ? nil : SubscriptionService()
+        subscriptionDirectories = preview ? [] : UserDefaults.standard.stringArray(forKey: Self.subscriptionDirectoriesKey) ?? []
+        if preview {
+            subscriptionCards = SubscriptionCard.previewCards()
+            quotaEntries = QuotaRefresh.menuEntries(subscriptionCards)
+        }
         settings = settingsStore.effective()
         settingsFingerprint = Self.fingerprint(settings)
         let priceStatus = PriceCatalogDocument.load(from: priceCatalogPath)
@@ -512,62 +522,53 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshQuotas() {
-        guard !quotaBusy else { return }
+    /// 订阅配额与余额：每分钟重新发现来源，到期账号才查询（成功缓存 5 分钟）。
+    /// force = 设置页「重新发现」或账号切换后，跳过 5 分钟缓存（仍遵守 Retry-After）。
+    func refreshQuotas(force: Bool = false) {
+        guard let service = subscriptionService else { return }
+        guard !quotaBusy else { quotaPending = quotaPending || force; return }
         quotaBusy = true
-        if let subscriptionService {
-            let cards = subscriptionService.refresh()
-            DispatchQueue.main.async { self.subscriptionCards = cards }
-        }
-        let accountID = activeCodexAccountID ?? "unknown"
+        subscriptionRefreshing = force
+        let directories = subscriptionDirectories
         let path = readStore.path
-        let officialService = officialQuotaService
         quotaQueue.async { [weak self] in
-            guard let self else { return }
-            do {
-                let store = try UsageStore(path: path)
-                let quotasConfig = QuotasConfig.load(
-                    from: ProcessInfo.processInfo.environment["TOKENTRACKER_QUOTAS"] ?? "")
-                // 官方抓取并行（对齐 quotas.py ThreadPoolExecutor；任一失败不阻塞整体）
-                final class ResultsBox: @unchecked Sendable {
-                    var dict: [String: OfficialResult] = [:]
-                    let lock = NSLock()
+            service.discover(extraDirectories: directories)
+            let initial = service.cards()
+            DispatchQueue.main.async { self?.publishSubscriptions(initial) }
+            service.refresh(force: force) { cards in
+                DispatchQueue.main.async { self?.publishSubscriptions(cards) }
+            }
+            let final = service.cards()
+            if let store = try? UsageStore(path: path) { try? QuotaRefresh.record(store: store, cards: final) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.publishSubscriptions(final)
+                self.quotaBusy = false
+                self.subscriptionRefreshing = false
+                self.insights.refresh()
+                if self.quotaPending {
+                    self.quotaPending = false
+                    self.refreshQuotas(force: true)
                 }
-                let resultsBox = ResultsBox()
-                if let officialService {
-                    let names = Array(Set(quotasConfig.entries.compactMap(\.official)))
-                    DispatchQueue.concurrentPerform(iterations: names.count) { index in
-                        if let result = officialService.providerResult(names[index]) {
-                            resultsBox.lock.lock()
-                            resultsBox.dict[names[index]] = result
-                            resultsBox.lock.unlock()
-                        }
-                    }
-                }
-                let officialResults = resultsBox.dict
-                try QuotaRefresh.load(store: store, config: quotasConfig, results: officialResults,
-                                      accountID: accountID) { entries in
-                    DispatchQueue.main.async {
-                        guard accountID == (self.activeCodexAccountID ?? "unknown") else {
-                            self.quotaBusy=false;self.refreshQuotas();return
-                        }
-                        self.quotaEntries = entries
-                        self.quotaBusy = false
-                        self.insights.refresh()
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async { self.quotaBusy = false }
             }
         }
     }
 
-    func refreshSubscriptions() {
-        guard let service = subscriptionService else { return }
-        quotaQueue.async { [weak self] in
-            let cards = service.refresh()
-            DispatchQueue.main.async { self?.subscriptionCards = cards }
-        }
+    private func publishSubscriptions(_ cards: [SubscriptionCard]) {
+        if subscriptionCards != cards { subscriptionCards = cards }
+        let entries = QuotaRefresh.menuEntries(cards)
+        if quotaEntries != entries { quotaEntries = entries }
+    }
+
+    func addSubscriptionDirectory(_ path: String) {
+        guard !subscriptionDirectories.contains(path) else { return }
+        subscriptionDirectories.append(path)
+        refreshQuotas(force: true)
+    }
+
+    func removeSubscriptionDirectory(_ path: String) {
+        subscriptionDirectories.removeAll { $0 == path }
+        refreshQuotas(force: true)
     }
 
     func refreshSessions() {
@@ -775,12 +776,11 @@ final class AppState: ObservableObject {
                     self?.codexAccounts = accounts
                     self?.activeCodexAccountID = active
                     self?.accountNotice = L10n.message("已切换，请重启 Codex 生效")
-                    self?.officialQuotaService = OfficialQuotaService(currentLoginOnly: true)
                     self?.insights.mutate { store in
                         _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
                         try store.conn.commit()
                     }
-                    self?.refreshQuotas()
+                    self?.refreshQuotas(force: true)
                 }
             } catch {
                 let message = (error as? AccountPersistenceError) == .historyAfterSwitch
@@ -791,12 +791,11 @@ final class AppState: ObservableObject {
                     self?.accountNotice = message
                     if switched {
                         self?.activeCodexAccountID = active
-                        self?.officialQuotaService = OfficialQuotaService(currentLoginOnly: true)
                         self?.insights.mutate { store in
                             _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
                             try store.conn.commit()
                         }
-                        self?.refreshQuotas()
+                        self?.refreshQuotas(force: true)
                     }
                 }
             }

@@ -260,6 +260,41 @@ case "quotas":
         if !entry.note.isEmpty { print("  ⚠ \(entry.note)") }
     }
 
+case "subscriptions":
+    // 只读：发现本机账号并查询官方配额/余额；输出不含令牌、邮箱或原始账号 ID。
+    // --debug：只打印主机、路径、状态码、顶层键名与错误码字段，不打印凭据或数据值。
+    let debug = args.contains("--debug")
+    let service = SubscriptionService(transport: { request in
+        let response = SubscriptionHTTP.live(request)
+        if debug {
+            var codes: [String] = []
+            for key in ["code", "msg", "message", "error", "base_resp"] {
+                if let value = response.json[key] { codes.append("\(key)=\(value)") }
+            }
+            let line = "  [debug] \(request.method) \(request.url.host ?? "")\(request.url.path) → \(response.status)"
+                + " keys=\(response.json.keys.sorted()) \(codes.joined(separator: " "))\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
+        return response
+    }, cachePath: nil)
+    service.discover()
+    if !args.contains("--discover-only") { service.refresh(force: true) }
+    for card in service.cards() {
+        let account = card.account
+        let windows = card.snapshot.windows.map { w in
+            (w.name ?? w.duration.map { "\($0 / 3600)h" } ?? w.id) + "=" + (w.usedPercent.map { String(format: "%.0f%%", $0) } ?? "—")
+        }
+        let balances = card.snapshot.balances.map { b in
+            b.currency + " " + (b.total.map { "\($0)" } ?? "—")
+        }
+        let detail = (windows + balances).joined(separator: " ")
+        let problem = card.snapshot.problem.map { " [\($0.rawValue)\(card.snapshot.httpStatus.map { " \($0)" } ?? "")]" } ?? ""
+        let sources = account.sources.map { $0.tool + ":" + $0.location }.joined(separator: ", ")
+        print("\(account.provider.displayName.padding(toLength: 18, withPad: " ", startingAt: 0)) "
+              + "\(account.isActive ? "*" : " ") \(card.snapshot.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0))"
+              + "\(problem) \(detail)  ← \(sources)")
+    }
+
 default:
     print("""
     tt-swift — TokenTracker 原生 CLI
@@ -269,6 +304,8 @@ default:
       tt-swift activity [--range day|week|month|all] [--group agent|tool|skill]
                         [--agent NAME] [--confidence exact|derived|all] [--json]
       tt-swift quotas            终端查看全部配额窗口
+      tt-swift subscriptions [--discover-only] [--debug]
+                                 发现本机订阅账号并只读查询官方配额/余额
       tt-swift export-public [--days 365] [--pretty]
                                  生成公开统计载荷到 stdout（不联网）
       tt-swift publish [--dry-run|--force|--status]

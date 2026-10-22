@@ -18,8 +18,9 @@ Sources/
     Scanners/      七个工具的数据源适配器
     Settings/      settings.json 读写
     Store/         SQLite schema、迁移、聚合和查询
+    Subscriptions/ 本机账号发现、订阅配额与余额只读查询（概览卡片与菜单栏圆环）
   TokenTrackerApp/ 状态栏、主窗口、详情窗口、设置和应用内更新
-  tt-swift/        detect、scan、stats、activity、quotas
+  tt-swift/        detect、scan、stats、activity、quotas、subscriptions
 Tests/
   TokenTrackerCoreTests/
 ```
