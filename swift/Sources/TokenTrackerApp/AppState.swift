@@ -14,7 +14,7 @@ import TokenTrackerCore
 
 /// 侧边栏导航
 enum NavSelection: Hashable {
-    case overview, sessions, activity, settings, projects, reports
+    case overview, sessions, activity, settings, projects, reports, subscriptions
     case tool(String)
 }
 

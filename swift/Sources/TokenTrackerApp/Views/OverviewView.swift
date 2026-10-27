@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  概览：cc-switch 风格使用统计 —— 总览大卡（真实消耗 Tokens / 用量记录数 /
-//  费用合计）/ 2×2 输入输出明细卡 / 缓存命中率进度条 / 使用趋势平滑折线
+//  费用合计）/ 2×2 输入输出明细卡 / 缓存命中率进度条 / 使用趋势保形平滑曲线
 //  （成本虚线走右侧轴）/ 订阅配额卡 / 模型榜。数据对齐 UsageStore.stats/daily。
 //
 
@@ -56,7 +56,6 @@ struct OverviewView: View {
                     detailGrid
                     hitRateCard
                     trendCard
-                    quotaSection
                     modelSection
                     InsightsOverview(model:state.insights,rescan:{state.requestScan()})
                 }
@@ -291,12 +290,6 @@ struct OverviewView: View {
             }
         }
         .frame(maxWidth: .infinity)
-    }
-
-    // ---------------------------------------------------------- 配额 ----
-
-    private var quotaSection: some View {
-        SubscriptionSection(cards: state.subscriptionCards, refreshing: state.subscriptionRefreshing)
     }
 
     // -------------------------------------------------------- 模型榜 ----

@@ -50,6 +50,35 @@ final class JsonlScannerPortTests: XCTestCase {
         XCTAssertEqual(rows.reduce(0) { $0 + $1.int("input") }, 30)
     }
 
+    func testDshModernUsageBackfillAndVersionDedup() throws {
+        let tmp = try TempDir()
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("tests/differential/dsh_modern.jsonl")
+        let events = iterJSONL(fixture.path).map { $0.1 }
+        for name in ["session.jsonl.zstd", "session.v3.jsonl.zstd", "session.v4.jsonl.zstd"] {
+            writeJSONL(tmp.path("dsh", "project", "session", name), events)
+        }
+        var scanner = DshScanner(root: tmp.path("dsh"))
+        scanner.reader = iterJSONL
+        let store = try tmp.store()
+        _ = try scanner.scan(store, testPrices, full: false)
+        let rows = try store.conn.query("SELECT * FROM usage_events ORDER BY src_key")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.reduce(Int64(0)) { $0 + $1.int("input") + $1.int("output")
+            + $1.int("cache_read") + $1.int("cache_write") }, 142)
+        XCTAssertEqual(rows.first?.string("model"), "deepseek-v4-pro")
+        XCTAssertEqual(rows.first?.int("ts"), fixtureTSMs)
+        XCTAssertEqual(rows.first?.string("src_key"), "dsh-modern-fixture|1|1")
+        _ = try store.conn.execute("DELETE FROM usage_events")
+        var cursor = try store.getScanCursor(tool: "dsh")
+        cursor.removeValue(forKey: "dsh_usage_parser_version")
+        try store.setScanCursor(tool: "dsh", cursor: cursor)
+        XCTAssertEqual(try scanner.scan(store, testPrices, full: false).added, 2)
+        XCTAssertEqual(try scanner.scan(store, testPrices, full: false).files, 0)
+        XCTAssertEqual(try scanner.scan(store, testPrices, full: true).added, 0)
+    }
+
     /// test_dsh_missing_header_uses_directory_identity
     func testDshMissingHeaderUsesDirectoryIdentity() throws {
         let tmp = try TempDir()

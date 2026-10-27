@@ -1,0 +1,5 @@
+{"type": "session", "id": "dsh-modern-fixture", "cwd": "/repo/fixture"}
+{"type": "request/header", "data": {"header": {"config": {"model": "outdated-model"}}}}
+{"type": "assistant/message", "time": 1787619600000, "data": {"turn": 1, "step": 1, "message": {"source": {"model": "deepseek-v4-pro"}}, "usage": {"inputTokens": 100, "outputTokens": 10, "cacheReadTokens": 20, "cacheWriteTokens": 5}, "stream": [{"type": "chunk", "chunk": {"type": "usage", "usage": {"inputTokens": 100, "outputTokens": 10, "cacheReadTokens": 20, "cacheWriteTokens": 5}}}]}}
+{"type": "assistant/message", "time": 1787619600100, "data": {"turn": 1, "step": 2, "message": {"source": {"model": "deepseek-v4-pro"}}, "usage": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 7}}}
+{"type": "assistant/message", "time": 1787619600200, "data": {"turn": 1, "step": 3, "message": {"source": {"model": "deepseek-v4-pro"}}}}

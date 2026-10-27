@@ -44,6 +44,7 @@ public struct DshScanner: ScannerAdapter {
     public func scan(_ store: UsageStore, _ prices: PriceTable, full: Bool) throws -> ScanOutcome {
         var cursor = try store.getScanCursor(tool: name)
         let effectiveFull = full || activityNeedsBackfill(cursor)
+            || jsonInt(cursor["dsh_usage_parser_version"]) != 1
         var outcome = ScanOutcome()
         var files: [String] = []
         if let enumerator = FileManager.default.enumerator(atPath: root) {
@@ -112,11 +113,16 @@ public struct DshScanner: ScannerAdapter {
                         agent: name, callID: callID, status: status,
                         endedAt: ended == 0 ? nil : ended,
                         durationMs: (data["durationMs"] as? NSNumber)?.int64Value)
-                } else if type == "assistant/chunk" {
+                } else if type == "assistant/chunk" || type == "assistant/message" {
                     let data = obj["data"] as? [String: Any] ?? [:]
                     let chunk = data["chunk"] as? [String: Any] ?? [:]
-                    guard chunk["type"] as? String == "usage",
-                          let usage = chunk["usage"] as? [String: Any] else { continue }
+                    // v3/v4 compact streams into assistant/message; never sum its embedded stream again.
+                    let usageObject = type == "assistant/message" ? data["usage"]
+                        : (chunk["type"] as? String == "usage" ? chunk["usage"] : nil)
+                    guard let usage = usageObject as? [String: Any] else { continue }
+                    let message = data["message"] as? [String: Any] ?? [:]
+                    let source = message["source"] as? [String: Any] ?? [:]
+                    let usageModel = source["model"] as? String ?? model
                     let inp = jsonInt(usage["inputTokens"])
                     let outp = jsonInt(usage["outputTokens"])
                     let cr = jsonOrInt(usage["cacheReadTokens"], usage["cacheRead"])
@@ -127,19 +133,19 @@ public struct DshScanner: ScannerAdapter {
                     let turn = data["turn"].map { String(describing: $0) } ?? "None"
                     let step = data["step"].map { String(describing: $0) } ?? "None"
                     let key = "\(sid)|\(turn)|\(step)"
-                    let quote = prices.quote(model: model, input: inp, output: outp,
+                    let quote = prices.quote(model: usageModel, input: inp, output: outp,
                                               cacheRead: cr, cacheWrite: cw, eventAtMs: ts)
                     outcome.added += try store.putEvent(
                         tool: name, srcKey: key, sessionID: sid, project: project,
-                        ts: ts, model: model, input: inp, output: outp,
+                        ts: ts, model: usageModel, input: inp, output: outp,
                         cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
-                        provider: quote?.provider ?? (model.lowercased().hasPrefix("deepseek-") ? "deepseek" : ""),
+                        provider: quote?.provider ?? (usageModel.lowercased().hasPrefix("deepseek-") ? "deepseek" : ""),
                         priceVersionID: quote?.priceVersionID)
                     if sessionID.isEmpty {
                         let oldKey = "\(oldFallback)|\(turn)|\(step)"
                         outcome.updated += try replaceOldFallback(
                             store, oldKey: oldKey, sid: sid, project: project,
-                            ts: ts, model: model, counts: (inp, outp, cr, cw))
+                            ts: ts, model: usageModel, counts: (inp, outp, cr, cw))
                     }
                 } else if type == "usage" {
                     // 顶层 usage 事件（兜底）
@@ -168,6 +174,7 @@ public struct DshScanner: ScannerAdapter {
             }
             cursor[path] = statKey.asDict
         }
+        cursor["dsh_usage_parser_version"] = 1
         markActivityCurrent(&cursor)
         try store.setScanCursor(tool: name, cursor: cursor)
         return outcome

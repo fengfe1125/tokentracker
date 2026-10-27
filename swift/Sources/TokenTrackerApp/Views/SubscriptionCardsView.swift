@@ -1,18 +1,21 @@
 import SwiftUI
 import TokenTrackerCore
 
-/// 概览「订阅配额与余额」：宽窗口两列、窄窗口一列；同一行卡片等高、顶部对齐，
+/// 「订阅配额与余额」：宽窗口两列、窄窗口一列；同一行卡片等高、顶部对齐，
 /// 高度随内容增长，文字不裁剪。
 struct SubscriptionSection: View {
     @ObservedObject private var language = LanguageManager.shared
     let cards: [SubscriptionCard]
     let refreshing: Bool
+    var showsHeading = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(L10n.text("订阅配额与余额")).font(.headline)
-                if refreshing { ProgressView().controlSize(.small) }
+            if showsHeading {
+                HStack(spacing: 8) {
+                    Text(L10n.text("订阅配额与余额")).font(.headline)
+                    if refreshing { ProgressView().controlSize(.small) }
+                }
             }
             if cards.isEmpty {
                 Text(L10n.text("未发现本机订阅账号"))
@@ -36,8 +39,8 @@ struct EqualHeightRows: Layout {
     var spacing: CGFloat
 
     private func metrics(_ width: CGFloat, _ subviews: Subviews) -> (columns: Int, columnWidth: CGFloat, rows: [CGFloat]) {
-        let fit = Int((width + spacing) / (minColumnWidth + spacing))
-        let columns = max(1, min(maxColumns, fit))
+        let fit = (width + spacing) / (minColumnWidth + spacing)
+        let columns = Int(max(1, min(CGFloat(maxColumns), fit)))
         let columnWidth = max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
         var rows: [CGFloat] = []
         for start in stride(from: 0, to: subviews.count, by: columns) {
@@ -50,7 +53,9 @@ struct EqualHeightRows: Layout {
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? (minColumnWidth * CGFloat(maxColumns) + spacing * CGFloat(maxColumns - 1))
+        let idealWidth = minColumnWidth * CGFloat(maxColumns) + spacing * CGFloat(maxColumns - 1)
+        // AppKit probes an NSHostingController with infinite width when creating a window.
+        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? idealWidth
         let rows = metrics(width, subviews).rows
         return CGSize(width: width, height: rows.reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1)))
     }

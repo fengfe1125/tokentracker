@@ -2,8 +2,8 @@
 //  HandDrawnTrendChart.swift
 //  TokenTrackerApp
 //
-//  手绘风使用趋势：Canvas 自绘 Catmull-Rom 平滑曲线 + 确定性抖动笔触
-//  （钢笔手绘感），双轴极简坐标（左 tokens / 右成本，无网格线），
+//  使用趋势：Canvas 使用保形单调插值绘制平滑曲线，
+//  双轴极简坐标（左 tokens / 右成本，无网格线），
 //  鼠标悬停画竖向参考线 + 各曲线圆点并浮出数值卡。
 //
 
@@ -148,7 +148,7 @@ struct HandDrawnTrendChart: View {
         // 缓存命中：先铺渐变面积，再描主线
         let hitPts = pointPixels(\.cacheRead, max: maxTokens, plot: plot)
         if hitPts.count > 1 {
-            var area = sketchPath(hitPts, seed: 0xC0FFEE)
+            var area = Self.smoothPath(hitPts)
             area.addLine(to: CGPoint(x: hitPts.last!.x, y: plot.maxY))
             area.addLine(to: CGPoint(x: hitPts.first!.x, y: plot.maxY))
             area.closeSubpath()
@@ -157,11 +157,11 @@ struct HandDrawnTrendChart: View {
                 startPoint: CGPoint(x: plot.midX, y: plot.minY),
                 endPoint: CGPoint(x: plot.midX, y: plot.maxY)))
         }
-        for (i, series) in Self.seriesList.enumerated() {
+        for series in Self.seriesList {
             let max = series.isCost ? maxCost : maxTokens
             let pts = pointPixels(series.value, max: max, plot: plot)
             guard pts.count > 1 else { continue }
-            let path = sketchPath(pts, seed: UInt64(0x5EED) &+ UInt64(i) &* 7919)
+            let path = Self.smoothPath(pts)
             let style = StrokeStyle(lineWidth: series.width, lineCap: .round,
                                     lineJoin: .round, dash: series.dashed ? [5, 4] : [])
             ctx.stroke(path, with: .color(series.color.opacity(series.dashed ? 0.85 : 0.9)),
@@ -195,56 +195,36 @@ struct HandDrawnTrendChart: View {
         }
     }
 
-    // -------------------------------------------------------- 手绘笔触 ----
-
-    /// Catmull-Rom 每段采样 8 点 + 确定性双 sin 抖动（振幅约 1.2pt），
-    /// 同一条线每次渲染抖动一致（seed 固定），不会闪烁。
-    private func sketchPath(_ pts: [CGPoint], seed: UInt64) -> Path {
+    /// 保形三次 Hermite 插值：相邻斜率反向或为零时，切线置零；
+    /// 其余取加权调和平均，避免峰值过冲和在零值附近产生负用量。
+    nonisolated static func smoothPath(_ pts: [CGPoint]) -> Path {
         var path = Path()
-        guard let first = pts.first, pts.count > 1 else { return path }
-        var samples: [CGPoint] = []
-        for i in 0..<(pts.count - 1) {
-            let p0 = pts[max(i - 1, 0)]
-            let p1 = pts[i]
-            let p2 = pts[i + 1]
-            let p3 = pts[min(i + 2, pts.count - 1)]
-            for s in 0..<8 {
-                samples.append(catmullRom(p0, p1, p2, p3, Double(s) / 8))
+        guard let first = pts.first else { return path }
+        path.move(to: first)
+        guard pts.count > 1 else { return path }
+        let widths = zip(pts, pts.dropFirst()).map { $1.x - $0.x }
+        let slopes = zip(pts, pts.dropFirst()).enumerated().map { index, pair in
+            (pair.1.y - pair.0.y) / widths[index]
+        }
+        var tangents = [CGFloat](repeating: 0, count: pts.count)
+        tangents[0] = slopes[0]
+        tangents[pts.count - 1] = slopes[slopes.count - 1]
+        if pts.count > 2 {
+            for i in 1..<(pts.count - 1) {
+                let before = slopes[i - 1], after = slopes[i]
+                guard (before > 0 && after > 0) || (before < 0 && after < 0) else { continue }
+                let w1 = 2 * widths[i] + widths[i - 1]
+                let w2 = widths[i] + 2 * widths[i - 1]
+                tangents[i] = (w1 + w2) / (w1 / before + w2 / after)
             }
         }
-        samples.append(pts[pts.count - 1])
-
-        let phase1 = hash01(seed, 1) * 2 * .pi
-        let phase2 = hash01(seed, 2) * 2 * .pi
-        let total = Double(max(samples.count - 1, 1))
-        path.move(to: samples[0])
-        for (index, p) in samples.enumerated() {
-            let t = Double(index) / total * 6 * .pi   // 全图约 3 个抖动周期
-            let wobble = sin(t * 1.0 + phase1) * 0.7 + sin(t * 2.3 + phase2) * 0.5
-            path.addLine(to: CGPoint(x: p.x, y: p.y + CGFloat(wobble)))
+        for i in 0..<(pts.count - 1) {
+            let a = pts[i], b = pts[i + 1], third = widths[i] / 3
+            path.addCurve(to: b,
+                          control1: CGPoint(x: a.x + third, y: a.y + tangents[i] * third),
+                          control2: CGPoint(x: b.x - third, y: b.y - tangents[i + 1] * third))
         }
-        _ = first
         return path
-    }
-
-    private func catmullRom(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint,
-                            _ t: Double) -> CGPoint {
-        let t2 = t * t, t3 = t2 * t
-        func cr(_ a: Double, _ b: Double, _ c: Double, _ d: Double) -> Double {
-            0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2
-                   + (-a + 3 * b - 3 * c + d) * t3)
-        }
-        return CGPoint(x: cr(Double(p0.x), Double(p1.x), Double(p2.x), Double(p3.x)),
-                       y: cr(Double(p0.y), Double(p1.y), Double(p2.y), Double(p3.y)))
-    }
-
-    /// splitmix64 尾混合 → [0,1)；给抖动取相位用
-    private func hash01(_ seed: UInt64, _ salt: UInt64) -> Double {
-        var z = seed &+ 0x9E37_79B9_7F4A_7C15 &* (salt &+ 1)
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        z ^= z >> 31
-        return Double(z >> 11) / Double(1 << 53)
     }
 
     // ------------------------------------------------------------ 浮卡 ----

@@ -99,6 +99,31 @@ class JsonlScannerTest(ScannerCase):
             claude.scan(self.conn, PRICES)
         self.assertEqual(sum(r["input"] for r in self.rows()), 30)
 
+    def test_dsh_modern_usage_backfill_and_version_dedup(self):
+        source = self.root / "dsh"
+        fixture = Path(__file__).parent / "differential/dsh_modern.jsonl"
+        for name in ("session.jsonl.zstd", "session.v3.jsonl.zstd", "session.v4.jsonl.zstd"):
+            path = source / "project/session" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(fixture.read_bytes())
+        with patch.object(dsh, "root", return_value=str(source)), patch.object(dsh, "iter_zstd_jsonl", iter_jsonl):
+            dsh.scan(self.conn, PRICES)
+            rows = self.rows()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(sum(r["input"] + r["output"] + r["cache_read"] + r["cache_write"] for r in rows), 142)
+            self.assertEqual(rows[0]["model"], "deepseek-v4-pro")
+            self.assertEqual(rows[0]["ts"], TS_MS)
+            self.assertEqual(rows[0]["src_key"], "dsh-modern-fixture|1|1")
+            # Simulate unchanged files fingerprinted by the old parser, with no usage imported.
+            self.conn.execute("DELETE FROM usage_events")
+            cursor = db.get_scan_cursor(self.conn, "dsh")
+            cursor.pop("dsh_usage_parser_version", None)
+            db.set_scan_cursor(self.conn, "dsh", cursor)
+            result = dsh.scan(self.conn, PRICES)
+            self.assertEqual(result["added"], 2)
+            self.assertEqual(dsh.scan(self.conn, PRICES)["files"], 0)
+            self.assertEqual(dsh.scan(self.conn, PRICES, full=True)["added"], 0)
+
     def test_dsh_missing_header_uses_directory_identity(self):
         source = self.root / "dsh"
         event = {"type": "assistant/chunk", "time": TS_MS, "data": {

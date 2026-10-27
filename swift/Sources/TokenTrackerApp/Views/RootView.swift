@@ -23,6 +23,8 @@ struct RootView: View {
                         .tag(NavSelection.overview)
                     Label(L10n.text("项目"), systemImage: "folder").tag(NavSelection.projects)
                     Label(L10n.text("报告"), systemImage: "doc.text").tag(NavSelection.reports)
+                    Label(L10n.text("订阅配额与余额"), systemImage: "creditcard")
+                        .tag(NavSelection.subscriptions)
                     Label(L10n.text("会话记录"), systemImage: "list.bullet.rectangle")
                         .tag(NavSelection.sessions)
                     Label(L10n.text("Agent 活动"), systemImage: "point.3.connected.trianglepath.dotted")
@@ -51,6 +53,8 @@ struct RootView: View {
                 ProjectsView(model: state.insights)
             case .reports:
                 ReportsView(model: state.insights)
+            case .subscriptions:
+                SubscriptionView(state: state)
             case .overview:
                 OverviewView(state: state)
             case .sessions:

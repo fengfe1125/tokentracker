@@ -14,6 +14,7 @@ export_python.py 固定时钟兜底（本脚本不写时间相关字段）。
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import os
 import shutil
 import sqlite3
@@ -196,6 +197,14 @@ def make_dsh(base):
                           input=raw.encode(), check=False)
     if proc.returncode != 0:
         raise SystemExit("需要系统 zstd 命令生成 DSH 语料（brew install zstd）")
+
+    # Same session across storage revisions must remain one set of usage rows.
+    modern = Path(__file__).with_name("dsh_modern.jsonl").read_bytes()
+    modern_out = os.path.join(root, "ws-modern", "dsh-modern-fixture")
+    os.makedirs(modern_out, exist_ok=True)
+    for name in ("session.jsonl.zstd", "session.v3.jsonl.zstd", "session.v4.jsonl.zstd"):
+        subprocess.run(["zstd", "-q", "-f", "-o", os.path.join(modern_out, name)],
+                       input=modern, check=True)
 
 
 # -------------------------------------------------------------------- hermes ----

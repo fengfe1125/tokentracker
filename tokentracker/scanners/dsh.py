@@ -39,7 +39,7 @@ def _replace_old_fallback(conn, old_key, key, sid, project, ts, model, counts):
 def scan(conn, prices, full: bool = False) -> dict:
     base = root()
     cursor = db.get_scan_cursor(conn, NAME)
-    effective_full = full or activity.needs_backfill(cursor)
+    effective_full = full or activity.needs_backfill(cursor) or cursor.get("dsh_usage_parser_version") != 1
     added = updated = files = activity_added = activity_updated = 0
     for dirpath, _dirs, names in os.walk(base):
         # 一级子目录是 workspace slug，二级是 session id
@@ -99,11 +99,14 @@ def scan(conn, prices, full: bool = False) -> dict:
                         conn, NAME, str(call_id or ""), status=status,
                         ended_at=int(obj.get("time") or data.get("time") or 0) or None,
                         duration_ms=data.get("durationMs"))
-                elif t == "assistant/chunk":
+                elif t in ("assistant/chunk", "assistant/message"):
                     data = obj.get("data") or {}
                     chunk = data.get("chunk") or {}
-                    if chunk.get("type") == "usage" and isinstance(chunk.get("usage"), dict):
-                        u = chunk["usage"]
+                    # v3/v4 persist compacted messages; their embedded stream is not extra usage.
+                    u = data.get("usage") if t == "assistant/message" else (
+                        chunk.get("usage") if chunk.get("type") == "usage" else None)
+                    if isinstance(u, dict):
+                        usage_model = ((data.get("message") or {}).get("source") or {}).get("model") or model
                         inp = u.get("inputTokens") or 0
                         outp = u.get("outputTokens") or 0
                         cr = u.get("cacheReadTokens") or u.get("cacheRead") or 0
@@ -114,17 +117,17 @@ def scan(conn, prices, full: bool = False) -> dict:
                         sid = session_id or fallback_id
                         key = f"{sid}|{data.get('turn')}|{data.get('step')}"
                         cost, provider, version_id = pricing.quote_for(
-                            prices, model, inp, outp, cr, cw, event_ts=int(ts or 0))
+                            prices, usage_model, inp, outp, cr, cw, event_ts=int(ts or 0))
                         added += db.put_event(conn, NAME, key, session_id=sid,
-                                              project=project, ts=int(ts), model=model,
+                                              project=project, ts=int(ts), model=usage_model,
                                               input=inp, output=outp, cache_read=cr,
                                               cache_write=cw, cost=cost,
-                                              provider=provider or ("deepseek" if model.lower().startswith("deepseek-") else ""),
+                                              provider=provider or ("deepseek" if usage_model.lower().startswith("deepseek-") else ""),
                                               price_version_id=version_id)
                         if not session_id:
                             old_key = f"{old_fallback}|{data.get('turn')}|{data.get('step')}"
                             updated += _replace_old_fallback(
-                                conn, old_key, key, sid, project, int(ts), model, (inp, outp, cr, cw))
+                                conn, old_key, key, sid, project, int(ts), usage_model, (inp, outp, cr, cw))
                 elif t == "usage":
                     # 顶层 usage 事件（兜底）
                     data = obj.get("data") or {}
@@ -149,6 +152,7 @@ def scan(conn, prices, full: bool = False) -> dict:
                             conn, old_key, key, sid, project, int(obj.get("time") or 0),
                             model, (inp, outp, 0, 0))
             cursor[path] = snapshot
+    cursor["dsh_usage_parser_version"] = 1
     activity.mark_current(cursor)
     db.set_scan_cursor(conn, NAME, cursor)
     return {"added": added, "updated": updated, "files": files,
