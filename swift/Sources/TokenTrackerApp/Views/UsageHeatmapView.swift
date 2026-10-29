@@ -223,7 +223,7 @@ final class HeatmapCanvasView: NSView {
         smallLabels = newChart.cells.map { day in
             guard let day else { return "" }
             switch newChart.unit {
-            case .hour: return day.date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).locale(locale))
+            case .hour: return String(format: "%02d", Calendar.current.component(.hour, from: day.date))
             case .day: return String(Calendar.current.component(.day, from: day.date))
             case .month:
                 let parts = Calendar.current.dateComponents([.year, .month], from: day.date)
