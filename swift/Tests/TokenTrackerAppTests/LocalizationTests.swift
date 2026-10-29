@@ -53,10 +53,12 @@ final class LocalizationTests: XCTestCase {
                 (value as NSString).substring(with: $0.range)
             }.sorted()
         }
+        // Contextual keys disambiguate period labels from one-letter weekday labels.
+        let contextualChinese = ["日视图": "日", "周视图": "周", "月视图": "月", "年视图": "年"]
         for (key, value) in en {
             XCTAssertFalse(value.isEmpty, key)
             XCTAssertEqual(placeholders(key), placeholders(value), key)
-            XCTAssertEqual(zh[key], key)
+            XCTAssertEqual(zh[key], contextualChinese[key] ?? key, key)
         }
     }
 

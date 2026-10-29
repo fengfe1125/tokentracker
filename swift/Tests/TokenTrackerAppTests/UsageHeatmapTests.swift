@@ -156,4 +156,13 @@ final class UsageHeatmapTests: XCTestCase {
         XCTAssertEqual(custom.cells.compactMap { $0 }.first?.agents.map(\.tool), ["unknown-agent", "codex"])
     }
 
+    func testRangeLabelsUsePeriodMeaningInBothLanguages() {
+        let previous = L10n.language
+        defer { L10n.setLanguage(previous) }
+        L10n.setLanguage("en")
+        XCTAssertEqual(HeatmapPeriod.allCases.map { L10n.text($0.title) }, ["Day", "Week", "Month", "Year", "Custom", "All"])
+        L10n.setLanguage("zh-Hans")
+        XCTAssertEqual(HeatmapPeriod.allCases.map { L10n.text($0.title) }, ["日", "周", "月", "年", "自选", "全部"])
+    }
+
 }

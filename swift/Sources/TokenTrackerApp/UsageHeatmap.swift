@@ -5,10 +5,10 @@ enum HeatmapPeriod: String, CaseIterable, Sendable {
     case day, week, month, year, custom, all
     var title: L10n.Template {
         switch self {
-        case .day: "日"
-        case .week: "周"
-        case .month: "月"
-        case .year: "年"
+        case .day: "日视图"
+        case .week: "周视图"
+        case .month: "月视图"
+        case .year: "年视图"
         case .custom: "自选"
         case .all: "全部"
         }
