@@ -34,12 +34,23 @@ final class AppState: ObservableObject {
 
     // 主面板数据
     @Published var selection: NavSelection = .overview
-    @Published var range = "week"            // day/week/month/all（对齐网页端默认 week）
+    @Published var range = "week" {
+        didSet {
+            guard range != oldValue else { return }
+            refreshVisibleData()
+        }
+    }
     @Published var statRows: [UsageStore.ToolStats] = []
     @Published var statTotal = UsageStore.ToolStats()
     @Published var statSummary = UsageStore.TimeSummary(unallocatedTokens: 0, unallocatedCost: 0,
                                                         unallocatedEvents: 0, estimatedTokens: 0)
     @Published var dailyRows: [UsageStore.DailyRow] = []
+    @Published private(set) var heatmapRows: [UsageStore.DailyRow] = []
+    @Published private(set) var heatmapExcludedTokens: Int64 = 0
+    @Published private(set) var dataLoading = false
+    @Published private(set) var loadedRange: String?
+    @Published private var dataErrorTemplate: L10n.Template?
+    var dataError: String? { dataErrorTemplate.map(L10n.text) }
     @Published var modelRows: [UsageStore.ModelRow] = []
     @Published var sessionRows: [UsageStore.SessionRow] = []
     @Published var sessionSearch = ""
@@ -97,6 +108,7 @@ final class AppState: ObservableObject {
     private(set) var scheduler: ScanScheduler!
 
     private var dataGeneration = 0
+    private var dataCancellation: ExportCancellation?
     private var sessionsGeneration = 0
     private var quotaBusy = false
     private var quotaPending = false
@@ -467,6 +479,11 @@ final class AppState: ObservableObject {
     func refreshData() {
         dataGeneration += 1
         let generation = dataGeneration
+        dataCancellation?.cancel()
+        let cancellation = ExportCancellation()
+        dataCancellation = cancellation
+        dataLoading = true
+        dataErrorTemplate = nil
         reloadCodexAccounts()   // 账号列表与 active 跟随轮询热反映
         let path = readStore.path
         let range = range
@@ -480,9 +497,17 @@ final class AppState: ObservableObject {
         queryQueue.async { [weak self] in
             guard let self else { return }
             do {
+                try cancellation.check()
                 let store = try UsageStore(path: path)
+                try store.conn.execute("BEGIN")
+                defer { try? store.conn.rollback() }
                 let (rows, total, summary) = try store.stats(rangeKey: range)
+                try cancellation.check()
                 let daily = try store.daily(rangeKey: range)
+                let heatmap = range == "all" ? daily : try store.daily(rangeKey: "all")
+                let allTokens = range == "all" ? total.tokens : try store.stats(rangeKey: "all").total.tokens
+                let heatmapExcluded = max(0, allTokens - heatmap.reduce(Int64(0)) { $0 + $1.stats.tokens })
+                try cancellation.check()
                 let models = try store.models(rangeKey: range)
                 let sessions = try store.sessions(rangeKey: range, tool: toolFilter,
                                                   limit: Self.sessionLimit,
@@ -491,7 +516,7 @@ final class AppState: ObservableObject {
                 let detect = ScanRunner(store: store, prices: PriceTable.load(from: pricePath),
                                         roots: roots).detectAll()
                 DispatchQueue.main.async {
-                    guard generation == self.dataGeneration else { return }
+                    guard generation == self.dataGeneration, range == self.range else { return }
                     let newTokens = dayStats.total.tokens
                     if let prev = self.today?.tokens, prev != newTokens {
                         self.onTokensChanged?()   // 数值刷新闪光
@@ -502,21 +527,32 @@ final class AppState: ObservableObject {
                     self.statTotal = total
                     self.statSummary = summary
                     self.dailyRows = daily
+                    self.heatmapRows = heatmap
+                    self.heatmapExcludedTokens = heatmapExcluded
                     self.modelRows = models
                     if search == self.sessionSearch { self.sessionRows = sessions }
                     self.detectInfo = detect
                     self.todayByTool = Dictionary(uniqueKeysWithValues:
                         dayStats.rows.map { ($0.tool, $0.tokens) })
                     self.updatedAt = Date()
+                    self.loadedRange = range
+                    self.dataLoading = false
                     if ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" {
                         FileHandle.standardError.write(Data(
                             "[tt] refreshData OK: today=\(newTokens) sessions=\(sessions.count)\n".utf8))
                     }
                 }
+            } catch is CancellationError {
+                // A newer range superseded this query; it owns the loading state.
             } catch {
                 // 读库失败（如迁移中短暂锁定）：写到 stderr 便于诊断，下一轮再试
                 FileHandle.standardError.write(Data(
                     "[tt] refreshData FAILED: \(error)\n".utf8))
+                DispatchQueue.main.async {
+                    guard generation == self.dataGeneration else { return }
+                    self.dataLoading = false
+                    self.dataErrorTemplate = L10n.message("用量读取失败，请重新扫描后重试")
+                }
             }
         }
     }

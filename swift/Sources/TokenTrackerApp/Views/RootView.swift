@@ -85,7 +85,6 @@ struct RootView: View {
             .opacity(0)
             .allowsHitTesting(false)
         }
-        .onChange(of: state.range) { _, _ in state.refreshData() }
         .onChange(of: state.selection) { _, _ in state.refreshVisibleData() }
         .onAppear { state.refreshVisibleData() }
     }

@@ -50,16 +50,35 @@ struct OverviewView: View {
                 }
                 .disabled(state.scanning)
             }
+            if let error = state.dataError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary).padding(8)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     summaryCard
                     detailGrid
                     hitRateCard
+                    UsageHeatmapView(rows: state.heatmapRows, excludedTokens: state.heatmapExcludedTokens,
+                                     loading: state.dataLoading, error: state.dataError, yi: yi)
                     trendCard
                     modelSection
                     InsightsOverview(model:state.insights,rescan:{state.requestScan()})
                 }
                 .padding(20)
+            }
+            .overlay {
+                if state.loadedRange != state.range && (state.dataLoading || state.dataError != nil) {
+                    ZStack {
+                        Rectangle().fill(.regularMaterial)
+                        if state.dataLoading {
+                            ProgressView(L10n.text("正在读取用量…"))
+                        } else {
+                            ContentUnavailableView(L10n.text("用量读取失败，请重新扫描后重试"),
+                                                   systemImage: "exclamationmark.triangle")
+                        }
+                    }
+                }
             }
         }
         .navigationTitle(L10n.text("用量概览"))

@@ -62,7 +62,7 @@ struct HandDrawnTrendChart: View {
                     drawSeries(ctx: &ctx, plot: plot)
                     drawHover(ctx: &ctx, plot: plot)
                 }
-                if let hoverIndex {
+                if let hoverIndex, points.indices.contains(hoverIndex) {
                     tooltip(for: points[hoverIndex], in: geo.size)
                 }
             }
@@ -78,6 +78,7 @@ struct HandDrawnTrendChart: View {
             }
         }
         .frame(height: 220)
+        .onChange(of: points) { _, _ in hoverIndex = nil }
     }
 
     // ------------------------------------------------------------ 布局 ----
@@ -179,7 +180,7 @@ struct HandDrawnTrendChart: View {
 
     /// 悬停：竖向虚线参考线 + 各曲线圆点
     private func drawHover(ctx: inout GraphicsContext, plot: CGRect) {
-        guard let hoverIndex else { return }
+        guard let hoverIndex, points.indices.contains(hoverIndex) else { return }
         let x = xPosition(hoverIndex, plot: plot)
         var guide = Path()
         guide.move(to: CGPoint(x: x, y: plot.minY))

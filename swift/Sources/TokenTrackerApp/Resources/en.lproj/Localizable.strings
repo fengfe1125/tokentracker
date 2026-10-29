@@ -697,3 +697,21 @@
 "API Key 无效，未保存" = "Invalid API key; not saved.";
 "已导入 {0} 个 API Key" = "Imported {0} API keys";
 "没有可导入的新 API Key" = "No new API keys to import";
+
+"Token 用量热力图" = "Token usage heatmap";
+"全部 Agent · 按年查看，不受顶部时间范围影响" = "All agents · annual view, independent of the time range above";
+"年份" = "Year";
+"正在读取用量…" = "Loading usage…";
+"已记录 {0} Token · {1} 个活跃日" = "{0} recorded tokens · {1} active days";
+"少" = "Less";
+"多" = "More";
+"含输入、输出与缓存 Token；空白格表示未来日期，灰格表示无已记录用量。" = "Includes input, output and cached tokens. Blank cells are future dates; gray cells have no recorded usage.";
+"另有 {0} Token 无法可靠归入某一天，未着色。" = "{0} additional tokens cannot be reliably assigned to a day and are excluded from the grid.";
+"其中区间估算 {0} Token" = "Includes {0} tokens estimated over an observation interval";
+"悬停或点选日期，查看当日 Token 与 Agent 明细" = "Hover or select a day to see tokens and the agent breakdown";
+"无已记录用量" = "No recorded usage";
+"用量读取失败，请重新扫描后重试" = "Could not load usage. Scan again to retry.";
+"一" = "M";
+"三" = "W";
+"五" = "F";
+"日" = "S";
