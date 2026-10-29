@@ -715,3 +715,25 @@
 "三" = "W";
 "五" = "F";
 "日" = "S";
+
+"全部 Agent · 独立时间范围 · 本地时区" = "All agents · Independent range · Local time zone";
+"热力图时间范围" = "Heatmap time range";
+"自选" = "Custom";
+"回到今天" = "Today";
+"上一时段" = "Previous period";
+"下一时段" = "Next period";
+"包含开始和结束日期；长时间范围自动按月或年汇总。" = "Includes both dates. Long ranges automatically aggregate by month or year.";
+"每格 1 小时" = "1 hour per cell";
+"每格 1 天" = "1 day per cell";
+"每格 1 月" = "1 month per cell";
+"每格 1 年" = "1 year per cell";
+"每格 {0} 年" = "{0} years per cell";
+"悬停或点选格子查看明细；聚焦后可用方向键浏览。" = "Hover or select a cell for details. Use arrow keys when focused.";
+"含输入、输出与缓存 Token；空白格表示未来日期或范围外，灰格表示无已记录用量。" = "Includes input, output and cache tokens. Blank cells are future dates or outside the range; gray cells have no recorded usage.";
+"此范围暂无可定位用量；无记录不代表 Agent 没有使用。" = "No dated usage in this range. Missing records do not imply an agent was unused.";
+"当日另有 {0} Token 仅能定位到天，未分摊至小时。" = "Another {0} tokens on this day can only be dated to the day and are not spread across hours.";
+"全部历史另有 {0} Token 无法可靠定位到天，未着色。" = "Another {0} historical tokens cannot be reliably assigned to a day and are not colored.";
+"请选择一个格子" = "Select a cell";
+"二" = "Tue";
+"四" = "Thu";
+"六" = "Sat";

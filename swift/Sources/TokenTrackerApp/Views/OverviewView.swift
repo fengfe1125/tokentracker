@@ -59,8 +59,7 @@ struct OverviewView: View {
                     summaryCard
                     detailGrid
                     hitRateCard
-                    UsageHeatmapView(rows: state.heatmapRows, excludedTokens: state.heatmapExcludedTokens,
-                                     loading: state.dataLoading, error: state.dataError, yi: yi)
+                    UsageHeatmapView(model: state.heatmap, yi: yi)
                     trendCard
                     modelSection
                     InsightsOverview(model:state.insights,rescan:{state.requestScan()})

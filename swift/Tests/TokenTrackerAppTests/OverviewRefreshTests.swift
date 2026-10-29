@@ -33,7 +33,7 @@ final class OverviewRefreshTests: XCTestCase {
         subscription.cancel()
         XCTAssertEqual(state.loadedRange, "day")
         XCTAssertFalse(state.dataLoading)
-        XCTAssertEqual(state.heatmapRows.reduce(Int64(0)) { $0 + $1.stats.tokens }, 30)
+
 
         let latest = expectation(description: "Rapid changes publish only the final range")
         subscription = state.$updatedAt.dropFirst().sink { _ in

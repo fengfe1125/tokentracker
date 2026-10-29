@@ -45,8 +45,7 @@ final class AppState: ObservableObject {
     @Published var statSummary = UsageStore.TimeSummary(unallocatedTokens: 0, unallocatedCost: 0,
                                                         unallocatedEvents: 0, estimatedTokens: 0)
     @Published var dailyRows: [UsageStore.DailyRow] = []
-    @Published private(set) var heatmapRows: [UsageStore.DailyRow] = []
-    @Published private(set) var heatmapExcludedTokens: Int64 = 0
+    let heatmap: UsageHeatmapModel
     @Published private(set) var dataLoading = false
     @Published private(set) var loadedRange: String?
     @Published private var dataErrorTemplate: L10n.Template?
@@ -150,6 +149,7 @@ final class AppState: ObservableObject {
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
         readStore = try! UsageStore(path: path)
         insights = InsightsModel(path: path)
+        heatmap = UsageHeatmapModel(path: path)
         priceCatalogPath = env["TOKENTRACKER_PRICES"] ?? PriceCatalogStore.sharedPath
         let preview = env["TT_UI_PREVIEW"] == "1"
         let previewHome = (path as NSString).deletingLastPathComponent
@@ -477,6 +477,7 @@ final class AppState: ObservableObject {
     }
 
     func refreshData() {
+        heatmap.refresh()
         dataGeneration += 1
         let generation = dataGeneration
         dataCancellation?.cancel()
@@ -504,9 +505,6 @@ final class AppState: ObservableObject {
                 let (rows, total, summary) = try store.stats(rangeKey: range)
                 try cancellation.check()
                 let daily = try store.daily(rangeKey: range)
-                let heatmap = range == "all" ? daily : try store.daily(rangeKey: "all")
-                let allTokens = range == "all" ? total.tokens : try store.stats(rangeKey: "all").total.tokens
-                let heatmapExcluded = max(0, allTokens - heatmap.reduce(Int64(0)) { $0 + $1.stats.tokens })
                 try cancellation.check()
                 let models = try store.models(rangeKey: range)
                 let sessions = try store.sessions(rangeKey: range, tool: toolFilter,
@@ -527,8 +525,6 @@ final class AppState: ObservableObject {
                     self.statTotal = total
                     self.statSummary = summary
                     self.dailyRows = daily
-                    self.heatmapRows = heatmap
-                    self.heatmapExcludedTokens = heatmapExcluded
                     self.modelRows = models
                     if search == self.sessionSearch { self.sessionRows = sessions }
                     self.detectInfo = detect
