@@ -53,8 +53,7 @@ final class JsonlScannerPortTests: XCTestCase {
     func testDshModernUsageBackfillAndVersionDedup() throws {
         let tmp = try TempDir()
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("tests/differential/dsh_modern.jsonl")
+            .appendingPathComponent("Fixtures/differential/dsh_modern.jsonl")
         let events = iterJSONL(fixture.path).map { $0.1 }
         for name in ["session.jsonl.zstd", "session.v3.jsonl.zstd", "session.v4.jsonl.zstd"] {
             writeJSONL(tmp.path("dsh", "project", "session", name), events)

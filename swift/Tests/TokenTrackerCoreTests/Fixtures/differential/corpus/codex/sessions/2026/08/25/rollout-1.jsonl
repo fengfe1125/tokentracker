@@ -1,0 +1,7 @@
+{"type": "session_meta", "timestamp": "2026-08-25T01:00:00Z", "payload": {"id": "codex-sess-1", "cwd": "/repo/webapp"}}
+{"type": "turn_context", "timestamp": "2026-08-25T01:00:00Z", "payload": {"model": "gpt-5.6-luna", "turn_id": "turn-1"}}
+{"type": "response_item", "timestamp": "2026-08-25T01:00:00Z", "payload": {"type": "custom_tool_call", "id": "codex-tool-1", "call_id": "codex-call-1", "name": "exec", "input": "await tools.read_file({path:'/skills/research/SKILL.md'});"}}
+{"type": "response_item", "timestamp": "2026-08-25T01:00:00Z", "payload": {"type": "custom_tool_call_output", "id": "codex-out-1", "call_id": "codex-call-1", "output": {"ok": true}}}
+{"timestamp": "2026-08-25T01:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "turn_id": "turn-1", "info": {"total_token_usage": {"input_tokens": 5000, "cached_input_tokens": 1000, "cache_write_input_tokens": 500, "output_tokens": 200}, "last_token_usage": {"input_tokens": 5000, "cached_input_tokens": 1000, "cache_write_input_tokens": 500, "output_tokens": 200}}}}
+{"timestamp": "2026-08-25T02:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "turn_id": "turn-1", "info": {"total_token_usage": {"input_tokens": 9000, "cached_input_tokens": 2000, "cache_write_input_tokens": 500, "output_tokens": 450}, "last_token_usage": {"input_tokens": 4000, "cached_input_tokens": 1000, "cache_write_input_tokens": 0, "output_tokens": 250}}}}
+{"timestamp": "2026-08-25T02:00:00Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1"}}

@@ -29,7 +29,8 @@ let package = Package(
         .testTarget(
             name: "TokenTrackerCoreTests",
             dependencies: ["TokenTrackerCore"],
-            path: "Tests/TokenTrackerCoreTests"
+            path: "Tests/TokenTrackerCoreTests",
+            exclude: ["Fixtures"]
         ),
         .testTarget(
             name: "TokenTrackerAppTests",

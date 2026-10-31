@@ -2,8 +2,7 @@
 //  DifferentialExportTests.swift
 //  TokenTrackerCoreTests
 //
-//  验证 Python 差分基线 tests/differential/expected_python.json 可被
-//  Swift 侧解码。Phase 1 起这里将追加「Swift 扫描结果 == 基线」的断言。
+//  验证冻结差分基线 Fixtures/differential/expected.json 可被解码。
 //
 
 import XCTest
@@ -11,12 +10,8 @@ import XCTest
 
 final class DifferentialExportTests: XCTestCase {
     private func loadBaseline() throws -> ExpectedExport {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // TokenTrackerCoreTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // swift
-            .deletingLastPathComponent() // repo root
-            .appendingPathComponent("tests/differential/expected_python.json")
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/differential/expected.json")
         return try ExpectedExport.load(from: url)
     }
 

@@ -2,8 +2,8 @@
 //  DifferentialScanTests.swift
 //  TokenTrackerCoreTests
 //
-//  Phase 1 的硬门槛：Swift 扫描器扫 tests/differential 语料的结果，
-//  必须与 Python 基线 expected_python.json 逐字段一致。
+//  Swift 扫描器扫冻结语料 Fixtures/differential/corpus 的结果，
+//  必须与冻结基线 expected.json 逐字段一致（基线最初由已退役的 Python 实现导出）。
 //
 
 import XCTest
@@ -12,26 +12,16 @@ import XCTest
 final class DifferentialScanTests: XCTestCase {
     static let fixedNowMs: Int64 = 1_787_626_800_000 // 2026-08-25T03:00:00Z
 
-    private var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // TokenTrackerCoreTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // swift
-            .deletingLastPathComponent() // repo root
+    private var fixtures: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/differential")
     }
 
-    /// 语料不存在时用 make_corpus.py 生成（需要 python3 + zstd）。
+    /// 基线里嵌着 /tmp/tt_diff_corpus 绝对路径，每次从冻结语料重新复制到该位置。
     private func ensureCorpus() throws {
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: "/tmp/tt_diff_corpus", isDirectory: &isDir),
-           isDir.boolValue { return }
-        let script = repoRoot.appendingPathComponent("tests/differential/make_corpus.py").path
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", script]
-        try process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "make_corpus.py 生成失败")
+        try? FileManager.default.removeItem(atPath: "/tmp/tt_diff_corpus")
+        try FileManager.default.copyItem(at: fixtures.appendingPathComponent("corpus"),
+                                         to: URL(fileURLWithPath: "/tmp/tt_diff_corpus"))
     }
 
     private func corpusRoots() -> ScanRoots {
@@ -121,21 +111,19 @@ final class DifferentialScanTests: XCTestCase {
         }
     }
 
-    func testSwiftMatchesPythonBaseline() throws {
+    func testSwiftMatchesFrozenBaseline() throws {
         try ensureCorpus()
         let store = try UsageStore(path: URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("tt_diff_swift_\(UUID().uuidString).db").path)
         defer { try? FileManager.default.removeItem(atPath: store.path) }
         store.nowMs = { DifferentialScanTests.fixedNowMs }
 
-        let prices = PriceTable.load(from: repoRoot
-            .appendingPathComponent("tests/differential/prices.json").path)
+        let prices = PriceTable.load(from: fixtures.appendingPathComponent("prices.json").path)
         let runner = ScanRunner(store: store, prices: prices, roots: corpusRoots())
         let results = runner.runAll()
         _ = try store.reprice(prices)
 
-        let baseline = try ExpectedExport.load(from: repoRoot
-            .appendingPathComponent("tests/differential/expected_python.json"))
+        let baseline = try ExpectedExport.load(from: fixtures.appendingPathComponent("expected.json"))
 
         // scan_results
         var scanResults: [String: ScanResultCounts] = [:]
@@ -151,7 +139,7 @@ final class DifferentialScanTests: XCTestCase {
         // events（逐字段比对，定位第一条差异）
         let events = try normalizedEvents(store)
         XCTAssertEqual(events.count, baseline.events.count,
-                       "events 数量不一致\nSwift: \(events)\nPython: \(baseline.events)")
+                       "events 数量不一致\nSwift: \(events)\nBaseline: \(baseline.events)")
         for (index, pair) in zip(events, baseline.events).enumerated() {
             XCTAssertEqual(pair.0, pair.1, "events[\(index)] 不一致", file: #filePath, line: 0)
         }

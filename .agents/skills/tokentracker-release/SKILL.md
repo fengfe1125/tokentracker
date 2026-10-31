@@ -11,7 +11,6 @@ description: 准备 TokenTracker 发布、制作发行包或验证更新安装�
 
 - 先检查工作区差异及待发布内容，保留无关改动；不把未审阅的 WIP 顺带提交或发布。
 - 版本来源是 `swift/Sources/TokenTrackerCore/TokenTrackerCore.swift` 的 `version`，打包脚本将其写入 Info.plist。只在任务包含版本升级时改版本。
-- 升版本时同步 `tokentracker/__init__.py` 的 `__version__`；`tests/test_smoke.py` 会校验两端一致。
 - App 打包入口为 `scripts/build_swift_app.sh`；DMG 入口为 `scripts/release_swift.sh`，后者已包含 App 构建，无需重复运行前者。
 - 脚本重建 `dist/TokenTracker.app` 和同版本 DMG。需要保留旧产物时先另存副本。
 - 默认签名是 ad-hoc；Developer ID 与公证按当前脚本说明及可用凭据执行，不把 ad-hoc 产物报告为已公证。

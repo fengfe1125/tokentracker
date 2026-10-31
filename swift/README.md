@@ -1,8 +1,8 @@
 # TokenTracker SwiftUI
 
 `swift/` 是 TokenTracker 唯一的桌面 App 实现，包含无 UI 依赖的 Core、
-SwiftUI/AppKit macOS App、原生 CLI 和 XCTest。迁移 Phase 0–5 已完成；
-Python 只暂留 CLI 与差分 oracle，不再提供桌面或浏览器界面。
+SwiftUI/AppKit macOS App、原生 CLI 和 XCTest。迁移 Phase 0–5 已完成，
+Python 实现已移除。
 
 ## 结构
 
@@ -43,11 +43,12 @@ swift test --package-path swift
 
 ## 差分验证
 
-`DifferentialScanTests` 使用 `/tmp/tt_diff_corpus` 中的虚构语料，
-与 `tests/differential/expected_python.json` 逐字段比较。语料不存在时会调用
-`tests/differential/make_corpus.py` 生成，需要 `python3` 和系统 `zstd`。
+`DifferentialScanTests` 把 `Tests/TokenTrackerCoreTests/Fixtures/differential/corpus`
+复制到 `/tmp/tt_diff_corpus`（基线内嵌该绝对路径），扫描后与同目录的
+`expected.json` 逐字段比较。基线由已移除的 Python 实现导出并冻结；扫描器有意
+变更行为时，按新的正确结果手动更新基线并在提交信息里说明。扫描 DSH 需要系统 `zstd`。
 
-Python CLI 与 Swift 共用以下兼容数据：
+App 与 CLI 共用以下本机数据：
 
 - `~/.tokentracker/usage.db`（schema v6；用量事件保留供应商和费率版本）
 - `~/.tokentracker/settings.json`

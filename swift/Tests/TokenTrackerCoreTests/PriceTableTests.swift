@@ -10,10 +10,8 @@ import XCTest
 
 final class PriceTableTests: XCTestCase {
     private func loadDifferentialPrices() -> PriceTable {
-        let repo = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-        return PriceTable.load(from: repo.appendingPathComponent("tests/differential/prices.json").path)
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        return PriceTable.load(from: fixtures.appendingPathComponent("Fixtures/differential/prices.json").path)
     }
 
     func testExactMatchAndExplicitAlias() {

@@ -2,8 +2,8 @@
 //  ExpectedExport.swift
 //  TokenTrackerCore
 //
-//  差分测试对照模型：对应 tests/differential/export_python.py 的输出格式
-//  （format_version=4）。Swift 扫描器将产出同一结构并逐字段比对。
+//  差分测试对照模型：对应冻结基线 Tests/TokenTrackerCoreTests/Fixtures/differential/expected.json
+//  （format_version=4）。Swift 扫描器产出同一结构并逐字段比对。
 //
 
 import Foundation

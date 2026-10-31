@@ -2,8 +2,7 @@
 //  LiveQuotaTests.swift
 //  TokenTrackerCoreTests
 //
-//  真机验收（默认跳过）：TT_LIVE=1 时真实抓取四家官方配额并打印，
-//  用于与 Python 版 `./tt quotas` 对比（Phase 3 验收项）。
+//  真机验收（默认跳过）：TT_LIVE=1 时真实抓取四家官方配额并打印。
 //
 //  运行：TT_LIVE=1 swift test --filter LiveQuotaTests
 //

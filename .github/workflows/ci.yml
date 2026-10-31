@@ -6,23 +6,11 @@ on:
   pull_request:
 
 jobs:
-  python-core:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: 安装差分语料依赖
-        run: sudo apt-get update && sudo apt-get install -y zstd
-      - name: Python CLI、扫描核心与差分基线
-        run: python -m unittest discover -s tests -v
-
   swift:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 安装差分语料依赖
+      - name: 安装 DSH 解压依赖
         run: brew install zstd
       - name: Swift Core 与 App 测试
         run: swift test --package-path swift

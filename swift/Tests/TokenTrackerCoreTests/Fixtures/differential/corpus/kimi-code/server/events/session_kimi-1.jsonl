@@ -1,0 +1,7 @@
+{"kind": "journal_header", "seq": 0, "version": 1}
+{"kind": "event", "seq": 1, "envelope": {"type": "event.session.created", "timestamp": "2026-08-25T01:00:00Z", "payload": {"session": {"metadata": {"cwd": "/repo/api"}}}}}
+{"kind": "event", "seq": 2, "envelope": {"type": "turn.started", "timestamp": "2026-08-25T01:00:00Z", "payload": {"prompt": "把导出按钮挪到右上角"}}}
+{"kind": "event", "seq": 20, "envelope": {"type": "tool.call.started", "timestamp": "2026-08-25T01:00:00Z", "payload": {"toolCallId": "kimi-call-1", "name": "Skill", "args": {"skill": "prototype"}}}}
+{"kind": "event", "seq": 21, "envelope": {"type": "tool.result", "timestamp": "2026-08-25T01:00:00Z", "payload": {"toolCallId": "kimi-call-1", "status": "completed"}}}
+{"kind": "event", "seq": 3, "envelope": {"type": "turn.step.completed", "timestamp": "2026-08-25T01:00:00Z", "payload": {"model": {"id": "kimi-k3"}, "usage": {"inputOther": 5000, "output": 220, "inputCacheRead": 1500, "inputCacheCreation": 300}}}}
+{"kind": "event", "seq": 4, "envelope": {"type": "turn.step.completed", "timestamp": "2026-08-25T02:00:00Z", "payload": {"model": {"id": "kimi-k3"}, "usage": {"inputOther": 3000, "output": 130, "inputCacheRead": 900, "inputCacheCreation": 0}}}}

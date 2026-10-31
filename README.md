@@ -115,7 +115,7 @@ TokenTracker has a simple default boundary: **scan locally, store locally, and n
 - Database: `~/.tokentracker/usage.db`
 - Settings: `~/.tokentracker/settings.json`
 - Official quota cache: `~/.tokentracker/official_cache.json`
-- Local pricing and quota configuration: `prices.json` and `quotas.json`
+- Local price catalog: `~/.tokentracker/prices.json`
 
 Network access is used only when querying official subscription quotas or refreshing the login state for the corresponding service. Optional public statistics are disabled by default. When explicitly enabled, the allowlisted payload contains only basic aggregate usage and cost metrics — never project paths, session IDs, titles, prompts, model names, hostnames, or account information.
 
@@ -134,7 +134,7 @@ swift/.build/release/tt-swift activity --range week --group tool --confidence al
 swift/.build/release/tt-swift quotas
 ```
 
-The Python CLI remains available during the transition for full argument compatibility and Swift differential testing:
+The `./tt` launcher in the repository root builds `tt-swift` on first use and forwards its arguments:
 
 ```bash
 ./tt detect
@@ -166,8 +166,6 @@ swift/
   Sources/TokenTrackerApp/        Native SwiftUI / AppKit macOS app
   Sources/tt-swift/               Native CLI
   Tests/                          Swift tests
-tokentracker/                      Transitional Python CLI and differential oracle
-tests/differential/               Cross-implementation fixtures and frozen baselines
 assets/                            App icon sources and ICNS
 scripts/                           Build, release, and icon verification
 ```
@@ -177,12 +175,12 @@ See the [SwiftUI migration notes](docs/swiftui-migration-plan.md) for module map
 ## Development and testing
 
 ```bash
-python3 -m unittest discover -s tests -v
 swift test --package-path swift
+node tests/test_web.js
 python3 scripts/check_icon.py
 ```
 
-Swift differential tests use `tests/differential/expected_python.json` as a frozen baseline. The system `zstd` binary is required when generating the synthetic fixtures for the first time.
+Differential scan tests compare the Swift scanners against a frozen synthetic corpus and baseline in `swift/Tests/TokenTrackerCoreTests/Fixtures/differential/`. Scanning DSH sessions requires the system `zstd` binary.
 
 ---
 

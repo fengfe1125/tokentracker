@@ -115,7 +115,7 @@ TokenTracker 的默认边界很简单：**扫描本机，保存在本机，不�
 - 数据库：`~/.tokentracker/usage.db`
 - 设置：`~/.tokentracker/settings.json`
 - 官方配额缓存：`~/.tokentracker/official_cache.json`
-- 本地价格与配额配置：`prices.json`、`quotas.json`
+- 本地价格目录：`~/.tokentracker/prices.json`
 
 只有查询官方订阅配额、刷新对应服务登录状态时，才会访问该服务。可选的公开统计功能默认关闭；即使主动启用，也只允许发布基础聚合指标和成本，不包含项目路径、会话 ID、标题、提示词、模型名、主机名或账户信息。
 
@@ -134,7 +134,7 @@ swift/.build/release/tt-swift activity --range week --group tool --confidence al
 swift/.build/release/tt-swift quotas
 ```
 
-过渡期保留 Python CLI，用于完整参数兼容和 Swift 差分测试：
+仓库根目录的 `./tt` 启动器首次运行时构建 `tt-swift`，并转发参数：
 
 ```bash
 ./tt detect
@@ -166,8 +166,6 @@ swift/
   Sources/TokenTrackerApp/        SwiftUI / AppKit macOS App
   Sources/tt-swift/               原生 CLI
   Tests/                          Swift 测试
-tokentracker/                      过渡期 Python CLI 与差分 oracle
-tests/differential/               跨实现固定语料与基线
 assets/                            App 图标源文件与 ICNS
 scripts/                           构建、发布和图标验证
 ```
@@ -177,12 +175,12 @@ SwiftUI 重构过程和模块映射见[迁移记录](docs/swiftui-migration-plan
 ## 开发与测试
 
 ```bash
-python3 -m unittest discover -s tests -v
 swift test --package-path swift
+node tests/test_web.js
 python3 scripts/check_icon.py
 ```
 
-Swift 差分测试使用 `tests/differential/expected_python.json` 作为冻结基线；首次生成虚构语料需要系统安装 `zstd`。
+差分扫描测试用 `swift/Tests/TokenTrackerCoreTests/Fixtures/differential/` 中冻结的虚构语料和基线校验 Swift 扫描器；扫描 DSH 会话需要系统安装 `zstd`。
 
 ---
 

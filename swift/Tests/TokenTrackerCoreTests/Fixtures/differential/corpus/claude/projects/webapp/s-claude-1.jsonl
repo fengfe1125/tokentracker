@@ -1,0 +1,5 @@
+{"type": "user", "timestamp": "2026-08-25T01:00:00Z", "message": {"role": "user", "content": "帮我修一下登录页样式"}}
+{"type": "assistant", "timestamp": "2026-08-25T01:00:00Z", "message": {"id": "msg_1", "model": "claude-sonnet-4-5", "role": "assistant", "content": [{"type": "tool_use", "id": "claude-call-1", "name": "Skill", "input": {"skill": "research"}}], "usage": {"input_tokens": 1200, "output_tokens": 300, "cache_read_input_tokens": 4000, "cache_creation_input_tokens": 800}}}
+{"type": "user", "timestamp": "2026-08-25T01:00:00Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "claude-call-1", "content": "fixture"}]}}
+{"type": "assistant", "timestamp": "2026-08-25T02:00:00Z", "message": {"id": "msg_2", "model": "claude-sonnet-4-5", "role": "assistant", "usage": {"input_tokens": 900, "output_tokens": 150, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}
+{"type": "assistant", "timestamp": "2026-08-25T02:00:00Z", "message": {"id": "msg_3", "model": "claude-sonnet-4-5", "role": "assistant", "usage": {"input_tokens": 0, "output_tokens": 0}}}

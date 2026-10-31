@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
-# TokenTracker 启动器
+# TokenTracker 命令行启动器：首次运行时构建原生 CLI（tt-swift）
+set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$DIR" && exec python3 -m tokentracker "$@"
+BIN="$DIR/swift/.build/release/tt-swift"
+[ -x "$BIN" ] || swift build -c release --package-path "$DIR/swift" --product tt-swift >&2
+exec "$BIN" "$@"
