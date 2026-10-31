@@ -20,5 +20,5 @@ public enum TokenTrackerCore {
     public static let publicStatsFormatVersion = 1
 
     /// 应用版本，打包脚本写入 Info.plist。
-    public static let version = "0.5.7"
+    public static let version = "0.5.8"
 }

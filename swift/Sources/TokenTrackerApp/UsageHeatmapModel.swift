@@ -9,8 +9,9 @@ private final class HeatmapLoader: @unchecked Sendable {
     private var version: Int64?
     private var zone: String?
     private var dataset: HeatmapDataset?
+    private var hourRows: [Date: [UsageStore.DailyRow]] = [:]
     private var cachedRequest: HeatmapRequest?
-    private var cachedDay: Date?
+    private var cachedHour: Date?
     private var cachedChart: UsageHeatmap?
     init(path: String) { self.path = path }
 
@@ -31,14 +32,29 @@ private final class HeatmapLoader: @unchecked Sendable {
             dataset = HeatmapDataset(rows: rows,
                     excludedTokens: max(0, total - rows.reduce(0) { $0 + $1.stats.tokens }), calendar: calendar)
             version = current; zone = calendar.timeZone.identifier
-            cachedChart = nil
+            hourRows.removeAll(); cachedChart = nil
         }
         try cancellation.check()
-        let day = calendar.startOfDay(for: now)
-        if cachedRequest == request, cachedDay == day, let cachedChart { return cachedChart }
-        let chart = UsageHeatmap(dataset: dataset!, request: request, now: now)
+        let day = calendar.dateInterval(of: .hour, for: now)!.start
+        if cachedRequest == request, cachedHour == day, let cachedChart { return cachedChart }
+        var rows: [UsageStore.DailyRow] = []
+        if request.range != "all" {
+            var (date, upper) = UsageHeatmap.bounds(request.range, dataset: dataset!, now: now, calendar: calendar)
+            while date < upper {
+                try cancellation.check()
+                let next = calendar.date(byAdding: .day, value: 1, to: date)!
+                if let cached = hourRows[date] { rows += cached }
+                else {
+                    let fetched = try store.heatmapHours(from: date, to: next, calendar: calendar)
+                    hourRows[date] = fetched; rows += fetched
+                }
+                date = next
+            }
+            if hourRows.count > 62 { hourRows.removeAll() }
+        }
+        let chart = UsageHeatmap(dataset: dataset!, request: request, hours: rows, now: now)
         try cancellation.check()
-        cachedRequest = request; cachedDay = day; cachedChart = chart
+        cachedRequest = request; cachedHour = day; cachedChart = chart
         return chart
     }
 }

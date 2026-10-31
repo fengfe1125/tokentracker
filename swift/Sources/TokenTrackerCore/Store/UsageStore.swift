@@ -795,6 +795,29 @@ public final class UsageStore {
             }
     }
 
+    /// Local calendar hours in [start, end), including both occurrences of a repeated DST hour.
+    /// Reuses the same containment rule as daily(): never spread observed intervals.
+    /// Each row's `day` is the hour's start in epoch milliseconds.
+    public func heatmapHours(from start: Date, to end: Date, calendar: Calendar = .current) throws -> [DailyRow] {
+        var hour = calendar.dateInterval(of: .hour, for: start)!.start
+        var result: [DailyRow] = []
+        while hour < end {
+            let next = calendar.date(byAdding: .hour, value: 1, to: hour)!
+            let lo = Int64(hour.timeIntervalSince1970 * 1000)
+            let hi = Int64(next.timeIntervalSince1970 * 1000)
+            let (sql, args) = countable(lo, hi)
+            result += try conn.query(
+                "SELECT tool,\(Self.aggSelect) FROM usage_events WHERE \(sql) GROUP BY tool", args
+            ).map { row in
+                var stats = ToolStats(row: row)
+                stats.tool = row.string("tool")
+                return DailyRow(tool: stats.tool, day: String(lo), stats: stats)
+            }
+            hour = next
+        }
+        return result
+    }
+
     public struct ModelRow: Equatable, Sendable, Identifiable {
         public var tool: String
         public var model: String

@@ -748,5 +748,9 @@
 "活跃天数" = "Active days";
 "单日峰值" = "Peak day";
 "{0} Token" = "{0} tokens";
-"所选范围外的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Days outside the selected range are faded; gray cells have no recorded usage. Includes input, output and cache tokens.";
-"悬停或点选格子查看当日明细" = "Hover or select a cell to see that day's breakdown";
+"活跃小时" = "Active hours";
+"峰值小时" = "Peak hour";
+"每格 1 小时，浅色格为尚未到来的时段，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Each cell is 1 hour; pale cells are hours still to come and gray cells have no recorded usage. Includes input, output and cache tokens.";
+"每格 1 天，范围前的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Each cell is 1 day; days before the range are faded and gray cells have no recorded usage. Includes input, output and cache tokens.";
+"所选范围另有 {0} Token 仅能定位到天，未分摊到小时。" = "Another {0} tokens in this range can only be dated to the day and are not spread across hours.";
+"悬停或点选格子查看明细" = "Hover or select a cell for details";
