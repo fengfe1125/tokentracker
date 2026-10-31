@@ -60,20 +60,32 @@ final class UsageHeatmapTests: XCTestCase {
             XCTAssertGreaterThan(host.fittingSize.height, 180)
         }
     }
-    func testRangesMatchOverviewBoundsInAnnualLayout() {
+    func testRangesHighlightOverviewBoundsInsideTheYear() {
+        func row(_ day: String, _ tokens: Int64) -> UsageStore.DailyRow {
+            var stats = UsageStore.ToolStats(); stats.tokens = tokens; stats.input = tokens
+            return UsageStore.DailyRow(tool: "codex", day: day, stats: stats)
+        }
         let now = date(2026, 10, 29) // Thursday
-        let empty = HeatmapDataset(rows: [], calendar: calendar)
-        let expected: [(String, Int, Int)] = [("day", 1, 1), ("week", 7, 2), ("month", 29, 5), ("all", 302, 53)]
-        for (range, days, columns) in expected {
-            let chart = UsageHeatmap(dataset: empty, request: HeatmapRequest(range: range), now: now, calendar: calendar)
-            XCTAssertEqual(chart.cells.compactMap { $0 }.count, days, range)
-            XCTAssertEqual(chart.bands.count, 1, range)
-            XCTAssertEqual(chart.columns, columns, range)
+        let data = HeatmapDataset(rows: [row("2026-01-05", 900), row("2026-10-01", 50),
+                                         row("2026-10-27", 20), row("2026-10-29", 10)], calendar: calendar)
+        let expected: [(String, Int, Int64, Int)] = [("day", 1, 10, 1), ("week", 7, 30, 2), ("month", 29, 80, 3), ("all", 298, 980, 4)]
+        for (range, days, total, active) in expected {
+            let chart = UsageHeatmap(dataset: data, request: HeatmapRequest(range: range), now: now, calendar: calendar)
+            XCTAssertEqual(chart.cells.compactMap { $0 }.count, 302, "\(range) keeps the whole year as context")
+            XCTAssertEqual(chart.bands.map(\.year), [2026], range)
+            XCTAssertEqual(chart.columns, 53, range)
+            XCTAssertEqual(chart.rangeDays, days, range)
+            XCTAssertEqual(chart.totalTokens, total, range)
+            XCTAssertEqual(chart.activeDays, active, range)
+            XCTAssertEqual(chart.cells.compactMap { $0 }.filter(chart.contains).count, days, range)
+            XCTAssertEqual(chart.peakTokens, 900, "\(range) shades against the whole visible year")
             XCTAssertTrue(chart.weeks.allSatisfy { $0.count == 7 }, range)
         }
-        let week = UsageHeatmap(dataset: empty, request: HeatmapRequest(range: "week"), now: date(2026, 1, 2), calendar: calendar)
-        XCTAssertEqual(week.bands.count, 1, "Short ranges stay one block across New Year")
-        XCTAssertEqual(week.cells.compactMap { $0 }.count, 7)
+        let month = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "month"), now: now, calendar: calendar)
+        XCTAssertEqual(month.peak?.tokens, 50)
+        let week = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "week"), now: date(2026, 1, 2), calendar: calendar)
+        XCTAssertEqual(week.bands.map(\.year), [2025, 2026], "A range reaching into last year shows both years")
+        XCTAssertEqual(week.rangeDays, 7)
     }
 
     @MainActor

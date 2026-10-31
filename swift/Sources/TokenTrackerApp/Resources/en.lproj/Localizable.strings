@@ -742,4 +742,11 @@
 "周视图" = "Week";
 "月视图" = "Month";
 "年视图" = "Year";
-"全部 Agent · 跟随上方时间范围 · 本地时区" = "All agents · Follows the range above · Local time zone";
+"全部 Agent · {0}" = "All agents · {0}";
+"全部 Agent · 本地时区" = "All agents · Local time zone";
+"合计" = "Total";
+"活跃天数" = "Active days";
+"单日峰值" = "Peak day";
+"{0} Token" = "{0} tokens";
+"所选范围外的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Days outside the selected range are faded; gray cells have no recorded usage. Includes input, output and cache tokens.";
+"悬停或点选格子查看当日明细" = "Hover or select a cell to see that day's breakdown";
