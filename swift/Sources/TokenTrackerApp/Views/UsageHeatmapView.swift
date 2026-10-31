@@ -12,18 +12,12 @@ struct UsageHeatmapView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.text("Token 用量热力图")).font(.headline)
-                    Text(L10n.text("全部 Agent · 独立时间范围 · 本地时区"))
+                    Text(L10n.text("全部 Agent · 跟随上方时间范围 · 本地时区"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if model.loading { ProgressView().controlSize(.small) }
             }
-            Picker(L10n.text("热力图时间范围"), selection: $model.request.period) {
-                ForEach(HeatmapPeriod.allCases, id: \.self) { period in
-                    Text(L10n.text(period.title)).tag(period)
-                }
-            }.pickerStyle(.segmented).labelsHidden()
-            rangeControls
             if model.failed {
                 HStack {
                     Label(L10n.text("用量读取失败，请重新扫描后重试"), systemImage: "exclamationmark.triangle")
@@ -44,31 +38,6 @@ struct UsageHeatmapView: View {
         .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
         .onAppear { if model.chart == nil { model.refresh() } }
     }
-
-    @ViewBuilder private var rangeControls: some View {
-        if model.request.period == .custom {
-            HStack(spacing: 8) {
-                DatePicker(L10n.text("开始"), selection: $model.request.start,
-                           in: ...model.request.end, displayedComponents: .date)
-                DatePicker(L10n.text("结束"), selection: $model.request.end,
-                           in: model.request.start...Date(), displayedComponents: .date)
-            }.font(.caption)
-            Text(L10n.text("包含开始和结束日期；长时间范围自动按月或年汇总。"))
-                .font(.caption2).foregroundStyle(.secondary)
-        } else if model.request.period != .all {
-            HStack(spacing: 8) {
-                Button { model.move(-1) } label: { Image(systemName: "chevron.left") }
-                    .help(L10n.text("上一时段")).accessibilityLabel(L10n.text("上一时段"))
-                DatePicker(L10n.text("日期"), selection: $model.request.anchor,
-                           in: ...Date(), displayedComponents: .date).labelsHidden()
-                Button { model.move(1) } label: { Image(systemName: "chevron.right") }
-                    .disabled(!model.canMoveForward)
-                    .help(L10n.text("下一时段")).accessibilityLabel(L10n.text("下一时段"))
-                Spacer()
-                Button(L10n.text("回到今天")) { model.showToday() }
-            }.controlSize(.small)
-        }
-    }
 }
 
 private struct HeatmapChartPanel: View {
@@ -77,14 +46,6 @@ private struct HeatmapChartPanel: View {
     let locale: Locale
     @State private var focused: UsageHeatmap.Day?
 
-    private var unitLabel: L10n.Template {
-        switch chart.unit {
-        case .hour: "每格 1 小时"
-        case .day: "每格 1 天"
-        case .month: "每格 1 月"
-        case .year(let step): step == 1 ? "每格 1 年" : "每格 \(step) 年"
-        }
-    }
     private var dateRange: String {
         let last = Calendar.current.date(byAdding: .day, value: -1, to: chart.end)!
         let style = Date.FormatStyle.dateTime.year().month().day().locale(locale)
@@ -95,7 +56,7 @@ private struct HeatmapChartPanel: View {
             HStack {
                 Text(dateRange)
                 Spacer()
-                Text(L10n.text(unitLabel))
+                Text(L10n.text("每格 1 天"))
             }.font(.caption).foregroundStyle(.secondary)
             HeatmapCanvas(chart: chart, locale: locale) { focused = $0 }
                 .frame(height: HeatmapGridLayout.height(for: chart))
@@ -111,7 +72,7 @@ private struct HeatmapChartPanel: View {
             }.font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
                 if let day = focused {
-                    Text(HeatmapCanvasView.label(day, unit: chart.unit, locale: locale))
+                    Text(HeatmapCanvasView.label(day, locale: locale))
                         .font(.caption.monospacedDigit())
                     Text(day.agents.isEmpty ? L10n.text("无已记录用量") : day.agents.map {
                         "\(toolDisplayName($0.tool)) \(UIFormat.tokens($0.tokens, yi: yi))"
@@ -131,10 +92,6 @@ private struct HeatmapChartPanel: View {
                 Text(L10n.text("此范围暂无可定位用量；无记录不代表 Agent 没有使用。"))
                     .font(.caption2).foregroundStyle(.secondary)
             }
-            if chart.hourlyExcludedTokens > 0 {
-                Text(L10n.text("当日另有 \(UIFormat.tokens(chart.hourlyExcludedTokens, yi: yi)) Token 仅能定位到天，未分摊至小时。"))
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
             if chart.excludedTokens > 0 {
                 Text(L10n.text("全部历史另有 \(UIFormat.tokens(chart.excludedTokens, yi: yi)) Token 无法可靠定位到天，未着色。"))
                     .font(.caption2).foregroundStyle(.secondary)
@@ -146,35 +103,43 @@ private struct HeatmapChartPanel: View {
 private extension NSColor { var swiftUIColor: Color { Color(nsColor: self) } }
 
 /// Fixed-cost hit testing; no per-cell SwiftUI buttons, hover handlers, or formatters.
+/// Annual-style grid: weekday rows, week columns, one stacked block per calendar year.
 struct HeatmapGridLayout {
+    static let maximumCell: CGFloat = 12
+    static let header: CGFloat = 16
+    static let bandGap: CGFloat = 10
     let cell: CGFloat
-    let left: CGFloat
-    let top: CGFloat = 20
+    let left: CGFloat = 24
     let gap: CGFloat = 3
     let chart: UsageHeatmap
     init(chart: UsageHeatmap, width: CGFloat) {
         self.chart = chart
-        left = chart.columnMajor ? 24 : 0
-        let maximum: CGFloat = chart.columnMajor ? 12 : 32
-        cell = max(1, min(maximum, (width - left) / CGFloat(chart.columns) - gap))
+        cell = max(1, min(Self.maximumCell, (width - left) / CGFloat(max(1, chart.columns)) - gap))
     }
     static func height(for chart: UsageHeatmap) -> CGFloat {
-        22 + CGFloat(chart.rowCount) * (chart.columnMajor ? 15 : 35)
+        CGFloat(chart.bands.count) * (header + 7 * (maximumCell + 3) + bandGap)
+    }
+    var bandHeight: CGFloat { Self.header + 7 * (cell + gap) + Self.bandGap }
+    func top(of band: Int) -> CGFloat { CGFloat(band) * bandHeight + Self.header }
+    func band(ofColumn column: Int) -> Int {
+        chart.bands.lastIndex { $0.firstColumn <= column } ?? 0
     }
     func rect(_ index: Int) -> NSRect {
-        let column = chart.columnMajor ? index / chart.rowCount : index % chart.columns
-        let row = chart.columnMajor ? index % chart.rowCount : index / chart.columns
-        // Nonannual grids use all available width for readable labels.
-        return NSRect(x: left + CGFloat(column) * (cell + gap),
-                      y: top + CGFloat(row) * (cell + gap), width: cell, height: cell)
+        let column = index / 7, row = index % 7, band = band(ofColumn: column)
+        return NSRect(x: left + CGFloat(column - chart.bands[band].firstColumn) * (cell + gap),
+                      y: top(of: band) + CGFloat(row) * (cell + gap), width: cell, height: cell)
     }
     func index(at point: NSPoint) -> Int? {
-        guard point.x >= left, point.y >= top else { return nil }
-        let col = Int((point.x - left) / (cell + gap)), row = Int((point.y - top) / (cell + gap))
-        guard col < chart.columns, row < chart.rowCount,
-              (point.x - left).truncatingRemainder(dividingBy: cell + gap) <= cell,
-              (point.y - top).truncatingRemainder(dividingBy: cell + gap) <= cell else { return nil }
-        let i = chart.columnMajor ? col * chart.rowCount + row : row * chart.columns + col
+        guard point.x >= left, point.y >= 0 else { return nil }
+        let band = Int(point.y / bandHeight)
+        guard chart.bands.indices.contains(band) else { return nil }
+        let y = point.y - top(of: band), x = point.x - left
+        guard y >= 0 else { return nil }
+        let col = Int(x / (cell + gap)), row = Int(y / (cell + gap))
+        guard col < chart.bands[band].columns, row < 7,
+              x.truncatingRemainder(dividingBy: cell + gap) <= cell,
+              y.truncatingRemainder(dividingBy: cell + gap) <= cell else { return nil }
+        let i = (chart.bands[band].firstColumn + col) * 7 + row
         return chart.cells.indices.contains(i) && chart.cells[i] != nil ? i : nil
     }
 }
@@ -196,7 +161,6 @@ final class HeatmapCanvasView: NSView {
     private(set) var chart: UsageHeatmap?
     private var locale = Locale.current
     private var labels: [String] = []
-    private var smallLabels: [String] = []
     private var hovered: Int?
     private var selected: Int?
     private var focusIndex: Int? { hovered ?? selected }
@@ -205,32 +169,15 @@ final class HeatmapCanvasView: NSView {
     static func color(_ level: Int) -> NSColor {
         level == 0 ? .labelColor.withAlphaComponent(0.08) : .systemGreen.withAlphaComponent([0, 0.25, 0.45, 0.7, 1][level])
     }
-    static func label(_ day: UsageHeatmap.Day, unit: UsageHeatmap.Unit, locale: Locale) -> String {
-        var style = Date.FormatStyle.dateTime.year().month().day().locale(locale)
-        if unit == .hour { style = style.hour().minute().timeZone(.specificName(.short)) }
-        var text = day.date.formatted(style)
-        if let end = day.end, unit != .hour {
-            let last = Calendar.current.date(byAdding: .day, value: -1, to: end)!
-            text += " – " + last.formatted(style)
-        }
-        return text + " · " + day.tokens.formatted(.number.locale(locale)) + " Token"
+    static func label(_ day: UsageHeatmap.Day, locale: Locale) -> String {
+        day.date.formatted(.dateTime.year().month().day().weekday(.abbreviated).locale(locale))
+            + " · " + day.tokens.formatted(.number.locale(locale)) + " Token"
     }
     func update(_ newChart: UsageHeatmap, locale: Locale) {
         guard chart?.id != newChart.id || self.locale != locale else { return }
         chart = newChart; self.locale = locale
         hovered = nil; selected = nil
-        labels = newChart.cells.map { $0.map { Self.label($0, unit: newChart.unit, locale: locale) } ?? "" }
-        smallLabels = newChart.cells.map { day in
-            guard let day else { return "" }
-            switch newChart.unit {
-            case .hour: return String(format: "%02d", Calendar.current.component(.hour, from: day.date))
-            case .day: return String(Calendar.current.component(.day, from: day.date))
-            case .month:
-                let parts = Calendar.current.dateComponents([.year, .month], from: day.date)
-                return String(format: "%02d/%02d", (parts.year ?? 0) % 100, parts.month ?? 1)
-            case .year: return String(Calendar.current.component(.year, from: day.date))
-            }
-        }
+        labels = newChart.cells.map { $0.map { Self.label($0, locale: locale) } ?? "" }
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(L10n.text("Token 用量热力图"))
@@ -247,36 +194,34 @@ final class HeatmapCanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let chart else { return }
         let layout = HeatmapGridLayout(chart: chart, width: bounds.width)
-        let font = NSFont.systemFont(ofSize: chart.columnMajor ? 9 : 10)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-        if chart.columnMajor {
-            let weekLabels: [L10n.Template] = ["一", "", "三", "", "五", "", "日"]
-            for row in 0..<7 {
-                (L10n.text(weekLabels[row]) as NSString).draw(at: NSPoint(x: 0, y: layout.top + CGFloat(row) * (layout.cell + layout.gap)), withAttributes: attrs)
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.secondaryLabelColor]
+        let weekLabels: [L10n.Template] = ["一", "", "三", "", "五", "", "日"]
+        for band in chart.bands.indices {
+            let top = layout.top(of: band)
+            if chart.bands.count > 1 {
+                (String(chart.bands[band].year) as NSString).draw(at: NSPoint(x: 0, y: top - HeatmapGridLayout.header), withAttributes: attrs)
             }
-        } else if chart.unit == .day {
-            let labels: [L10n.Template] = ["一", "二", "三", "四", "五", "六", "日"]
-            for col in 0..<7 {
-                (L10n.text(labels[col]) as NSString).draw(at: NSPoint(x: CGFloat(col) * (layout.cell + layout.gap) + 8, y: 0), withAttributes: attrs)
+            for row in 0..<7 {
+                (L10n.text(weekLabels[row]) as NSString).draw(at: NSPoint(x: 0, y: top + CGFloat(row) * (layout.cell + layout.gap)), withAttributes: attrs)
             }
         }
+        var lastLabel = (y: CGFloat(-1), end: CGFloat(0))
+        let firstDay = chart.cells.firstIndex { $0 != nil }
         for i in chart.cells.indices {
             guard let day = chart.cells[i] else { continue }
             let rect = layout.rect(i)
-            guard rect.intersects(dirtyRect.insetBy(dx: -2, dy: -20)) else { continue }
-            if chart.columnMajor, Calendar.current.component(.day, from: day.date) == 1 {
-                let month = day.date.formatted(.dateTime.month(.abbreviated).locale(locale))
-                (month as NSString).draw(at: NSPoint(x: rect.minX, y: 0), withAttributes: attrs)
+            // Month labels mark the range start and each month's first day, skipping collisions.
+            if i == firstDay || Calendar.current.component(.day, from: day.date) == 1 {
+                let month = day.date.formatted(.dateTime.month(.abbreviated).locale(locale)) as NSString
+                let y = rect.minY - CGFloat(i % 7) * (layout.cell + layout.gap) - HeatmapGridLayout.header + 2
+                if lastLabel.y != y || rect.minX >= lastLabel.end {
+                    month.draw(at: NSPoint(x: rect.minX, y: y), withAttributes: attrs)
+                    lastLabel = (y, rect.minX + month.size(withAttributes: attrs).width + 4)
+                }
             }
+            guard rect.intersects(dirtyRect.insetBy(dx: -2, dy: -2)) else { continue }
             let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
             Self.color(chart.level(for: day.tokens)).setFill(); path.fill()
-            if !chart.columnMajor {
-                let text = smallLabels[i] as NSString
-                let textAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: chart.unit == .month ? 8 : 10),
-                    .foregroundColor: chart.level(for: day.tokens) >= 3 ? NSColor.black : NSColor.labelColor]
-                let size = text.size(withAttributes: textAttrs)
-                text.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: textAttrs)
-            }
             if focusIndex == i {
                 NSColor.labelColor.setStroke(); path.lineWidth = 1.5; path.stroke()
             }
@@ -318,10 +263,10 @@ final class HeatmapCanvasView: NSView {
         if event.keyCode == 53 { hovered = nil; selected = nil; publishFocus(from: old); return }
         let step: Int
         switch event.keyCode {
-        case 123: step = chart.columnMajor ? -chart.rowCount : -1
-        case 124: step = chart.columnMajor ? chart.rowCount : 1
-        case 125: step = chart.columnMajor ? 1 : chart.columns
-        case 126: step = chart.columnMajor ? -1 : -chart.columns
+        case 123: step = -7
+        case 124: step = 7
+        case 125: step = 1
+        case 126: step = -1
         default: super.keyDown(with: event); return
         }
         var candidate = focusIndex.map { $0 + step } ?? (chart.cells.firstIndex { $0 != nil } ?? 0)

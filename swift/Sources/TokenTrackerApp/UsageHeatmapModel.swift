@@ -9,9 +9,8 @@ private final class HeatmapLoader: @unchecked Sendable {
     private var version: Int64?
     private var zone: String?
     private var dataset: HeatmapDataset?
-    private var hourRows: [Date: [UsageStore.DailyRow]] = [:]
     private var cachedRequest: HeatmapRequest?
-    private var cachedHour: Date?
+    private var cachedDay: Date?
     private var cachedChart: UsageHeatmap?
     init(path: String) { self.path = path }
 
@@ -32,31 +31,22 @@ private final class HeatmapLoader: @unchecked Sendable {
             dataset = HeatmapDataset(rows: rows,
                     excludedTokens: max(0, total - rows.reduce(0) { $0 + $1.stats.tokens }), calendar: calendar)
             version = current; zone = calendar.timeZone.identifier
-            hourRows.removeAll(); cachedChart = nil
+            cachedChart = nil
         }
         try cancellation.check()
-        let hour = calendar.dateInterval(of: .hour, for: now)!.start
-        if cachedRequest == request, cachedHour == hour, let cachedChart { return cachedChart }
-        var rows: [UsageStore.DailyRow] = []
-        if request.period == .day {
-            let day = calendar.startOfDay(for: min(request.anchor, now))
-            if let cached = hourRows[day] { rows = cached }
-            else {
-                rows = try store.heatmapHours(on: day)
-                if hourRows.count >= 8 { hourRows.removeAll() }
-                hourRows[day] = rows
-            }
-        }
-        let chart = UsageHeatmap(dataset: dataset!, request: request, hours: rows, now: now)
+        let day = calendar.startOfDay(for: now)
+        if cachedRequest == request, cachedDay == day, let cachedChart { return cachedChart }
+        let chart = UsageHeatmap(dataset: dataset!, request: request, now: now)
         try cancellation.check()
-        cachedRequest = request; cachedHour = hour; cachedChart = chart
+        cachedRequest = request; cachedDay = day; cachedChart = chart
         return chart
     }
 }
 
 @MainActor
 final class UsageHeatmapModel: ObservableObject {
-    @Published var request = HeatmapRequest() { didSet { if request != oldValue { refresh() } } }
+    /// Set by AppState from the overview range before each refresh.
+    @Published var request = HeatmapRequest()
     @Published private(set) var chart: UsageHeatmap?
     @Published private(set) var loadedRequest: HeatmapRequest?
     @Published private(set) var loading = false
@@ -90,31 +80,5 @@ final class UsageHeatmapModel: ObservableObject {
                 }
             }
         }
-    }
-
-    func move(_ direction: Int) {
-        let component: Calendar.Component
-        switch request.period {
-        case .day: component = .day
-        case .week: component = .weekOfYear
-        case .month: component = .month
-        case .year: component = .year
-        case .all, .custom: return
-        }
-        request.anchor = min(Date(), Calendar.current.date(byAdding: component, value: direction, to: request.anchor)!)
-    }
-
-    func showToday() { request.anchor = Date() }
-
-    var canMoveForward: Bool {
-        let calendar = Calendar.current
-        let component: Calendar.Component = switch request.period {
-        case .day: .day
-        case .week: .weekOfYear
-        case .month: .month
-        default: .year
-        }
-        var mondayCalendar = calendar; mondayCalendar.firstWeekday = 2
-        return (mondayCalendar.dateInterval(of: component, for: request.anchor)?.end ?? Date()) <= Date()
     }
 }

@@ -29,11 +29,14 @@ final class UsageHeatmapModelTests: XCTestCase {
         await refresh()
         XCTAssertEqual(model.chart?.totalTokens, 30)
         XCTAssertNotEqual(model.chart?.id, id)
-        model.request.period = .all
-        model.request.period = .day
-        model.request.period = .month
+        model.request.range = "all"
         await refresh()
-        XCTAssertEqual(model.loadedRequest?.period, .month)
+        XCTAssertEqual(model.loadedRequest?.range, "all")
+        model.request.range = "day"
+        model.refresh()
+        model.request.range = "month"
+        await refresh()
+        XCTAssertEqual(model.loadedRequest?.range, "month")
         XCTAssertEqual(model.chart?.totalTokens, 30)
         XCTAssertFalse(model.loading)
         XCTAssertFalse(model.failed)

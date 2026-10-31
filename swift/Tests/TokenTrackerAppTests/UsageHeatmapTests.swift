@@ -60,55 +60,20 @@ final class UsageHeatmapTests: XCTestCase {
             XCTAssertGreaterThan(host.fittingSize.height, 180)
         }
     }
-    func testPeriodBoundariesAndAdaptiveAllHistory() throws {
-        let now = date(2026, 10, 29)
+    func testRangesMatchOverviewBoundsInAnnualLayout() {
+        let now = date(2026, 10, 29) // Thursday
         let empty = HeatmapDataset(rows: [], calendar: calendar)
-        let expected: [(HeatmapPeriod, Int)] = [(.day, 13), (.week, 4), (.month, 29), (.year, 302)]
-        for (period, count) in expected {
-            let chart = UsageHeatmap(dataset: empty, request: HeatmapRequest(period: period, anchor: now), now: now, calendar: calendar)
-            XCTAssertEqual(chart.cells.compactMap { $0 }.count, count, "\(period)")
-            XCTAssertLessThanOrEqual(chart.cells.count, 378)
+        let expected: [(String, Int, Int)] = [("day", 1, 1), ("week", 7, 2), ("month", 29, 5), ("all", 302, 53)]
+        for (range, days, columns) in expected {
+            let chart = UsageHeatmap(dataset: empty, request: HeatmapRequest(range: range), now: now, calendar: calendar)
+            XCTAssertEqual(chart.cells.compactMap { $0 }.count, days, range)
+            XCTAssertEqual(chart.bands.count, 1, range)
+            XCTAssertEqual(chart.columns, columns, range)
+            XCTAssertTrue(chart.weeks.allSatisfy { $0.count == 7 }, range)
         }
-        let custom = HeatmapRequest(period: .custom, anchor: now, start: date(2024, 2, 28), end: date(2024, 3, 1))
-        let chart = UsageHeatmap(dataset: empty, request: custom, now: now, calendar: calendar)
-        XCTAssertEqual(chart.cells.compactMap { $0 }.count, 3) // Both endpoints, leap day included.
-        XCTAssertEqual(calendar.component(.day, from: chart.end), 2)
-        let long = HeatmapRequest(period: .custom, anchor: now, start: date(2010, 1, 1), end: now)
-        let all = UsageHeatmap(dataset: empty, request: long, now: now, calendar: calendar)
-        XCTAssertEqual(all.unit, .month)
-        XCTAssertLessThanOrEqual(all.cells.count, 372)
-        let veryLong = UsageHeatmap(dataset: empty,
-            request: HeatmapRequest(period: .custom, anchor: now, start: date(1900, 1, 1), end: now),
-            now: now, calendar: calendar)
-        XCTAssertEqual(veryLong.unit, .year(1))
-        XCTAssertLessThanOrEqual(veryLong.cells.count, 372)
-    }
-
-    func testHourBucketsPreserveDSTAndDoNotSpreadIntervals() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try UsageStore(path: directory.appendingPathComponent("usage.db").path)
-        let day = date(2024, 11, 3)
-        let midnight = calendar.startOfDay(for: day)
-        let first = Int64(midnight.addingTimeInterval(90 * 60).timeIntervalSince1970 * 1000)
-        let second = first + 3_600_000 // Two 01:30s, distinct absolute hours.
-        try store.putEvent(tool: "codex", srcKey: "first-0130", ts: first, input: 10, output: 20, cacheRead: 30, cacheWrite: 40)
-        try store.putEvent(tool: "other", srcKey: "second-0130", ts: second, input: 50)
-        try store.putEvent(tool: "other", srcKey: "cross-hour", ts: second, input: 200,
-                           timeQuality: "observed", intervalStart: first)
-        let rows = try store.heatmapHours(on: day, calendar: calendar)
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(Set(rows.map(\.day)).count, 2)
-        XCTAssertEqual(rows.reduce(0) { $0 + $1.stats.tokens }, 150)
-        let fall = UsageHeatmap(dataset: HeatmapDataset(rows: [], calendar: calendar),
-            request: HeatmapRequest(period: .day, anchor: day), hours: rows,
-            now: date(2026, 10, 29), calendar: calendar)
-        XCTAssertEqual(fall.cells.compactMap { $0 }.count, 25)
-        XCTAssertEqual(fall.totalTokens, 150)
-        let spring = UsageHeatmap(dataset: HeatmapDataset(rows: [], calendar: calendar),
-            request: HeatmapRequest(period: .day, anchor: date(2024, 3, 10)),
-            now: date(2026, 10, 29), calendar: calendar)
-        XCTAssertEqual(spring.cells.compactMap { $0 }.count, 23)
+        let week = UsageHeatmap(dataset: empty, request: HeatmapRequest(range: "week"), now: date(2026, 1, 2), calendar: calendar)
+        XCTAssertEqual(week.bands.count, 1, "Short ranges stay one block across New Year")
+        XCTAssertEqual(week.cells.compactMap { $0 }.count, 7)
     }
 
     @MainActor
@@ -134,35 +99,32 @@ final class UsageHeatmapTests: XCTestCase {
         XCTAssertNil(layout.index(at: NSPoint(x: -1, y: -1)))
     }
 
-    func testAllAndCustomPreserveTotalsAcrossAdaptiveBuckets() {
+    func testAllHistoryStacksCalendarYearsAndKeepsTotals() {
         func row(_ day: String, _ tool: String, _ tokens: Int64) -> UsageStore.DailyRow {
             var stats = UsageStore.ToolStats(); stats.tokens = tokens; stats.input = tokens
             return UsageStore.DailyRow(tool: tool, day: day, stats: stats)
         }
-        let rows = [row("1990-01-01", "codex", 100), row("2026-10-29", "unknown-agent", 250),
+        let rows = [row("2024-12-31", "codex", 100), row("2026-10-29", "unknown-agent", 250),
                     row("2026-10-29", "codex", 30), row("2027-01-01", "codex", 999)]
         let data = HeatmapDataset(rows: rows, excludedTokens: 42, calendar: calendar)
         let now = date(2026, 10, 29)
-        let all = UsageHeatmap(dataset: data, request: HeatmapRequest(period: .all), now: now, calendar: calendar)
-        XCTAssertEqual(all.unit, .year(1))
+        let all = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "all"), now: now, calendar: calendar)
+        XCTAssertEqual(all.bands.map(\.year), [2024, 2025, 2026])
+        XCTAssertEqual(all.bands.map(\.firstColumn), [0, all.bands[0].columns, all.bands[0].columns + all.bands[1].columns])
         XCTAssertEqual(all.totalTokens, 380)
         XCTAssertEqual(all.activeDays, 2)
         XCTAssertEqual(all.excludedTokens, 42)
+        XCTAssertEqual(all.cells.compactMap { $0 }.count, 366 + 365 + 302)
         XCTAssertEqual(all.cells.compactMap { $0 }.flatMap(\.agents).reduce(0) { $0 + $1.tokens }, 380)
-        let custom = UsageHeatmap(dataset: data,
-            request: HeatmapRequest(period: .custom, start: now, end: now), now: now, calendar: calendar)
-        XCTAssertEqual(custom.totalTokens, 280)
-        XCTAssertEqual(custom.activeDays, 1)
-        XCTAssertEqual(custom.cells.compactMap { $0 }.first?.agents.map(\.tool), ["unknown-agent", "codex"])
+        let layout = HeatmapGridLayout(chart: all, width: 700)
+        for index in all.cells.indices where all.cells[index] != nil {
+            let rect = layout.rect(index)
+            XCTAssertEqual(layout.index(at: NSPoint(x: rect.midX, y: rect.midY)), index)
+        }
+        XCTAssertGreaterThan(layout.rect(all.cells.count - 1).minY, layout.rect(0).maxY + 7 * 3)
+        let week = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "week"), now: now, calendar: calendar)
+        XCTAssertEqual(week.totalTokens, 280)
+        XCTAssertEqual(week.activeDays, 1)
+        XCTAssertEqual(week.cells.compactMap { $0 }.first { $0.tokens > 0 }?.agents.map(\.tool), ["unknown-agent", "codex"])
     }
-
-    func testRangeLabelsUsePeriodMeaningInBothLanguages() {
-        let previous = L10n.language
-        defer { L10n.setLanguage(previous) }
-        L10n.setLanguage("en")
-        XCTAssertEqual(HeatmapPeriod.allCases.map { L10n.text($0.title) }, ["Day", "Week", "Month", "Year", "Custom", "All"])
-        L10n.setLanguage("zh-Hans")
-        XCTAssertEqual(HeatmapPeriod.allCases.map { L10n.text($0.title) }, ["日", "周", "月", "年", "自选", "全部"])
-    }
-
 }

@@ -477,6 +477,7 @@ final class AppState: ObservableObject {
     }
 
     func refreshData() {
+        heatmap.request = HeatmapRequest(range: range)
         heatmap.refresh()
         dataGeneration += 1
         let generation = dataGeneration
