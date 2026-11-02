@@ -698,6 +698,15 @@
 "已导入 {0} 个 API Key" = "Imported {0} API keys";
 "没有可导入的新 API Key" = "No new API keys to import";
 
+"侧栏" = "Sidebar";
+"导航项" = "Navigation items";
+"恢复默认侧栏" = "Reset sidebar";
+"上移" = "Move up";
+"下移" = "Move down";
+"勾选要显示的项目，拖动右侧手柄调整顺序。隐藏 Agent 不影响用量扫描；设置入口始终保留。" = "Choose which items to show and drag the handles on the right to reorder them. Hiding an agent does not stop usage scanning. Settings always stays visible.";
+
+"拖动排序" = "Drag to reorder";
+
 "Token 用量热力图" = "Token usage heatmap";
 "全部 Agent · 按年查看，不受顶部时间范围影响" = "All agents · annual view, independent of the time range above";
 "年份" = "Year";
@@ -737,7 +746,6 @@
 "二" = "Tue";
 "四" = "Thu";
 "六" = "Sat";
-
 "日视图" = "Day";
 "周视图" = "Week";
 "月视图" = "Month";

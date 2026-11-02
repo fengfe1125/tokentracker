@@ -67,6 +67,7 @@ struct SettingsPanelView: View {
                     .disabled(L10n.isEnglish)
                 Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
             }
+            SidebarSettingsSection()
             SubscriptionAccountsSection(state: state)
             Section(L10n.text("刘海圆环")) {
                 Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)

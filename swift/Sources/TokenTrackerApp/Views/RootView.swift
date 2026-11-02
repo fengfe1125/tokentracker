@@ -12,6 +12,7 @@ import TokenTrackerCore
 struct RootView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
+    @ObservedObject private var sidebar = SidebarPreferences.shared
 
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
@@ -19,25 +20,25 @@ struct RootView: View {
         NavigationSplitView {
             List(selection: $state.selection) {
                 Section {
-                    Label(L10n.text("概览"), systemImage: "chart.bar.fill")
-                        .tag(NavSelection.overview)
-                    Label(L10n.text("项目"), systemImage: "folder").tag(NavSelection.projects)
-                    Label(L10n.text("报告"), systemImage: "doc.text").tag(NavSelection.reports)
-                    Label(L10n.text("订阅配额与余额"), systemImage: "creditcard")
-                        .tag(NavSelection.subscriptions)
-                    Label(L10n.text("会话记录"), systemImage: "list.bullet.rectangle")
-                        .tag(NavSelection.sessions)
-                    Label(L10n.text("Agent 活动"), systemImage: "point.3.connected.trianglepath.dotted")
-                        .tag(NavSelection.activity)
+                    ForEach(sidebar.layout.navigation.compactMap(SidebarNavigationItem.init(rawValue:))
+                        .filter { sidebar.isVisible($0.id, in: .navigation) }) { item in
+                        Label(item.title, systemImage: item.symbol).tag(item.selection)
+                    }
                 }
-                Section(L10n.text("Agent 数据源")) {
-                    ForEach(ScannerRegistry.all, id: \.self) { name in
-                        ToolSidebarRow(name: name,
-                                       installed: state.detectInfo[name]?.installed ?? false,
-                                       todayTokens: todayTokens(for: name),
-                                       yi: yi)
-                            .tag(NavSelection.tool(name))
-                            .contextMenu { Button(L10n.text("数据健康")) { state.insights.showHealth(tool:name,rescan:{ state.requestScan() }) } }
+                if sidebar.layout.agents.contains(where: { sidebar.isVisible($0, in: .agents) }) {
+                    Section(L10n.text("Agent 数据源")) {
+                        ForEach(sidebar.layout.agents.filter { sidebar.isVisible($0, in: .agents) }, id: \.self) { name in
+                            ToolSidebarRow(name: name,
+                                           installed: state.detectInfo[name]?.installed ?? false,
+                                           todayTokens: todayTokens(for: name),
+                                           yi: yi)
+                                .tag(NavSelection.tool(name))
+                                .contextMenu {
+                                    Button(L10n.text("数据健康")) {
+                                        state.insights.showHealth(tool: name, rescan: { state.requestScan() })
+                                    }
+                                }
+                        }
                     }
                 }
                 Section {
