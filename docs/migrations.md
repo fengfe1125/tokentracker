@@ -1,3 +1,7 @@
+# schema v7
+
+v7 只清理数据，不改表结构。v6 及以前，OpenCode/Hermes 等累计快照的 native 成本经 JSON 往返后会差几个 ulp，每次扫描都多写一条 0 token、|成本|≤1e-9 的 `aggregate_snapshot` 事件，把会话最后时间刷成扫描时刻（会话记录里未使用的 OpenCode 会话一直排在最前）。升级时按工具在 `migration_history` 留一条汇总（行数与成本合计）后删除这些行；有 token 的差量、`native_adjustment` 对账和其它工具的事件不变，Token 与成本总量不受影响。照常先做一致性备份；v6 二进制拒绝打开 v7 库。
+
 # v0.3.0 / schema v5
 
 v5 增加项目来源与归属、扫描健康、预算、配额样本、提醒状态及周报快照表和索引。沿用一致性备份和事务升级；不重记用量，不删除原项目字段。Swift 与当前 Python CLI 均支持 v5；v0.2 二进制拒绝打开 v5。

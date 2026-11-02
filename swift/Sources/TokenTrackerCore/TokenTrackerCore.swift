@@ -10,7 +10,7 @@ import Foundation
 
 public enum TokenTrackerCore {
     /// ~/.tokentracker/usage.db 的 schema 版本。
-    public static let schemaVersion = 6
+    public static let schemaVersion = 7
 
     /// 冻结差分基线 Fixtures/differential/expected.json 的格式版本。
     public static let differentialFormatVersion = 4

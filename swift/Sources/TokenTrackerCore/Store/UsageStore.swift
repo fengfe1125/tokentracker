@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 6
+    public static let schemaVersion: Int32 = 7
     public static let migrationBackupsKept = 2
     /// Completion lookups otherwise scan an agent's whole history (or the whole
     /// table) for every tool result during a backfill.
@@ -195,6 +195,9 @@ public final class UsageStore {
                 _ = try conn.execute("UPDATE usage_events SET provider='moonshot' WHERE tool='kimi' AND provider=''")
                 _ = try conn.execute("UPDATE usage_events SET provider='deepseek' WHERE tool='dsh' AND provider='' AND lower(model) LIKE 'deepseek-%'")
             }
+            if legacy && version < 7 {
+                try pruneSnapshotRoundingNoise()
+            }
             if legacy && version < 1 {
                 for row in try conn.query(
                     "SELECT * FROM usage_events WHERE tool IN ('codex','opencode','hermes')") {
@@ -226,6 +229,27 @@ public final class UsageStore {
             throw error
         }
         if legacy { pruneMigrationBackups() }
+    }
+
+    /// v7：v6 及以前，快照 native_cost 经 JSON 往返后差几个 ulp，每次扫描都会写一条
+    /// 0 token、|cost|≤1e-9 的事件，把会话最后时间刷成扫描时刻。这类行不含用量，
+    /// 按工具留一条汇总到 migration_history 后删除；native_adjustment 等真实对账不受影响。
+    private func pruneSnapshotRoundingNoise() throws {
+        let noise = """
+            source_kind='aggregate_snapshot' AND input=0 AND output=0 AND cache_read=0
+            AND cache_write=0 AND cost IS NOT NULL AND abs(cost)<=1e-9
+            """
+        for row in try conn.query(
+            "SELECT tool,COUNT(*) AS n,SUM(cost) AS cost FROM usage_events WHERE \(noise) GROUP BY tool") {
+            let summary: [String: Any] = ["tool": row.string("tool"), "rows": row.int("n"),
+                                          "cost": row.double("cost")]
+            _ = try conn.execute("INSERT INTO migration_history VALUES (?,?,?,?,?)", [
+                Int64(UsageStore.schemaVersion), nowMs(), nil,
+                String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8) ?? "{}",
+                "Removed zero-token snapshot events caused by native cost rounding noise.",
+            ])
+        }
+        _ = try conn.execute("DELETE FROM usage_events WHERE \(noise)")
     }
 
     /// Keep only the newest automatic backups once an upgrade has committed.
@@ -552,7 +576,9 @@ public final class UsageStore {
                 resolvedProvider = quote?.provider
                 origin = "estimate"
             }
-            if delta.values.contains(where: { $0 != 0 }) || (cost != nil && cost != 0) {
+            // 快照经 JSON 往返后 native_cost 会差几个 ulp（0.04252111 → 0.042521109999999994），
+            // 不能把这种噪声当成新用量，否则每次扫描都写一条 0 token 事件、刷新会话时间。
+            if delta.values.contains(where: { $0 != 0 }) || (cost.map { abs($0) > 1e-9 } ?? false) {
                 try emit(delta, cost, origin, start != nil ? "observed" : "unallocated",
                          versionID, resolvedProvider)
                 accounted += cost ?? 0

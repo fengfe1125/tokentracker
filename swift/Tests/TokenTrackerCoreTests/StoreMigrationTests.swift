@@ -152,6 +152,43 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: manual))
     }
 
+    /// v6→v7：删除快照成本舍入噪声行，保留真实快照差量与 native 对账。
+    func testV7PrunesSnapshotRoundingNoise() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("usage.db")
+        do {
+            let store = try UsageStore(path: path)
+            func put(_ key: String, input: Int64, cost: Double?, costSource: String, ts: Int64,
+                     quality: String = "observed") throws {
+                _ = try store.putEvent(tool: "opencode", srcKey: key, sessionID: "s", ts: ts,
+                                       input: input, cost: cost, timeQuality: quality,
+                                       intervalStart: quality == "observed" ? ts - 500 : nil,
+                                       costSource: costSource, sourceKind: "aggregate_snapshot",
+                                       sourceScope: "fixture.db")
+            }
+            try put("aggregate|d|0", input: 100, cost: 0.01, costSource: "native", ts: 1_000)
+            try put("aggregate|d|1", input: 0, cost: 2e-17, costSource: "native", ts: 2_000)
+            try put("aggregate|d|2", input: 0, cost: 2e-19, costSource: "native", ts: 3_000)
+            try put("aggregate|d|3", input: 0, cost: 0.5, costSource: "native_adjustment", ts: 4_000,
+                    quality: "unallocated")
+            _ = try store.putEvent(tool: "claude", srcKey: "c", sessionID: "c", ts: 5_000, cost: 0)
+            _ = try store.conn.execute("PRAGMA user_version=6")
+            try store.conn.commit()
+        }
+        let store = try UsageStore(path: path)
+        XCTAssertEqual(try store.conn.scalarInt("PRAGMA user_version"), Int64(UsageStore.schemaVersion))
+        let kept = try store.conn.query("SELECT src_key FROM usage_events ORDER BY src_key")
+            .map { $0.string("src_key") }
+        XCTAssertEqual(kept, ["aggregate|d|0", "aggregate|d|3", "c"])
+        let history = try XCTUnwrap(store.conn.queryOne(
+            "SELECT original_json FROM migration_history WHERE version=7"))
+        XCTAssertTrue(history.string("original_json").contains("\"rows\":2"))
+        XCTAssertEqual(try store.sessions().first { $0.tool == "opencode" }?.ts, 1_000)
+        let backups = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+            .filter { $0.hasPrefix("usage.db.v6.backup-") }
+        XCTAssertEqual(backups.count, 1)
+    }
+
     /// 对齐 test_failed_upgrade_rolls_back_schema_and_values。
     func testFailedUpgradeRollsBack() throws {
         let tmp = try TempDir()

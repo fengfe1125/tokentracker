@@ -280,6 +280,17 @@ final class AggregateScannerPortTests: XCTestCase {
         XCTAssertEqual(try store.stats().total.cost, 2, accuracy: 1e-9)
     }
 
+    /// 快照 JSON 往返会让 native_cost 少几个 ulp；未变化的会话不能每次扫描都多一条事件。
+    func testUnchangedNativeCostDoesNotEmitRoundingEvents() throws {
+        for step in 0..<5 {
+            try snapshot(store, input: 3, cost: 0.001183725, at: startMs + Int64(step) * 60_000)
+        }
+        let count = try XCTUnwrap(store.conn.queryOne(
+            "SELECT COUNT(*) AS n FROM usage_events")).int("n")
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(try store.stats().total.cost, 0.001183725, accuracy: 1e-6)
+    }
+
     /// test_concurrent_connections_serialize_snapshot_read_and_write（简化版：
     /// 两个连接并发写不同 identity，BEGIN IMMEDIATE + busy_timeout 保证不丢数据）
     func testConcurrentConnectionsSerializeSnapshots() throws {
