@@ -19,7 +19,8 @@ struct UsageHeatmapView: View {
                         Text(L10n.text("Token 用量热力图")).font(.headline)
                         if model.loading { ProgressView().controlSize(.mini) }
                     }
-                    Text(chart.map { L10n.text("全部 Agent · \(rangeText($0))") } ?? L10n.text("全部 Agent · 本地时区"))
+                    Text((model.request.tool.map(toolDisplayName) ?? L10n.text("全部 Agent")) + " · "
+                         + (chart.map(rangeText) ?? L10n.text("本地时区")))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)

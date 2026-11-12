@@ -4,6 +4,8 @@ import TokenTrackerCore
 /// Mirrors the overview range keys and UsageStore.rangeBounds day boundaries.
 struct HeatmapRequest: Equatable, Sendable {
     var range = "week"
+    /// nil = 全部 Agent；否则只统计这个工具
+    var tool: String?
 }
 
 /// Parsed once per database revision; pointer movement never touches rows or dates.

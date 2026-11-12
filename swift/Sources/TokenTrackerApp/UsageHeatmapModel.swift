@@ -9,11 +9,18 @@ private final class HeatmapLoader: @unchecked Sendable {
     private var version: Int64?
     private var zone: String?
     private var dataset: HeatmapDataset?
+    private var datasetTool: String?
+    private var allRows: [UsageStore.DailyRow] = []
     private var hourRows: [Date: [UsageStore.DailyRow]] = [:]
     private var cachedRequest: HeatmapRequest?
     private var cachedHour: Date?
     private var cachedChart: UsageHeatmap?
     init(path: String) { self.path = path }
+
+    static func rows(_ rows: [UsageStore.DailyRow], tool: String?) -> [UsageStore.DailyRow] {
+        guard let tool else { return rows }
+        return rows.filter { $0.tool == tool }
+    }
 
     func load(_ request: HeatmapRequest, now: Date, cancellation: ExportCancellation) throws -> UsageHeatmap {
         try cancellation.check()
@@ -27,12 +34,17 @@ private final class HeatmapLoader: @unchecked Sendable {
         let calendar = Calendar.current
         let changed = current != version || zone != calendar.timeZone.identifier || dataset == nil
         if changed {
-            let rows = try store.daily(rangeKey: "all")
-            let total = try store.stats(rangeKey: "all").total.tokens
-            dataset = HeatmapDataset(rows: rows,
-                    excludedTokens: max(0, total - rows.reduce(0) { $0 + $1.stats.tokens }), calendar: calendar)
+            allRows = try store.daily(rangeKey: "all")
             version = current; zone = calendar.timeZone.identifier
             hourRows.removeAll(); cachedChart = nil
+        }
+        // 日桶按工具分行，筛选 Agent 只是换一份子集；库没变时不重新查询全量
+        if changed || datasetTool != request.tool {
+            let rows = Self.rows(allRows, tool: request.tool)
+            let total = try store.stats(rangeKey: "all", tool: request.tool).total.tokens
+            dataset = HeatmapDataset(rows: rows,
+                    excludedTokens: max(0, total - rows.reduce(0) { $0 + $1.stats.tokens }), calendar: calendar)
+            datasetTool = request.tool; cachedChart = nil
         }
         try cancellation.check()
         let day = calendar.dateInterval(of: .hour, for: now)!.start
@@ -52,7 +64,8 @@ private final class HeatmapLoader: @unchecked Sendable {
             }
             if hourRows.count > 62 { hourRows.removeAll() }
         }
-        let chart = UsageHeatmap(dataset: dataset!, request: request, hours: rows, now: now)
+        let chart = UsageHeatmap(dataset: dataset!, request: request,
+                                 hours: Self.rows(rows, tool: request.tool), now: now)
         try cancellation.check()
         cachedRequest = request; cachedHour = day; cachedChart = chart
         return chart
