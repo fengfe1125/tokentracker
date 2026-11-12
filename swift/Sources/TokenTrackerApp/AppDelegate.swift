@@ -56,6 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar.onOpenMain = { [weak self] in self?.showMainPanel() }
         bar.onOpenSettings = { [weak self] in self?.openSettings() }
         bar.onQuit = { NSApp.terminate(nil) }
+        bar.onOpenSession = { [weak self] tool, session in
+            self?.showMainPanel()
+            self?.appState.showInsightSession(tool: tool, sessionID: session)
+        }
+        bar.onOpenAccounts = { [weak self] in
+            self?.showMainPanel()
+            self?.appState.selection = .subscriptions
+        }
         bar.install()
         statusItem = bar
         let hud = NotchHUDController(state: appState)
@@ -81,6 +89,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let history = PublishHistoryWindowController(appState: appState)
         appState.onPublishHistory = { history.show() }
         publishHistoryWindow = history
+        // 预览验收：自动弹出菜单栏速览面板（状态栏图标不在应用窗口里，无法从外部点到）
+        if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1",
+           ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_PANEL"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak bar] in bar?.showPanel() }
+        }
         if ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_MAIN"] == "1" {
             appState.selection = .activity
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }

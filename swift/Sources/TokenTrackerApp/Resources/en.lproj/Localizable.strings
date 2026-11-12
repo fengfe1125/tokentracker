@@ -780,3 +780,10 @@
 "{0} 条用量记录" = "{0} usage records";
 "此范围暂无活动" = "No activity in this range";
 "换个时间范围或 Agent，或等下一次扫描。" = "Try another time range or agent, or wait for the next scan.";
+"配额" = "Quotas";
+"今日各 Agent" = "Agents today";
+"最近会话" = "Recent sessions";
+"今日按小时" = "Today by hour";
+"还有 {0} 个账号" = "{0} more accounts";
+"{0} 个账号未能读取额度" = "{0} accounts with unavailable quota";
+"更多" = "More";

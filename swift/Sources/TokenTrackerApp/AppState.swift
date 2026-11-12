@@ -58,6 +58,10 @@ final class AppState: ObservableObject {
     let activityPage = ActivityPageState()
     @Published var detectInfo: [String: DetectInfo] = [:]
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
+    /// 今天 0–23 时各小时的 Token（速览面板的迷你柱；不随所选范围变化）
+    @Published var todayHours: [Double] = Array(repeating: 0, count: 24)
+    /// 今天最近活动的几个会话（速览面板）
+    @Published var recentSessions: [UsageStore.SessionRow] = []
     @Published var updateInfo: UpdateInfo?              // 更新检查（缓存 24h）
     @Published var updatedAt: Date?
     @Published private(set) var priceSyncState = "never"
@@ -512,6 +516,8 @@ final class AppState: ObservableObject {
                                                   limit: Self.sessionLimit,
                                                   query: search.isEmpty ? nil : search)
                 let dayStats = try store.stats(rangeKey: "day")
+                let dayHours = Self.hourBuckets(range == "day" ? daily : try store.daily(rangeKey: "day"))
+                let recent = try store.sessions(rangeKey: "day", limit: 3)
                 let detect = ScanRunner(store: store, prices: PriceTable.load(from: pricePath),
                                         roots: roots).detectAll()
                 DispatchQueue.main.async {
@@ -531,6 +537,8 @@ final class AppState: ObservableObject {
                     self.detectInfo = detect
                     self.todayByTool = Dictionary(uniqueKeysWithValues:
                         dayStats.rows.map { ($0.tool, $0.tokens) })
+                    self.todayHours = dayHours
+                    self.recentSessions = recent
                     self.updatedAt = Date()
                     self.loadedRange = range
                     self.dataLoading = false
@@ -552,6 +560,18 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// 把「今天」的小时桶（"HH:00" × 工具）合成 24 个小时的总 Token。
+    nonisolated static func hourBuckets(_ rows: [UsageStore.DailyRow]) -> [Double] {
+        var hours = [Double](repeating: 0, count: 24)
+        for row in rows {
+            // 只认 "HH:00"；按天的标签（"2026-11-12"）不能被当成 20 点
+            guard row.day.count == 5, row.day.hasSuffix(":00"),
+                  let hour = Int(row.day.prefix(2)), hours.indices.contains(hour) else { continue }
+            hours[hour] += Double(row.stats.tokens)
+        }
+        return hours
     }
 
     /// 订阅配额与余额：每分钟重新发现来源，到期账号才查询（成功缓存 5 分钟）。

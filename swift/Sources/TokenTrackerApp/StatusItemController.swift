@@ -5,6 +5,7 @@
 //  移植自 app/menubar.py：NSStatusItem 常驻（分段着色富文本标题 + AppKit
 //  矢量配额圆 + 动画降级 + Tahoe 自愈）。格式化纯逻辑在
 //  TokenTrackerCore.MenuBarFmt。
+//  左键弹出速览面板（MenuBarPanelView），右键 / Control 点击弹出文字菜单。
 //
 
 import AppKit
@@ -26,6 +27,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var cancellables: [AnyCancellable] = []
 
     private var statusItem: NSStatusItem?
+    /// 右键菜单。不挂在 statusItem.menu 上：挂上后左键也会弹菜单，面板就出不来。
+    private var menu: NSMenu?
+    private var popover: NSPopover?
     private var todayItem: NSMenuItem?
     private var riskItem: NSMenuItem?
     private var quotaItems: [NSMenuItem] = []
@@ -50,6 +54,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onOpenMain: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onOpenTasks: (() -> Void)?
+    var onOpenSession: ((String, String) -> Void)?
+    var onOpenAccounts: (() -> Void)?
     var onQuit: (() -> Void)?
 
     init(appState: AppState) {
@@ -153,7 +159,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         addAction(menu, title: L10n.text("立即扫描"), action: #selector(rescan))
         menu.addItem(.separator())
         addAction(menu, title: L10n.text("退出 TokenTracker"), action: #selector(quitApp), key: "q")
-        item.menu = menu
+        self.menu = menu
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
         log(L10n.text("状态栏已安装"))
         render()
@@ -171,6 +180,64 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(item)
     }
     @objc private func openTasks() { onOpenTasks?() }
+
+    // ------------------------------------------------------------ 点击 ----
+
+    private func debug(_ message: String) {
+        guard ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" else { return }
+        FileHandle.standardError.write(Data("[tt] \(message)\n".utf8))
+    }
+
+    @objc private func statusItemClicked(_ sender: Any?) {
+        let event = NSApp.currentEvent
+        debug("status item clicked: type=\(event?.type.rawValue ?? 0) panelShown=\(panelShown)")
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showMenu()
+        } else {
+            togglePanel()
+        }
+    }
+
+    /// 右键菜单：临时挂上菜单再点一次按钮，弹完立刻摘掉，左键才不会被菜单接管。
+    private func showMenu() {
+        closePanel()
+        guard let item = statusItem, let menu else { return }
+        item.menu = menu
+        item.button?.performClick(nil)
+        item.menu = nil
+    }
+
+    var panelShown: Bool { popover?.isShown == true }
+
+    func closePanel() { popover?.performClose(nil) }
+
+    private func togglePanel() {
+        if panelShown { closePanel() } else { showPanel() }
+    }
+
+    func showPanel() {
+        guard !panelShown else { return }
+        guard let button = statusItem?.button else { return }
+        let actions = MenuBarPanelActions(
+            openMain: { [weak self] in self?.closePanel(); self?.onOpenMain?() },
+            openSession: { [weak self] tool, session in self?.closePanel(); self?.onOpenSession?(tool, session) },
+            openAccounts: { [weak self] in self?.closePanel(); self?.onOpenAccounts?() },
+            openSettings: { [weak self] in self?.closePanel(); self?.onOpenSettings?() },
+            openTasks: { [weak self] in self?.closePanel(); self?.onOpenTasks?() },
+            quit: { [weak self] in self?.onQuit?() })
+        let hosting = NSHostingController(
+            rootView: MenuBarPanelView(state: appState, actions: actions).appLanguage())
+        hosting.sizingOptions = [.preferredContentSize]   // 面板高度跟随内容
+        let popover = NSPopover()
+        popover.behavior = .transient                     // 点面板外即关闭
+        popover.contentViewController = hosting
+        self.popover = popover
+        // 无 Dock 图标的应用要先激活，面板才能拿到键盘焦点、外部点击才会触发关闭
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        debug("panel shown=\(popover.isShown) button=\(button.window?.frame ?? .zero) size=\(hosting.preferredContentSize)")
+    }
 
     // ------------------------------------------------------------ 标题渲染 ----
 
@@ -420,6 +487,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func recreateStatusItem() {
+        closePanel()
         let old = statusItem
         statusItem = nil
         if let old { NSStatusBar.system.removeStatusItem(old) }
@@ -432,7 +500,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// 无条件重排轻推：刘海溢出导致的卡隐藏无法经 isVisible 探测（实测返回 true）。
     private func nudge() {
-        guard let item = statusItem else { return }
+        // 面板锚在按钮上，开着的时候不重排，避免面板被带走
+        guard let item = statusItem, !panelShown else { return }
         item.isVisible = false
         item.isVisible = true
     }
@@ -451,7 +520,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 菜单 ----
 
     func languageDidChange() {
-        guard let menu = statusItem?.menu else { return }
+        guard let menu else { return }
         displayItem?.title = L10n.text("状态栏显示")
         for item in menu.items {
             switch item.action {
