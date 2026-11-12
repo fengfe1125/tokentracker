@@ -24,6 +24,8 @@ final class InsightsModel: NSObject, ObservableObject {
     @Published var breakdown: [UsageBreakdown] = []
     @Published var query = UsageQuery.period("week")
     @Published var search = ""
+    /// 项目标签里选了自定义日期：时间不跟全局范围走，直到清除
+    @Published var customRange = false
     @Published var busy = false
     @Published var analyticsLoading = false
     private var analyticsScope = ""

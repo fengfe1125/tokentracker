@@ -13,7 +13,6 @@ import TokenTrackerCore
 struct SessionsView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
-    let toolFilter: String?
 
     @State private var sortOrder = [KeyPathComparator(\SessionRowModel.sortTs, order: .reverse)]
     /// nil = 本视图还没发过查询（首次 .task 只记账不重查，避免和 RootView 的刷新撞车）
@@ -22,7 +21,7 @@ struct SessionsView: View {
     private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
 
     private var title: String {
-        toolFilter.map { L10n.text("\(toolDisplayName($0)) 的会话") } ?? L10n.text("会话记录")
+        state.agentFilter.map { L10n.text("\(toolDisplayName($0)) 的会话") } ?? L10n.text("会话记录")
     }
 
     private var subtitle: String {

@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         bar.onOpenAccounts = { [weak self] in
             self?.showMainPanel()
-            self?.appState.selection = .subscriptions
+            self?.appState.selection = .accounts
         }
         bar.install()
         statusItem = bar
@@ -98,11 +98,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appState.selection = .activity
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
         }
-        appState.insights.onInspect = { [weak self] in self?.appState.selection = .projects; self?.showMainPanel() }
+        appState.insights.onInspect = { [weak self] in self?.appState.selection = .usage; self?.appState.usageTab = .projects; self?.showMainPanel() }
         appState.insights.onSession = { [weak self] tool,session in self?.appState.showInsightSession(tool:tool,sessionID:session) }
         appState.insights.onNavigate = { [weak self] project in
             self?.appState.insights.query.projectID = project
-            self?.appState.selection = .projects
+            self?.appState.selection = .usage
+            self?.appState.usageTab = .projects
             self?.showMainPanel()
         }
         appState.start()

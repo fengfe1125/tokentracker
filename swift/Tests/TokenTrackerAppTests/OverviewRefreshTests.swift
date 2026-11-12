@@ -90,4 +90,63 @@ final class OverviewRefreshTests: XCTestCase {
             XCTAssertLessThan(size.height, 760)
         }
     }
+
+    func testAgentFilterScopesStatisticsSessionsInsightsAndActivityTogether() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keys = ["TT_UI_PREVIEW", "TOKENTRACKER_SETTINGS", "TOKENTRACKER_PRICES"]
+        let previous = keys.map { ProcessInfo.processInfo.environment[$0] }
+        setenv(keys[0], "1", 1)
+        setenv(keys[1], directory.appendingPathComponent("settings.json").path, 1)
+        setenv(keys[2], directory.appendingPathComponent("prices.json").path, 1)
+        let state = AppState(dbPath: directory.appendingPathComponent("usage.db").path)
+        for (key, value) in zip(keys, previous) {
+            if let value { setenv(key, value, 1) } else { unsetenv(key) }
+        }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try state.readStore.putEvent(tool: "codex", srcKey: "a", sessionID: "s-codex", ts: now, input: 10)
+        try state.readStore.putEvent(tool: "dsh", srcKey: "b", sessionID: "s-dsh", ts: now, input: 20)
+
+        let filtered = expectation(description: "Only the selected agent is counted")
+        var subscription = state.$updatedAt.dropFirst().sink { _ in
+            if state.statTotal.tokens == 20 { filtered.fulfill() }
+        }
+        state.agentFilter = "dsh"
+        // 同一次赋值同步到项目查询和活动页，不需要各页再选一遍
+        XCTAssertEqual(state.insights.query.tool, "dsh")
+        XCTAssertEqual(state.activityPage.agent, "dsh")
+        await fulfillment(of: [filtered], timeout: 3)
+        subscription.cancel()
+        XCTAssertEqual(state.sessionRows.map(\.sessionID), ["s-dsh"])
+        XCTAssertEqual(state.dailyRows.map(\.tool), ["dsh"])
+        // 菜单栏的今日量不受筛选影响
+        XCTAssertEqual(state.today?.tokens, 30)
+        XCTAssertEqual(state.todayHours.reduce(0, +), 30)
+
+        let cleared = expectation(description: "Clearing the filter restores every agent")
+        subscription = state.$updatedAt.dropFirst().sink { _ in
+            if state.statTotal.tokens == 30 { cleared.fulfill() }
+        }
+        state.agentFilter = nil
+        await fulfillment(of: [cleared], timeout: 3)
+        subscription.cancel()
+        XCTAssertNil(state.insights.query.tool)
+        XCTAssertNil(state.activityPage.agent)
+
+        // 自定义日期只覆盖时间，Agent 仍跟全局范围走；回到概览后失效
+        state.selection = .usage
+        state.insights.query.start = 1
+        state.insights.query.end = 2
+        state.insights.customRange = true
+        state.range = "month"
+        XCTAssertEqual(state.insights.query.start, 1)
+        state.agentFilter = "codex"
+        XCTAssertEqual(state.insights.query.tool, "codex")
+        XCTAssertEqual(state.insights.query.end, 2)
+        state.selection = .overview
+        state.refreshVisibleData()
+        XCTAssertFalse(state.insights.customRange)
+        XCTAssertEqual(state.insights.query.start, UsageQuery.period("month").start)
+    }
 }

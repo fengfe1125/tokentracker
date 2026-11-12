@@ -57,16 +57,7 @@ struct OverviewView: View {
         .navigationTitle(L10n.text("用量概览"))
         .navigationSubtitle(updatedText ?? "")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Picker(L10n.text("时间范围"), selection: $state.range) {
-                    Text(L10n.text("今天")).tag("day")
-                    Text(L10n.text("近 7 天")).tag("week")
-                    Text(L10n.text("本月")).tag("month")
-                    Text(L10n.text("全部")).tag("all")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
+            ScopeToolbar(state: state)
             ToolbarItem(placement: .primaryAction) {
                 // 点按立即扫描，展开选择自动刷新间隔
                 Menu {
@@ -277,8 +268,9 @@ struct OverviewView: View {
                         Text(toolDisplayName(row.tool)).font(.callout).lineLimit(1)
                     }
                     .contentShape(Rectangle())
-                    .onTapGesture { state.selection = .tool(row.tool) }
-                    .help(L10n.text("查看 \(toolDisplayName(row.tool)) 的会话"))
+                    .onTapGesture { state.agentFilter = state.agentFilter == row.tool ? nil : row.tool }
+                    .help(state.agentFilter == row.tool ? L10n.text("显示全部 Agent")
+                          : L10n.text("只看 \(toolDisplayName(row.tool))"))
                 }
             }
         }

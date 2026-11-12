@@ -3,36 +3,33 @@ import Foundation
 import TokenTrackerCore
 
 enum SidebarNavigationItem: String, CaseIterable, Identifiable {
-    case overview, projects, reports, subscriptions, sessions, activity
+    case overview, usage, activity, reports, accounts
     var id: String { rawValue }
     var selection: NavSelection {
         switch self {
         case .overview: .overview
-        case .projects: .projects
-        case .reports: .reports
-        case .subscriptions: .subscriptions
-        case .sessions: .sessions
+        case .usage: .usage
         case .activity: .activity
+        case .reports: .reports
+        case .accounts: .accounts
         }
     }
     var title: String {
         switch self {
         case .overview: L10n.text("概览")
-        case .projects: L10n.text("项目")
+        case .usage: L10n.text("用量")
+        case .activity: L10n.text("活动")
         case .reports: L10n.text("报告")
-        case .subscriptions: L10n.text("订阅配额与余额")
-        case .sessions: L10n.text("会话记录")
-        case .activity: L10n.text("Agent 活动")
+        case .accounts: L10n.text("账号")
         }
     }
     var symbol: String {
         switch self {
         case .overview: "chart.bar.fill"
-        case .projects: "folder"
-        case .reports: "doc.text"
-        case .subscriptions: "creditcard"
-        case .sessions: "list.bullet.rectangle"
+        case .usage: "list.bullet.rectangle"
         case .activity: "point.3.connected.trianglepath.dotted"
+        case .reports: "doc.text"
+        case .accounts: "creditcard"
         }
     }
 }
@@ -51,7 +48,9 @@ struct SidebarLayout: Codable, Equatable {
             var seen: Set<String> = []
             return (saved + defaults).filter { defaults.contains($0) && seen.insert($0).inserted }
         }
-        result.navigation = complete(navigation, defaults: Self().navigation)
+        // v0.5.9 及更早保存的入口：项目 / 会话并入「用量」，订阅并入「账号」，位置沿用原来的
+        let merged = ["projects": "usage", "sessions": "usage", "subscriptions": "accounts"]
+        result.navigation = complete(navigation.map { merged[$0] ?? $0 }, defaults: Self().navigation)
         result.agents = complete(agents, defaults: Self().agents)
         result.hiddenNavigation.formIntersection(result.navigation)
         result.hiddenAgents.formIntersection(result.agents)

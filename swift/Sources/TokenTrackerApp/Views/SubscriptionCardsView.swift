@@ -34,7 +34,7 @@ struct SubscriptionSection: View {
                 ContentUnavailableView {
                     Label(L10n.text("未发现本机订阅账号"), systemImage: "creditcard")
                 } description: {
-                    Text(L10n.text("在设置的「账号」里登录或添加 API Key 后，这里会显示官方配额与余额。"))
+                    Text(L10n.text("在下方登录或添加 API Key 后，这里会显示官方配额与余额。"))
                 } actions: {
                     if let openAccountSettings {
                         Button(L10n.text("前往设置")) { openAccountSettings() }

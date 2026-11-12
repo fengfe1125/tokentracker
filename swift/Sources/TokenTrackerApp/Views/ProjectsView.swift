@@ -65,8 +65,10 @@ struct TotalsView: View {
 struct ProjectsView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model: InsightsModel
+    /// 清除自定义日期后，让全局范围重新接管
+    var resetRange: () -> Void = {}
     @Environment(\.unitYi) private var yi
-    @State private var range = "week"
+    @State private var showCustom = false
     @State private var from = Calendar.current.startOfDay(for: Date())
     @State private var to = Date()
     @State private var rename = ""
@@ -117,6 +119,7 @@ struct ProjectsView: View {
                 .help(L10n.text("导出当前筛选的数据"))
                 Menu {
                     Button(L10n.text("项目管理")) { showCreate = true }
+                    Button(L10n.text("自定义日期范围…")) { showCustom = true }
                     if selected != nil {
                         Divider()
                         Button(L10n.text("重命名…")) { showRename = true }
@@ -137,7 +140,6 @@ struct ProjectsView: View {
                 selected = nil
             }
         }
-        .onChange(of: range) { _, _ in applyRange() }
         .task(id: model.search) {
             try? await Task.sleep(for: .milliseconds(250))
             if !Task.isCancelled { model.refresh() }
@@ -170,58 +172,56 @@ struct ProjectsView: View {
         model.refresh()
     }
 
-    private func applyRange() {
-        var query = UsageQuery.period(range)
-        if range == "custom" {
-            let calendar = Calendar.current
-            query.start = Int64(calendar.startOfDay(for: from).timeIntervalSince1970 * 1000)
-            query.end = Int64(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to))!
-                .timeIntervalSince1970 * 1000)
-        }
-        query.projectID = model.query.projectID
-        query.tool = model.query.tool
-        query.model = model.query.model
-        model.query = query
+    private func applyCustomRange() {
+        let calendar = Calendar.current
+        model.query.start = Int64(calendar.startOfDay(for: from).timeIntervalSince1970 * 1000)
+        model.query.end = Int64(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to))!
+            .timeIntervalSince1970 * 1000)
+        model.customRange = true
         model.refresh()
+    }
+
+    private func clearCustomRange() {
+        showCustom = false
+        model.customRange = false
+        resetRange()
     }
 
     // ------------------------------------------------------------ 筛选 ----
 
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Picker(L10n.text("范围"), selection: $range) {
-                    Text(L10n.text("今天")).tag("day")
-                    Text(L10n.text("近 7 天")).tag("week")
-                    Text(L10n.text("本月")).tag("month")
-                    Text(L10n.text("全部")).tag("all")
-                    Text(L10n.text("自定义")).tag("custom")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                if model.busy { ProgressView().controlSize(.small) }
-                Spacer(minLength: 8)
+            HStack(spacing: 8) {
+                Image(systemName: "calendar").foregroundStyle(.secondary)
                 Text(usageIntervalLabel(model.query))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if model.customRange {
+                    Button(L10n.text("恢复全局范围")) { clearCustomRange() }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+                if model.busy { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
             }
-            if range == "custom" {
+            if showCustom || model.customRange {
                 HStack(spacing: 12) {
                     DatePicker(L10n.text("开始"), selection: $from, displayedComponents: .date)
                     DatePicker(L10n.text("结束（包含当天）"), selection: $to, displayedComponents: .date)
-                    Button(L10n.text("应用")) { applyRange() }.disabled(from > to)
+                    Button(L10n.text("应用")) { applyCustomRange() }.disabled(from > to)
+                    if !model.customRange {
+                        Button(L10n.text("取消")) { showCustom = false }
+                    }
                 }
                 .fixedSize()
             }
-            if model.query.tool != nil || model.query.model != nil {
+            if model.query.model != nil {
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal.decrease.circle")
-                    Text(L10n.text("筛选：") + (model.query.tool.map(toolDisplayName) ?? model.query.model ?? ""))
+                    Text(L10n.text("筛选：") + (model.query.model ?? ""))
                     Button(L10n.text("清除筛选")) {
-                        model.query.tool = nil
                         model.query.model = nil
                         model.refresh()
                     }

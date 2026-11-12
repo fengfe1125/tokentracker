@@ -787,3 +787,14 @@
 "还有 {0} 个账号" = "{0} more accounts";
 "{0} 个账号未能读取额度" = "{0} accounts with unavailable quota";
 "更多" = "More";
+"用量" = "Usage";
+"勾选要显示的项目，拖动右侧手柄调整顺序。Agent 的顺序用于筛选菜单和菜单栏面板；隐藏 Agent 不影响用量扫描。" = "Check the items to show and drag the handle to reorder. The agent order is used by the filter menu and the menu bar panel; hiding an agent does not affect scanning.";
+"尚未扫描" = "Not scanned yet";
+"在下方登录或添加 API Key 后，这里会显示官方配额与余额。" = "Sign in or add an API key below to see official quotas and balances here.";
+"查看用到这个模型的项目" = "Show projects that used this model";
+"{0} 个模型" = "{0} models";
+"自定义日期范围…" = "Custom Date Range…";
+"恢复全局范围" = "Use global range";
+"显示全部 Agent" = "Show all agents";
+"只看 {0}" = "Show only {0}";
+"只看某个 Agent 的用量" = "Show usage for one agent";

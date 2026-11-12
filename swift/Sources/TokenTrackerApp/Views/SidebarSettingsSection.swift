@@ -8,10 +8,10 @@ struct SidebarSettingsSection: View {
 
     var body: some View {
         Section(L10n.text("侧栏")) {
-            Text(L10n.text("勾选要显示的项目，拖动右侧手柄调整顺序。隐藏 Agent 不影响用量扫描；设置入口始终保留。"))
+            Text(L10n.text("勾选要显示的项目，拖动右侧手柄调整顺序。Agent 的顺序用于筛选菜单和菜单栏面板；隐藏 Agent 不影响用量扫描。"))
                 .font(.caption).foregroundStyle(.secondary)
             DisclosureGroup(L10n.text("导航项"), isExpanded: $navigationExpanded) { rows(.navigation) }
-            DisclosureGroup(L10n.text("Agent 数据源"), isExpanded: $agentsExpanded) { rows(.agents) }
+            DisclosureGroup("Agent", isExpanded: $agentsExpanded) { rows(.agents) }
             Button(L10n.text("恢复默认侧栏")) { sidebar.reset() }
         }
     }

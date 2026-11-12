@@ -4,8 +4,7 @@
 //
 //  设置：与 ~/.tokentracker/settings.json 双向同步（SettingsStore 白名单
 //  校验写入），状态栏 5s 内热生效。开机启动走 SMAppService。
-//  另含 Codex 多账号管理区（仅 Codex 已检测时显示）：保存当前登录、一键切换、
-//  重命名 / 删除。凭据快照仅存本机 ~/.tokentracker/codex_accounts.json（0600）。
+//  账号管理在「账号」页（AccountsView）。
 //
 
 import AppKit
@@ -15,14 +14,13 @@ import TokenTrackerCore
 
 /// 设置分类；rawValue 同时是持久化键（其他页面可据此直接跳到某一类）。
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, interface, accounts, reminders, data
+    case general, interface, reminders, data
     static let storageKey = "tt.settings.tab"
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: L10n.text("通用")
         case .interface: L10n.text("界面")
-        case .accounts: L10n.text("账号")
         case .reminders: L10n.text("提醒")
         case .data: L10n.text("数据")
         }
@@ -35,10 +33,6 @@ struct SettingsPanelView: View {
     @ObservedObject private var notch = NotchHUDPreferences.shared
     @ObservedObject var state: AppState
     @StateObject private var updater = UpdaterModel()
-    @State private var showCaptureSheet = false
-    @State private var captureName = ""
-    @State private var renameTarget: CodexAccount?
-    @State private var renameName = ""
     @State private var publishEndpoint = ""
     @State private var publishHandle = ""
     @State private var publishDays = 365
@@ -147,11 +141,6 @@ struct SettingsPanelView: View {
                         .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
                     }
                 }
-            case .accounts:
-                SubscriptionAccountsSection(state: state)
-                if state.detectInfo["codex"]?.installed == true {
-                    codexAccountSection
-                }
             case .reminders:
                 TaskReminderSettings()
             case .data:
@@ -205,24 +194,6 @@ struct SettingsPanelView: View {
         .onAppear {
             loadPublishDrafts()
             state.refreshPublishInfo()
-        }
-        .alert(L10n.text("保存当前登录账号"), isPresented: $showCaptureSheet) {
-            TextField(L10n.text("备注名（留空则用邮箱）"), text: $captureName)
-            Button(L10n.text("保存")) {
-                state.captureCurrentCodexAccount(name: captureName)
-                captureName = ""
-            }
-            Button(L10n.text("取消"), role: .cancel) { captureName = "" }
-        } message: {
-            Text(L10n.text("把当前 Codex 登录的凭据快照存到本机，之后可一键切回。"))
-        }
-        .alert(L10n.text("重命名账号"), isPresented: renamePresented, presenting: renameTarget) { account in
-            TextField(L10n.text("备注名"), text: $renameName)
-            Button(L10n.text("确定")) {
-                state.renameCodexAccount(id: account.id, name: renameName)
-                renameTarget = nil
-            }
-            Button(L10n.text("取消"), role: .cancel) { renameTarget = nil }
         }
         .alert(L10n.text("确认强制上传？"), isPresented: $showForceConfirmation) {
             Button(L10n.text("强制上传"), role: .destructive) {
@@ -350,83 +321,6 @@ struct SettingsPanelView: View {
         publishEndpoint = state.settings["publish_endpoint"] as? String ?? ""
         publishHandle = state.settings["publish_handle"] as? String ?? ""
         publishDays = (state.settings["publish_days"] as? NSNumber)?.intValue ?? 365
-    }
-
-    // ---------------------------------------------------- Codex 账号 ----
-
-    @ViewBuilder
-    private var codexAccountSection: some View {
-        Section(L10n.text("Codex 账号")) {
-            Button(L10n.text("保存当前登录账号…")) {
-                captureName = ""
-                showCaptureSheet = true
-            }
-            if state.codexAccounts.isEmpty {
-                Text(L10n.text("还没有保存的账号。先在 Codex 登录，再点上面的按钮把当前登录存进来。"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(state.codexAccounts) { account in
-                    codexAccountRow(account)
-                }
-            }
-            if let message = state.accountOpMessage {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-            }
-            Text(L10n.text("切换后请重启 Codex 生效；账号之间切换不会丢会话。凭据快照仅存本机，不上传。"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func codexAccountRow(_ account: CodexAccount) -> some View {
-        let isActive = state.activeCodexAccountID == account.id
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(account.name)
-                    if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .help(L10n.text("当前生效"))
-                    }
-                }
-                if let subtitle = codexAccountSubtitle(account) {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if !isActive {
-                Button(L10n.text("切换")) { state.switchCodexAccount(id: account.id) }
-            }
-            Menu {
-                Button(L10n.text("重命名…")) {
-                    renameName = account.name
-                    renameTarget = account
-                }
-                Button(L10n.text("删除"), role: .destructive) {
-                    state.removeCodexAccount(id: account.id)
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .menuIndicator(.hidden)
-            .fixedSize()
-        }
-    }
-
-    private func codexAccountSubtitle(_ account: CodexAccount) -> String? {
-        var parts: [String] = []
-        if let email = account.email, !email.isEmpty { parts.append(email) }
-        if let plan = account.plan, !plan.isEmpty { parts.append(plan) }
-        parts.append("id …\(account.id.suffix(6))")
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private var renamePresented: Binding<Bool> {
-        Binding(get: { renameTarget != nil },
-                set: { if !$0 { renameTarget = nil } })
     }
 
     // ------------------------------------------------------------ 更新 ----

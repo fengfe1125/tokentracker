@@ -14,8 +14,13 @@ import TokenTrackerCore
 
 /// 侧边栏导航
 enum NavSelection: Hashable {
-    case overview, sessions, activity, settings, projects, reports, subscriptions
-    case tool(String)
+    case overview, usage, activity, reports, accounts, settings
+}
+
+/// 「用量」页的三个标签
+enum UsageTab: String, CaseIterable, Identifiable {
+    case projects, sessions, models
+    var id: String { rawValue }
 }
 
 @MainActor
@@ -34,9 +39,20 @@ final class AppState: ObservableObject {
 
     // 主面板数据
     @Published var selection: NavSelection = .overview
+    @Published var usageTab = UsageTab.projects
+    // 全局范围：时间 + Agent。概览、用量、活动共用，切页保留。
     @Published var range = "week" {
         didSet {
             guard range != oldValue else { return }
+            persistScope()
+            refreshVisibleData()
+        }
+    }
+    /// nil = 全部 Agent
+    @Published var agentFilter: String? {
+        didSet {
+            guard agentFilter != oldValue else { return }
+            persistScope()
             refreshVisibleData()
         }
     }
@@ -186,6 +202,44 @@ final class AppState: ObservableObject {
         let handle = settings["publish_handle"] as? String ?? ""
         publishTokenConfigured = !preview && tokenStore.read(handle: handle) != nil
         reloadCodexAccounts()
+        // 预览与测试不读写真实偏好
+        if !preview {
+            let defaults = UserDefaults.standard
+            if let saved = defaults.string(forKey: Self.scopeRangeKey),
+               ["day", "week", "month", "all"].contains(saved) { range = saved }
+            if let saved = defaults.string(forKey: Self.scopeAgentKey),
+               ScannerRegistry.all.contains(saved) { agentFilter = saved }
+        }
+    }
+
+    private static let scopeRangeKey = "tt.scope.range"
+    private static let scopeAgentKey = "tt.scope.agent"
+
+    private func persistScope() {
+        guard !isPreview else { return }
+        UserDefaults.standard.set(range, forKey: Self.scopeRangeKey)
+        UserDefaults.standard.set(agentFilter, forKey: Self.scopeAgentKey)
+    }
+
+    /// 把全局范围同步到洞察查询与活动页。概览总是看全部项目；
+    /// 用量页保留已选的项目 / 模型，自定义日期范围只覆盖时间。
+    private func applyScope() {
+        if activityPage.range != range { activityPage.range = range }
+        if activityPage.agent != agentFilter { activityPage.agent = agentFilter }
+        var query = UsageQuery.period(range)
+        query.tool = agentFilter
+        if selection == .overview {
+            insights.customRange = false
+            insights.search = ""
+        } else {
+            query.projectID = insights.query.projectID
+            query.model = insights.query.model
+            if insights.customRange {
+                query.start = insights.query.start
+                query.end = insights.query.end
+            }
+        }
+        if insights.query != query { insights.query = query }
     }
 
     /// 启动调度：启动扫一次 + 每 60s 增量（写库用独立连接）。
@@ -474,7 +528,7 @@ final class AppState: ObservableObject {
     // ------------------------------------------------------------ 数据 ----
 
     func refreshVisibleData() {
-        if selection == .overview { insights.query = UsageQuery.period(range); insights.search = "" }
+        applyScope()
         insights.refresh()
         refreshData()
         if selection == .activity { refreshActivity() }
@@ -496,10 +550,7 @@ final class AppState: ObservableObject {
         let search = sessionSearch
         let pricePath = priceCatalogPath
         let roots = scanRoots
-        let toolFilter: String? = {
-            if case .tool(let id) = selection { return id }
-            return nil
-        }()
+        let toolFilter = agentFilter
         queryQueue.async { [weak self] in
             guard let self else { return }
             do {
@@ -507,21 +558,23 @@ final class AppState: ObservableObject {
                 let store = try UsageStore(path: path)
                 try store.conn.execute("BEGIN")
                 defer { try? store.conn.rollback() }
-                let (rows, total, summary) = try store.stats(rangeKey: range)
+                let (rows, total, summary) = try store.stats(rangeKey: range, tool: toolFilter)
                 try cancellation.check()
-                let daily = try store.daily(rangeKey: range)
+                let allDaily = try store.daily(rangeKey: range)
+                let daily = toolFilter.map { tool in allDaily.filter { $0.tool == tool } } ?? allDaily
                 try cancellation.check()
-                let models = try store.models(rangeKey: range)
+                let models = try store.models(rangeKey: range, tool: toolFilter)
                 let sessions = try store.sessions(rangeKey: range, tool: toolFilter,
                                                   limit: Self.sessionLimit,
                                                   query: search.isEmpty ? nil : search)
                 let dayStats = try store.stats(rangeKey: "day")
-                let dayHours = Self.hourBuckets(range == "day" ? daily : try store.daily(rangeKey: "day"))
+                let dayHours = Self.hourBuckets(range == "day" ? allDaily : try store.daily(rangeKey: "day"))
                 let recent = try store.sessions(rangeKey: "day", limit: 3)
                 let detect = ScanRunner(store: store, prices: PriceTable.load(from: pricePath),
                                         roots: roots).detectAll()
                 DispatchQueue.main.async {
-                    guard generation == self.dataGeneration, range == self.range else { return }
+                    guard generation == self.dataGeneration, range == self.range,
+                          toolFilter == self.agentFilter else { return }
                     let newTokens = dayStats.total.tokens
                     if let prev = self.today?.tokens, prev != newTokens {
                         self.onTokensChanged?()   // 数值刷新闪光
@@ -725,7 +778,7 @@ final class AppState: ObservableObject {
         sessionsGeneration += 1
         let generation = sessionsGeneration
         let path = readStore.path, range = range, search = sessionSearch
-        let tool: String? = { if case .tool(let id) = selection { return id }; return nil }()
+        let tool = agentFilter
         detailQueue.async { [weak self] in
             do {
                 let rows = try UsageStore(path: path).sessions(rangeKey: range, tool: tool,
@@ -857,6 +910,7 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if !self.sessionRows.contains(where:{$0.tool==tool && $0.sessionID==sessionID}) { self.sessionRows.insert(row,at:0) }
+                self.selection = .usage;self.usageTab = .sessions
                 self.selectedSessionID=SessionRowModel(row:row).id
                 self.showSessionDetail()
             }

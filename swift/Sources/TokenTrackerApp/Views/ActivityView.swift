@@ -94,22 +94,6 @@ struct ActivityView: View, @MainActor Equatable {
 
     private var filters: some View {
         HStack(spacing: 8) {
-            Picker(L10n.text("范围"), selection: $state.range) {
-                Text(L10n.text("今天")).tag("day")
-                Text(L10n.text("最近 7 天")).tag("week")
-                Text(L10n.text("本月")).tag("month")
-                Text(L10n.text("全部")).tag("all")
-            }
-            .labelsHidden()
-            .frame(width: 96)
-            Picker("Agent", selection: $state.agent) {
-                Text(L10n.text("全部 Agent")).tag(String?.none)
-                ForEach(ScannerRegistry.all, id: \.self) { agent in
-                    Text(toolDisplayName(agent)).tag(Optional(agent))
-                }
-            }
-            .labelsHidden()
-            .frame(width: 118)
             Picker(L10n.text("证据"), selection: $state.confidence) {
                 Text(L10n.text("包含推断")).tag("all")
                 Text(L10n.text("只看已确认")).tag("exact")
