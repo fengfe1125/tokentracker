@@ -149,4 +149,57 @@ final class OverviewRefreshTests: XCTestCase {
         XCTAssertFalse(state.insights.customRange)
         XCTAssertEqual(state.insights.query.start, UsageQuery.period("month").start)
     }
+
+    func testSessionDrillDownNeedsSelectionStepsThroughListAndClosesOnNavigation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keys = ["TT_UI_PREVIEW", "TOKENTRACKER_SETTINGS", "TOKENTRACKER_PRICES"]
+        let previous = keys.map { ProcessInfo.processInfo.environment[$0] }
+        setenv(keys[0], "1", 1)
+        setenv(keys[1], directory.appendingPathComponent("settings.json").path, 1)
+        setenv(keys[2], directory.appendingPathComponent("prices.json").path, 1)
+        let state = AppState(dbPath: directory.appendingPathComponent("usage.db").path)
+        for (key, value) in zip(keys, previous) {
+            if let value { setenv(key, value, 1) } else { unsetenv(key) }
+        }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        for (index, session) in ["newest", "middle", "oldest"].enumerated() {
+            try state.readStore.putEvent(tool: "codex", srcKey: session, sessionID: session,
+                                         ts: now - Int64(index) * 60_000, input: 10)
+        }
+        let loaded = expectation(description: "Sessions loaded")
+        let subscription = state.$updatedAt.dropFirst().sink { _ in
+            if state.sessionRows.count == 3 { loaded.fulfill() }
+        }
+        state.selection = .usage
+        state.refreshVisibleData()
+        await fulfillment(of: [loaded], timeout: 3)
+        subscription.cancel()
+
+        // 没有选中会话时不进入详情
+        state.showSessionDetail()
+        XCTAssertNil(state.detail)
+
+        state.selectedSessionID = "codex|middle"
+        state.showSessionDetail()
+        XCTAssertEqual(state.detail, .session)
+        XCTAssertTrue(state.canStepSession(by: -1))
+        state.stepSession(by: -1)
+        XCTAssertEqual(state.selectedSessionID, "codex|newest")
+        XCTAssertFalse(state.canStepSession(by: -1))
+        state.stepSession(by: -1)                       // 到头不越界
+        XCTAssertEqual(state.selectedSessionID, "codex|newest")
+        state.stepSession(by: 2)
+        XCTAssertEqual(state.selectedSessionID, "codex|oldest")
+        XCTAssertFalse(state.canStepSession(by: 1))
+
+        // 切到别的入口时离开详情；显式返回同理
+        state.selection = .reports
+        XCTAssertNil(state.detail)
+        state.showActivityDetail()
+        XCTAssertEqual(state.detail, .activity)
+        state.closeDetail()
+        XCTAssertNil(state.detail)
+    }
 }

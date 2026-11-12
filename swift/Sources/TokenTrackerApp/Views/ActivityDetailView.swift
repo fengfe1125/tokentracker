@@ -1,7 +1,7 @@
 import SwiftUI
 import TokenTrackerCore
 
-/// Agent Activity 的完整浏览器：独立窗口、稳定游标分页、只读规范化元数据。
+/// Agent Activity 的完整浏览器：从活动页下钻进入，稳定游标分页、只读规范化元数据。
 @MainActor
 struct ActivityDetailView: View {
     @ObservedObject private var language = LanguageManager.shared
@@ -47,9 +47,12 @@ struct ActivityDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: L10n.text("Agent 活动详情"), subtitle: L10n.text("完整分页 · metadata-only · 不保存 Prompt、参数、输出或主机路径")) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 filters
+                    .padding(.horizontal, Metrics.pagePadding)
+                    .padding(.vertical, 10)
             }
+            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     skillOverview
@@ -58,7 +61,8 @@ struct ActivityDetailView: View {
                 .padding(18)
             }
         }
-        .frame(minWidth: 900, minHeight: 620)
+        .pageChrome(title: L10n.text("Agent 活动详情"),
+                    subtitle: L10n.text("完整分页 · metadata-only · 不保存 Prompt、参数、输出或主机路径"))
         .task(id: reloadKey) {
             await reload()
         }

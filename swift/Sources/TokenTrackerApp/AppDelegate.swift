@@ -16,9 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchHUD: NotchHUDController?
     private var taskWindows: TaskReminderWindowController?
     private var mainWindow: MainWindowController?
-    private var detailWindow: SessionDetailWindowController?
-    private var activityDetailWindow: ActivityDetailWindowController?
-    private var publishHistoryWindow: PublishHistoryWindowController?
     private var tickTimer: Timer?
     private var wasScanning = false
     private var languageObserver: NSObjectProtocol?
@@ -80,15 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dbg("statusItem installed")
 
         mainWindow = MainWindowController(appState: appState)
-        let detail = SessionDetailWindowController(appState: appState)
-        appState.onSessionDetail = { explicit in explicit ? detail.show() : detail.autoShow() }
-        detailWindow = detail
-        let activityDetail = ActivityDetailWindowController(appState: appState)
-        appState.onActivityDetail = { activityDetail.show() }
-        activityDetailWindow = activityDetail
-        let history = PublishHistoryWindowController(appState: appState)
-        appState.onPublishHistory = { history.show() }
-        publishHistoryWindow = history
         // 预览验收：自动弹出菜单栏速览面板（状态栏图标不在应用窗口里，无法从外部点到）
         if ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1",
            ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_PANEL"] == "1" {
@@ -128,12 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem?.languageDidChange()
                 self?.installFileMenu()
                 self?.localizeStandardMenus()
-                for window in NSApp.windows {
-                    if let key = window.identifier?.rawValue,
-                       ["会话详情", "Agent 活动详情", "上传记录", "数据健康"].contains(key) {
-                        window.title = L10n.label(key)
-                    }
-                }
             }
         }
         windowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in

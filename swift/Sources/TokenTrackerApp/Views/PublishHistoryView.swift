@@ -10,6 +10,7 @@ struct PublishHistoryView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
     @State private var confirmClear = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,8 @@ struct PublishHistoryView: View {
                     Label(L10n.text("清空"), systemImage: "trash")
                 }
                 .disabled(state.publishHistory.isEmpty)
+                Button(L10n.text("关闭")) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(16)
 

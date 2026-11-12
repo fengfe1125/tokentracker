@@ -116,9 +116,10 @@ struct HealthView: View {
     let tool:String?
     let rescan:()->Void
     @State private var export=false
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
-            HStack { Text(L10n.text("数据健康")).font(.title2.bold());Spacer();Button(L10n.text("重新扫描"),action:rescan);Button(L10n.text("脱敏诊断导出")) { export=true } }
+            HStack { Text(L10n.text("数据健康")).font(.title2.bold());Spacer();Button(L10n.text("重新扫描"),action:rescan);Button(L10n.text("脱敏诊断导出")) { export=true };Button(L10n.text("关闭")) { dismiss() }.keyboardShortcut(.cancelAction) }
             Text(L10n.text("未采集的指标显示未知；没有新增用量本身不是异常。")).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment:.leading,spacing:14) {
@@ -136,7 +137,7 @@ struct HealthView: View {
                     TotalsView(totals:model.totals)
                 }
             }
-        }.padding(20).frame(minWidth:600,minHeight:400).sheet(isPresented:$export) { ExportSheet(model:model,diagnostics:true) }
+        }.padding(20).frame(width:680,height:520).sheet(isPresented:$export) { ExportSheet(model:model,diagnostics:true) }
     }
 }
 

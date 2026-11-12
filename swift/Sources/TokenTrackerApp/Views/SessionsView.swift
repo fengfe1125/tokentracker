@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  会话记录：工具栏搜索 + 可排序表。
-//  详情走独立浮动面板（SessionDetailWindowController），不再挤占表格宽度。
+//  单击选中；双击、回车、⌘I 或右键「查看详情」在主窗口里下钻到会话详情。
 //
 
 import AppKit
@@ -48,7 +48,6 @@ struct SessionsView: View {
             lastQueriedSearch = state.sessionSearch
             state.refreshSessions()
         }
-        .onChange(of: state.selectedSessionID) { _, _ in state.autoShowSessionDetail() }
         // ⌘I 打开详情面板（对齐「显示简介」的习惯用法）
         .background {
             Button("") { state.showSessionDetail() }

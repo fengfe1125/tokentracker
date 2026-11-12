@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  会话详情：分区卡片（会话信息 / 继续会话 / 按模型分解 / 观察区间）。
-//  住在独立的浮动面板里（SessionDetailWindowController），不再是挤占
+//  从会话表下钻进入的页面（原先是独立浮动面板），不再是挤占
 //  表格宽度的 inspector —— 那样一展开列表就被压得看不全。
 //
 
@@ -27,16 +27,48 @@ struct SessionDetailView: View {
     var body: some View {
         Group {
             if let session {
-                VStack {
-                    Picker(L10n.text("详情"),selection:$tab) { Text(L10n.text("概览")).tag("overview");Text(L10n.text("执行时间线")).tag("timeline") }.pickerStyle(.segmented).padding()
-                    if tab == "timeline" { SessionTimelineView(state:state,tool:session.tool,sessionID:session.sessionID) } else { content(session) }
+                Group {
+                    if tab == "timeline" {
+                        SessionTimelineView(state: state, tool: session.tool, sessionID: session.sessionID)
+                            .padding(Metrics.pagePadding)
+                    } else {
+                        content(session)
+                    }
                 }
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             } else {
                 ContentUnavailableView(L10n.text("未选中会话"), systemImage: "sidebar.right",
                                        description: Text(L10n.text("在会话记录里点一行")))
             }
         }
-        .frame(minWidth: 320, minHeight: 260)
+        .navigationTitle(session?.title ?? L10n.text("会话详情"))
+        .navigationSubtitle(session.map { toolDisplayName($0.tool) + " · " + $0.projectShort } ?? "")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker(L10n.text("详情"), selection: $tab) {
+                    Text(L10n.text("概览")).tag("overview")
+                    Text(L10n.text("执行时间线")).tag("timeline")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                // 不用回到列表也能连续翻看
+                Button { state.stepSession(by: -1) } label: {
+                    Label(L10n.text("上一个会话"), systemImage: "chevron.up")
+                }
+                .disabled(!state.canStepSession(by: -1))
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .help(L10n.text("上一个会话"))
+                Button { state.stepSession(by: 1) } label: {
+                    Label(L10n.text("下一个会话"), systemImage: "chevron.down")
+                }
+                .disabled(!state.canStepSession(by: 1))
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .help(L10n.text("下一个会话"))
+            }
+        }
         .task(id: state.selectedSessionID) {
             detail = nil
             guard let session else { return }
@@ -216,9 +248,7 @@ private struct DetailCard<Content: View>: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.secondary.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 8))
+        .card(padding: 12)
     }
 }
 

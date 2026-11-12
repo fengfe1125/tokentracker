@@ -798,3 +798,6 @@
 "显示全部 Agent" = "Show all agents";
 "只看 {0}" = "Show only {0}";
 "只看某个 Agent 的用量" = "Show usage for one agent";
+"上一个会话" = "Previous Session";
+"下一个会话" = "Next Session";
+"返回" = "Back";

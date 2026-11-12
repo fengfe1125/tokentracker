@@ -48,7 +48,9 @@ final class InsightsModel: NSObject, ObservableObject {
     private let exportQueue=DispatchQueue(label:"tokentracker.exports",qos:.utility)
     private var generation=0
     private var cancellation: ExportCancellation?
-    private var healthWindow: NSWindow?
+    /// 数据健康面板的请求（RootView 以 sheet 呈现）
+    struct HealthRequest: Identifiable { let id=UUID();let tool:String?;let rescan:()->Void }
+    @Published var healthRequest: HealthRequest?
     private var pendingNotifications=Set<String>()
     init(path:String) {
         self.path=path
@@ -220,12 +222,7 @@ final class InsightsModel: NSObject, ObservableObject {
             }
     }
     func showHealth(tool:String? = nil, rescan:@escaping ()->Void) {
-        if healthWindow == nil {
-            let window=NSWindow(contentRect:NSRect(x:0,y:0,width:760,height:560),styleMask:[.titled,.closable,.resizable,.miniaturizable],backing:.buffered,defer:false)
-            window.identifier=NSUserInterfaceItemIdentifier("数据健康");window.title=L10n.text("数据健康");window.isReleasedWhenClosed=false;healthWindow=window;window.center()
-        }
-        healthWindow?.contentView=NSHostingView(rootView:HealthView(model:self,tool:tool,rescan:rescan).appLanguage())
-        healthWindow?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true);refresh()
+        healthRequest=HealthRequest(tool:tool,rescan:rescan);refresh()
     }
     func export(kind:ExportKind,format:ExportFormat,includePrivate:Bool,queryOverride:UsageQuery? = nil) {
         let effectiveQuery=queryOverride ?? query

@@ -17,6 +17,14 @@ enum NavSelection: Hashable {
     case overview, usage, activity, reports, accounts, settings
 }
 
+/// 主窗口里的下钻页（代替原来的独立详情窗口）
+enum DetailRoute: Equatable {
+    /// 当前选中的会话（selectedSessionID）
+    case session
+    /// Agent 活动的完整分页明细
+    case activity
+}
+
 /// 「用量」页的三个标签
 enum UsageTab: String, CaseIterable, Identifiable {
     case projects, sessions, models
@@ -38,7 +46,13 @@ final class AppState: ObservableObject {
     @Published var lastScan: ScanSchedulerStatus.Last?
 
     // 主面板数据
-    @Published var selection: NavSelection = .overview
+    @Published var selection: NavSelection = .overview {
+        didSet { if selection != oldValue { detail = nil } }
+    }
+    /// 非 nil 时详情区显示下钻页，工具栏出现返回
+    @Published var detail: DetailRoute?
+    /// 上传记录面板（附着在主窗口上）
+    @Published var showingPublishHistory = false
     @Published var usageTab = UsageTab.projects
     // 全局范围：时间 + Agent。概览、用量、活动共用，切页保留。
     @Published var range = "week" {
@@ -150,18 +164,28 @@ final class AppState: ObservableObject {
 
     /// 数值刷新闪光（状态栏动画）；由 StatusItemController 消费。
     var onTokensChanged: (() -> Void)?
-    /// 会话详情面板（AppDelegate 注入；参数 true = 用户显式打开）
-    var onSessionDetail: ((Bool) -> Void)?
-    /// Agent Activity 详情窗口（始终独立于主表，避免压缩主视图）
-    var onActivityDetail: (() -> Void)?
-    var onPublishHistory: (() -> Void)?
+    /// 双击 / 回车 / ⌘I / 右键「查看详情」：在主窗口里下钻到会话详情
+    func showSessionDetail() {
+        guard selectedSessionID != nil else { return }
+        detail = .session
+    }
+    func showActivityDetail() { detail = .activity }
+    func showPublishHistory() { showingPublishHistory = true }
+    func closeDetail() { detail = nil }
 
-    /// 单击选中：面板已开才跟着更新，用户关过就不再自动弹
-    func autoShowSessionDetail() { onSessionDetail?(false) }
-    /// 双击 / ⌘I / 右键「查看详情」：无条件打开
-    func showSessionDetail() { onSessionDetail?(true) }
-    func showActivityDetail() { onActivityDetail?() }
-    func showPublishHistory() { onPublishHistory?() }
+    /// 详情页里的「上一个 / 下一个」：按当前会话列表的顺序移动选中
+    func stepSession(by offset: Int) {
+        let ids = sessionRows.map { SessionRowModel(row: $0).id }
+        guard let current = selectedSessionID, let index = ids.firstIndex(of: current),
+              ids.indices.contains(index + offset) else { return }
+        selectedSessionID = ids[index + offset]
+    }
+
+    func canStepSession(by offset: Int) -> Bool {
+        let ids = sessionRows.map { SessionRowModel(row: $0).id }
+        guard let current = selectedSessionID, let index = ids.firstIndex(of: current) else { return false }
+        return ids.indices.contains(index + offset)
+    }
 
     init(dbPath: String? = nil) {
         let env = ProcessInfo.processInfo.environment

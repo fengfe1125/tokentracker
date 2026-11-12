@@ -54,6 +54,10 @@ struct SettingsPanelView: View {
         form
             .navigationTitle(L10n.text("设置"))
             .navigationSubtitle(tab.title)
+            .sheet(isPresented: $state.showingPublishHistory) {
+                PublishHistoryView(state: state).appLanguage()
+                    .frame(width: 660, height: 460)
+            }
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Picker(L10n.text("设置"), selection: $tab) {

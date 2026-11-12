@@ -37,6 +37,9 @@ struct RootView: View {
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 300)
         } detail: {
+            if let route = state.detail {
+                detailPage(route)
+            } else {
             switch state.selection {
             case .overview:
                 OverviewView(state: state)
@@ -54,7 +57,9 @@ struct RootView: View {
             case .settings:
                 SettingsPanelView(state: state)
             }
+            }
         }
+        .background { HealthSheetHost(model: state.insights, yi: yi) }
         .frame(minWidth: 820, minHeight: 520)
         .environment(\.unitYi, yi)
         // 每个页面都至少有这一项，窗口工具栏常驻，切页时标题栏高度不跳
@@ -90,6 +95,32 @@ struct RootView: View {
         .onChange(of: state.selection) { _, _ in state.refreshVisibleData() }
         .onChange(of: state.usageTab) { _, _ in state.refreshVisibleData() }
         .onAppear { state.refreshVisibleData() }
+    }
+
+    /// 下钻页：会话详情 / 活动明细。返回用工具栏的后退、Esc 或 ⌘[。
+    @ViewBuilder
+    private func detailPage(_ route: DetailRoute) -> some View {
+        Group {
+            switch route {
+            case .session: SessionDetailView(state: state)
+            case .activity: ActivityDetailView(state: state)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { state.closeDetail() } label: {
+                    Label(L10n.text("返回"), systemImage: "chevron.left")
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                .help(L10n.text("返回"))
+            }
+        }
+        .background {
+            Button("") { state.closeDetail() }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .allowsHitTesting(false)
+        }
     }
 
     /// 扫描状态：上次更新时间；点按查看各数据源的健康状况。
@@ -139,6 +170,21 @@ struct RootView: View {
         .padding(.top, 2)
         .padding(.bottom, 8)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 数据健康面板：附着在主窗口上。单独成一个视图是为了订阅 InsightsModel 的变化。
+private struct HealthSheetHost: View {
+    @ObservedObject var model: InsightsModel
+    let yi: Bool
+
+    var body: some View {
+        Color.clear
+            .sheet(item: $model.healthRequest) { request in
+                HealthView(model: model, tool: request.tool, rescan: request.rescan)
+                    .appLanguage()
+                    .environment(\.unitYi, yi)
+            }
     }
 }
 
