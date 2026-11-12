@@ -62,6 +62,11 @@ struct TotalsView: View {
     }
 }
 
+/// 未归属是 Core 给的固定名称，按界面语言显示；用户自己的项目名原样保留。
+func projectDisplayName(_ project: ProjectSummary) -> String {
+    project.id == "unassigned" ? L10n.text("未归属") : project.name
+}
+
 struct ProjectsView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model: InsightsModel
@@ -96,7 +101,7 @@ struct ProjectsView: View {
             }
             .padding(Metrics.pagePadding)
         }
-        .navigationTitle(selected?.name ?? L10n.text("项目"))
+        .navigationTitle(selected.map(projectDisplayName) ?? L10n.text("项目"))
         .navigationSubtitle(model.backfillProgress)
         .searchable(text: $model.search, placement: .toolbar, prompt: L10n.text("搜索项目"))
         .toolbar {
@@ -279,7 +284,7 @@ struct ProjectsView: View {
         }
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(project.name)
+                Text(projectDisplayName(project))
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)

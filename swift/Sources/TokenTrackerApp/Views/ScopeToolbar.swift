@@ -21,36 +21,51 @@ struct ScopeToolbar: ToolbarContent {
         sidebar.layout.agents.filter { sidebar.isVisible($0, in: .agents) || $0 == state.agentFilter }
     }
 
+    private static let ranges: [(key: String, title: L10n.Template)] = [
+        ("day", "今天"), ("week", "近 7 天"), ("month", "本月"), ("all", "全部"),
+    ]
+
+    private var rangeTitle: String {
+        Self.ranges.first { $0.key == state.range }.map { L10n.text($0.title) } ?? state.range
+    }
+
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             if compact {
-                rangePicker.pickerStyle(.menu).fixedSize()
+                // 用 Menu 自带标题：菜单样式的 Picker 在窗口刚出现时偶尔渲染成空白按钮
+                Menu(rangeTitle) {
+                    ForEach(Self.ranges, id: \.key) { item in
+                        Toggle(L10n.text(item.title), isOn: Binding(
+                            get: { state.range == item.key },
+                            set: { if $0 { state.range = item.key } }))
+                    }
+                }
+                .fixedSize()
+                .help(L10n.text("时间范围"))
             } else {
-                rangePicker.pickerStyle(.segmented)
+                Picker(L10n.text("时间范围"), selection: $state.range) {
+                    ForEach(Self.ranges, id: \.key) { item in
+                        Text(L10n.text(item.title)).tag(item.key)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            Picker("Agent", selection: $state.agentFilter) {
-                Text(L10n.text("全部 Agent")).tag(String?.none)
+            Menu(state.agentFilter.map(toolDisplayName) ?? L10n.text("全部 Agent")) {
+                Toggle(L10n.text("全部 Agent"), isOn: Binding(
+                    get: { state.agentFilter == nil },
+                    set: { if $0 { state.agentFilter = nil } }))
                 Divider()
                 ForEach(agents, id: \.self) { agent in
-                    Text(toolDisplayName(agent)).tag(Optional(agent))
+                    Toggle(toolDisplayName(agent), isOn: Binding(
+                        get: { state.agentFilter == agent },
+                        set: { if $0 { state.agentFilter = agent } }))
                 }
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
             .fixedSize()
             .help(L10n.text("只看某个 Agent 的用量"))
         }
-    }
-
-    private var rangePicker: some View {
-        Picker(L10n.text("时间范围"), selection: $state.range) {
-            Text(L10n.text("今天")).tag("day")
-            Text(L10n.text("近 7 天")).tag("week")
-            Text(L10n.text("本月")).tag("month")
-            Text(L10n.text("全部")).tag("all")
-        }
-        .labelsHidden()
     }
 }

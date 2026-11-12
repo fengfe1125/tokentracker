@@ -236,7 +236,7 @@ struct ReportsView: View {
                          tint: .accentColor,
                          primary: UIFormat.compact(project.totals.tokens, yi: yi),
                          secondary: UIFormat.costLabel(project.totals)) {
-                    Text(project.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                    Text(projectDisplayName(project)).font(.callout).lineLimit(1).truncationMode(.middle)
                 }
             }
         }
