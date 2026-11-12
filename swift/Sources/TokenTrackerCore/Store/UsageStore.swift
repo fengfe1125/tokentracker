@@ -437,14 +437,50 @@ public final class UsageStore {
     }
 
     /// 会话标题（首个 user 消息等）。只在内容变化时更新，幂等。
-    public func setSessionTitle(tool: String, sessionID: String, title: String) throws {
+    /// onlyIfMissing：增量扫描只看到会话的后半段，不能用后面的消息顶掉首条消息的标题。
+    public func setSessionTitle(tool: String, sessionID: String, title: String,
+                                onlyIfMissing: Bool = false) throws {
         let cleaned = collapseWhitespace(title)
         guard !cleaned.isEmpty, !sessionID.isEmpty else { return }
+        if onlyIfMissing {
+            _ = try conn.execute("INSERT OR IGNORE INTO session_meta VALUES (?,?,?,?)",
+                                 [tool, sessionID, cleaned, nowMs()])
+            return
+        }
         _ = try conn.execute("""
             INSERT INTO session_meta VALUES (?,?,?,?)
             ON CONFLICT(tool, session_id) DO UPDATE SET title=excluded.title,
             updated_at=excluded.updated_at WHERE session_meta.title != excluded.title
             """, [tool, sessionID, cleaned, nowMs()])
+    }
+
+    private static let titleRepairKey = "session_title_repair"
+    private static let titleRepairVersion = "1"
+
+    /// 一次性修复旧版本存下的标题：按当前规则重新清洗，不是用户输入的整条删除
+    /// （界面回退到项目名，之后的扫描会补上真正的首条消息）。返回改动的行数。
+    @discardableResult
+    public func repairSessionTitles() throws -> Int {
+        let done = try conn.queryOne("SELECT value FROM insight_state WHERE key=?", [Self.titleRepairKey])?
+            .string("value")
+        guard done != Self.titleRepairVersion else { return 0 }
+        var changed = 0
+        for row in try conn.query("SELECT tool,session_id,title FROM session_meta") {
+            let title = row.string("title")
+            let cleaned = sessionTitle(fromUserText: title)
+            if cleaned == title { continue }
+            if let cleaned {
+                changed += try conn.execute(
+                    "UPDATE session_meta SET title=?,updated_at=? WHERE tool=? AND session_id=?",
+                    [cleaned, nowMs(), row.string("tool"), row.string("session_id")])
+            } else {
+                changed += try conn.execute("DELETE FROM session_meta WHERE tool=? AND session_id=?",
+                                            [row.string("tool"), row.string("session_id")])
+            }
+        }
+        _ = try conn.execute("INSERT OR REPLACE INTO insight_state VALUES (?,?)",
+                             [Self.titleRepairKey, Self.titleRepairVersion])
+        return changed
     }
 
     // ---------------------------------------------------- 聚合快照引擎 ----

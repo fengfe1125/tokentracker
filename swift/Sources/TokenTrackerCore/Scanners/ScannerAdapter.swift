@@ -107,6 +107,8 @@ public struct ScanRunner {
     @discardableResult
     public func runAll(tools: [String]? = nil, full: Bool = false) -> [String: ScanOutcome] {
         var results: [String: ScanOutcome] = [:]
+        // 旧版本存下的噪声标题只修一次；失败不影响扫描
+        if (try? store.repairSessionTitles()) != nil { try? store.conn.commit() }
         for name in tools ?? ScannerRegistry.all {
             guard let adapter = ScannerRegistry.make(name, roots: roots) else { continue }
             ScanDiagnostics.begin()

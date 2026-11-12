@@ -169,7 +169,9 @@ public struct ClaudeScanner: ScannerAdapter {
             snapshot["o"] = newOffset
             cursor[path] = snapshot
             if let title {
-                try store.setSessionTitle(tool: self.name, sessionID: sessionID, title: title)
+                // 增量只读到新增的行：已有标题时保留首条消息，不被后面的消息顶掉
+                try store.setSessionTitle(tool: self.name, sessionID: sessionID, title: title,
+                                          onlyIfMissing: delta != nil)
             }
         }
         cursor["parser_version"] = Self.parserVersion

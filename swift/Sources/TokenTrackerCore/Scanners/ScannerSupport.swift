@@ -233,11 +233,44 @@ public func parseISODateMs(_ ts: String) -> Int64? {
 
 // ------------------------------------------------------------ 会话标题 ----
 
+/// 不是用户亲手输入的开头：上下文注入、中断标记、工具/子代理包装、终端回显。
 private let contextPrefixes = ["# AGENTS.md", "<INSTRUCTIONS>", "<environment_context>",
                                "<system-reminder>", "Caveat:", "<command-", "<local-command",
                                "<recommended_plugins", "<user_instructions",
                                "## Referenced ChatGPT conversation", "<task-notification",
-                               "The following is the Codex agent history"]
+                               "The following is the Codex agent history",
+                               "<turn_aborted>", "<external_codex_apps", "[Request interrupted by user",
+                               "[Workflow harness", "<bash-input>", "<bash-stdout>", "<bash-stderr>"]
+
+/// Codex 历史转储的行："[3] tool exec call: …"、"[176] assistant: …"
+private let historyDumpLine = try! NSRegularExpression(pattern: #"^\[\d+\] (tool|assistant|user)\b"#)
+/// 用户消息开头的附件标记，本身不是标题："<image name=[Image #1] path=…>"、
+/// "[Image: original 1653x2339, …]"、"[Image #2]"、"<pasted_content id=\"…\">"
+private let leadingAttachment = try! NSRegularExpression(
+    pattern: #"^(<image\b[^>]*>|</image>|\[Image[^\]]*\]|<pasted_content\b[^>]*>|</pasted_content>)\s*"#)
+private let codexRequestMarker = "## My request for Codex:"
+
+/// 把一条用户消息整理成会话标题。返回 nil 表示它不是用户真正的输入
+/// （调用方应继续找下一条）。结果已压缩空白并截到 120 字符。
+public func sessionTitle(fromUserText raw: String) -> String? {
+    var text = collapseWhitespace(raw)
+    // Codex 附带文件时把真正的请求放在固定标记之后
+    if text.hasPrefix("# Files mentioned by the user") {
+        guard let marker = text.range(of: codexRequestMarker) else { return nil }
+        text = collapseWhitespace(String(text[marker.upperBound...]))
+    }
+    while true {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = leadingAttachment.firstMatch(in: text, range: range),
+              let matched = Range(match.range, in: text) else { break }
+        text.removeSubrange(matched)
+    }
+    if text.isEmpty || contextPrefixes.contains(where: { text.hasPrefix($0) }) { return nil }
+    if historyDumpLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
+        return nil
+    }
+    return truncate120(text)
+}
 
 private func contentText(_ content: Any?) -> String {
     if let s = content as? String { return s }
@@ -266,11 +299,7 @@ public func userText(_ obj: [String: Any]) -> String {
             text = contentText(payload["content"])
         }
     }
-    text = collapseWhitespace(text)
-    if text.isEmpty || contextPrefixes.contains(where: { text.hasPrefix($0) }) {
-        return ""
-    }
-    return truncate120(text)
+    return sessionTitle(fromUserText: text) ?? ""
 }
 
 // ------------------------------------------------------------ JSON 取值 ----
