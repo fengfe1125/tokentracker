@@ -23,7 +23,7 @@ struct AccountsView: View {
             }
             SubscriptionAccountsSection(state: state)
             if state.detectInfo["codex"]?.installed == true {
-                CodexAccountsSection(state: state)
+                CodexAccountsSection(model: state.codex)
             }
         }
         .formStyle(.grouped)
@@ -43,7 +43,7 @@ struct AccountsView: View {
 /// Codex 多账号：保存当前登录、一键切换、重命名 / 删除。
 struct CodexAccountsSection: View {
     @ObservedObject private var language = LanguageManager.shared
-    @ObservedObject var state: AppState
+    @ObservedObject var model: CodexAccountsModel
     @State private var showCaptureSheet = false
     @State private var captureName = ""
     @State private var renameTarget: CodexAccount?
@@ -55,16 +55,16 @@ struct CodexAccountsSection: View {
                 captureName = ""
                 showCaptureSheet = true
             }
-            if state.codexAccounts.isEmpty {
+            if model.accounts.isEmpty {
                 Text(L10n.text("还没有保存的账号。先在 Codex 登录，再点上面的按钮把当前登录存进来。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(state.codexAccounts) { account in
+                ForEach(model.accounts) { account in
                     codexAccountRow(account)
                 }
             }
-            if let message = state.accountOpMessage {
+            if let message = model.message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
             Text(L10n.text("切换后请重启 Codex 生效；账号之间切换不会丢会话。凭据快照仅存本机，不上传。"))
@@ -74,7 +74,7 @@ struct CodexAccountsSection: View {
     .alert(L10n.text("保存当前登录账号"), isPresented: $showCaptureSheet) {
         TextField(L10n.text("备注名（留空则用邮箱）"), text: $captureName)
         Button(L10n.text("保存")) {
-            state.captureCurrentCodexAccount(name: captureName)
+            model.captureCurrent(name: captureName)
             captureName = ""
         }
         Button(L10n.text("取消"), role: .cancel) { captureName = "" }
@@ -84,7 +84,7 @@ struct CodexAccountsSection: View {
     .alert(L10n.text("重命名账号"), isPresented: renamePresented, presenting: renameTarget) { account in
         TextField(L10n.text("备注名"), text: $renameName)
         Button(L10n.text("确定")) {
-            state.renameCodexAccount(id: account.id, name: renameName)
+            model.rename(id: account.id, name: renameName)
             renameTarget = nil
         }
         Button(L10n.text("取消"), role: .cancel) { renameTarget = nil }
@@ -93,7 +93,7 @@ struct CodexAccountsSection: View {
 
     @ViewBuilder
     private func codexAccountRow(_ account: CodexAccount) -> some View {
-        let isActive = state.activeCodexAccountID == account.id
+        let isActive = model.activeID == account.id
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -110,7 +110,7 @@ struct CodexAccountsSection: View {
             }
             Spacer()
             if !isActive {
-                Button(L10n.text("切换")) { state.switchCodexAccount(id: account.id) }
+                Button(L10n.text("切换")) { model.switchTo(id: account.id) }
             }
             Menu {
                 Button(L10n.text("重命名…")) {
@@ -118,7 +118,7 @@ struct CodexAccountsSection: View {
                     renameTarget = account
                 }
                 Button(L10n.text("删除"), role: .destructive) {
-                    state.removeCodexAccount(id: account.id)
+                    model.remove(id: account.id)
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")

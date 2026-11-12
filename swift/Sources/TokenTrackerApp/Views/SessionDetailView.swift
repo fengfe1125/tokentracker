@@ -17,7 +17,7 @@ struct SessionDetailView: View {
     @State private var tab = "overview"
     @State private var detail: UsageStore.SessionDetail?
 
-    private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var yi: Bool { state.prefs.unitYi }
 
     private var session: SessionRowModel? {
         guard let id = state.selectedSessionID else { return nil }
@@ -284,7 +284,7 @@ private struct ResumeSection: View {
     @State private var notice: L10n.Template = ""
 
     private var terminalPref: String {
-        state.settings["terminal_app"] as? String ?? "auto"
+        state.prefs.terminalApp
     }
 
     var body: some View {

@@ -99,17 +99,8 @@ final class AppState: ObservableObject {
     @Published private(set) var priceSyncLastSuccessAtMs: Int64 = 0
     @Published private(set) var priceSyncRunning = false
 
-    // Codex 多账号切换（设置页管理区）
-    @Published var codexAccounts: [CodexAccount] = []
-    @Published var activeCodexAccountID: String? {
-        didSet {
-            insights.codexAccountID = activeCodexAccountID ?? "unknown"
-            insights.risks.removeAll { $0.id.hasPrefix("quota:codex:") }
-            insights.refresh()
-        }
-    }
-    @Published private var accountNotice: L10n.Template?
-    var accountOpMessage: String? { accountNotice.map(L10n.text) }            // 操作结果 / 错误提示
+    /// Codex 多账号切换（账号页管理区）；状态与读写都在这个模型里
+    let codex: CodexAccountsModel
 
     // 公开统计上报（设置页 + 独立记录窗口）
     @Published var publishState = PublishState()
@@ -128,7 +119,7 @@ final class AppState: ObservableObject {
 
     /// 自动扫描/刷新节奏（秒）；设置键 scan_interval，默认 60
     var scanIntervalSeconds: Int {
-        (settings["scan_interval"] as? NSNumber)?.intValue ?? 60
+        prefs.scanInterval
     }
 
     let insights: InsightsModel
@@ -136,8 +127,6 @@ final class AppState: ObservableObject {
     let settingsStore: SettingsStore
     let scanRoots: ScanRoots
     let priceCatalogPath: String
-    /// Codex 多账号切换：快照当前登录 + 一键原子替换 auth.json
-    let accountSwitcher: CodexAccountSwitcher
     private(set) var scheduler: ScanScheduler!
 
     private var dataGeneration = 0
@@ -209,7 +198,9 @@ final class AppState: ObservableObject {
         publisher = PublicStatsPublisher(settings: settingsStore, tokens: tokenStore,
                                          history: historyStore)
         scanRoots = ScanRoots()
-        accountSwitcher = preview ? CodexAccountSwitcher(ctx: BillingContext(home:previewHome,env:["CODEX_HOME":previewHome+"/.codex"])) : CodexAccountSwitcher()
+        codex = CodexAccountsModel(switcher: preview
+            ? CodexAccountSwitcher(ctx: BillingContext(home: previewHome, env: ["CODEX_HOME": previewHome + "/.codex"]))
+            : CodexAccountSwitcher())
         subscriptionService = preview ? nil : SubscriptionService()
         if preview {
             subscriptionCards = SubscriptionCard.previewCards()
@@ -223,9 +214,23 @@ final class AppState: ObservableObject {
         priceSyncLastSuccessAtMs = priceStatus.lastSuccessAtMs
         publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
         publishHistory = historyStore.load()
-        let handle = settings["publish_handle"] as? String ?? ""
+        let handle = prefs.publishHandle
         publishTokenConfigured = !preview && tokenStore.read(handle: handle) != nil
-        reloadCodexAccounts()
+        codex.onActiveChanged = { [weak self] active in
+            guard let self else { return }
+            self.insights.codexAccountID = active ?? "unknown"
+            self.insights.risks.removeAll { $0.id.hasPrefix("quota:codex:") }
+            self.insights.refresh()
+        }
+        codex.onSwitched = { [weak self] in
+            // 换了账号：旧账号的配额采样作废，立即重查
+            self?.insights.mutate { store in
+                _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
+                try store.conn.commit()
+            }
+            self?.refreshQuotas(force: true)
+        }
+        codex.reload()
         // 预览与测试不读写真实偏好
         if !preview {
             let defaults = UserDefaults.standard
@@ -317,7 +322,7 @@ final class AppState: ObservableObject {
         }
         refreshVisibleData()
         refreshQuotas()
-        configurePriceSyncTimer(enabled: (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true)
+        configurePriceSyncTimer(enabled: prefs.priceSyncEnabled)
 
         // 更新检查：启动后延迟 30s 的后台一次性请求（对齐 updatecheck.py 注释），
         // 网络失败静默，绝不阻塞启动
@@ -344,28 +349,28 @@ final class AppState: ObservableObject {
     }
 
     private func reloadSettingsIfChanged() {
-        let wasPriceSyncEnabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+        let wasPriceSyncEnabled = prefs.priceSyncEnabled
         let effective = settingsStore.effective()
         let fp = Self.fingerprint(effective)
         if fp != settingsFingerprint {
             settingsFingerprint = fp
             settings = effective
             scheduler?.setInterval(Double(scanIntervalSeconds))
-            let handle = settings["publish_handle"] as? String ?? ""
+            let handle = prefs.publishHandle
             publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
-            let enabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+            let enabled = prefs.priceSyncEnabled
             if enabled != wasPriceSyncEnabled { configurePriceSyncTimer(enabled: enabled) }
         }
     }
 
     func updateSetting(key: String, value: Any) {
-        let wasPriceSyncEnabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+        let wasPriceSyncEnabled = prefs.priceSyncEnabled
         if settingsStore.set(key: key, value: value) {
             settings = settingsStore.effective()
             settingsFingerprint = Self.fingerprint(settings)
             scheduler?.setInterval(Double(scanIntervalSeconds))
             if key == "price_sync_enabled" {
-                let enabled = (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true
+                let enabled = prefs.priceSyncEnabled
                 if enabled != wasPriceSyncEnabled { configurePriceSyncTimer(enabled: enabled) }
             }
         }
@@ -389,7 +394,7 @@ final class AppState: ObservableObject {
 
     private func syncPricesIfDue() {
         guard !isPreview,
-              (settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true else { return }
+              prefs.priceSyncEnabled else { return }
         let catalog = PriceCatalogDocument.load(from: priceCatalogPath)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         guard PriceSyncService.isDue(lastSuccessAtMs: catalog.lastSuccessAtMs, nowMs: now) else { return }
@@ -409,7 +414,7 @@ final class AppState: ObservableObject {
             self.priceSyncTask = nil
             self.priceSyncRunning = false
             if result.status == "cancelled" {
-                if (self.settings["price_sync_enabled"] as? NSNumber)?.boolValue ?? true {
+                if self.prefs.priceSyncEnabled {
                     self.syncPricesIfDue()
                 }
                 return
@@ -431,8 +436,8 @@ final class AppState: ObservableObject {
     // ------------------------------------------------------ 公开统计 ----
 
     var publishConfigurationReady: Bool {
-        let endpoint = settings["publish_endpoint"] as? String ?? ""
-        let handle = settings["publish_handle"] as? String ?? ""
+        let endpoint = prefs.publishEndpoint
+        let handle = prefs.publishHandle
         return SettingsStore.isValid(key: "publish_endpoint", value: endpoint)
             && !endpoint.isEmpty
             && SettingsStore.isValid(key: "publish_handle", value: handle)
@@ -442,9 +447,9 @@ final class AppState: ObservableObject {
 
     var publicStatsURL: URL? {
         guard publishConfigurationReady else { return nil }
-        let endpoint = (settings["publish_endpoint"] as? String ?? "")
+        let endpoint = prefs.publishEndpoint
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let handle = settings["publish_handle"] as? String ?? ""
+        let handle = prefs.publishHandle
         return URL(string: endpoint + "/v1/stats/" + handle)
     }
 
@@ -522,7 +527,7 @@ final class AppState: ObservableObject {
         publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
         publishHistory = publishHistoryStore.load()
         if refreshToken {
-            let handle = settings["publish_handle"] as? String ?? ""
+            let handle = prefs.publishHandle
             publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
         }
     }
@@ -568,7 +573,7 @@ final class AppState: ObservableObject {
         dataCancellation = cancellation
         dataLoading = true
         dataErrorTemplate = nil
-        reloadCodexAccounts()   // 账号列表与 active 跟随轮询热反映
+        codex.reload()   // 账号列表与 active 跟随轮询热反映
         let path = readStore.path
         let range = range
         let search = sessionSearch
@@ -948,107 +953,6 @@ final class AppState: ObservableObject {
             detailQueue.async {
                 cont.resume(returning: try? UsageStore(path:path).sessionDetail(tool: tool, sessionID: sessionID))
             }
-        }
-    }
-
-    // ------------------------------------------------------ Codex 账号 ----
-    //  切换涉及文件读写（回采 + 原子替换 auth.json），一律走 queryQueue，
-    //  回主线程发布结果。日志/提示只带 account_id 与结果，绝不打印 token。
-
-    /// 读账号库 + 当前 active（走查询队列，不占主线程）。
-    func reloadCodexAccounts() {
-        let switcher = accountSwitcher
-        queryQueue.async { [weak self] in
-            let accounts: [CodexAccount]
-            do { accounts = try switcher.store.loadChecked() } catch {
-                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
-            }
-            let active = switcher.activeAccountID()
-            DispatchQueue.main.async {
-                self?.codexAccounts = accounts
-                self?.activeCodexAccountID = active
-            }
-        }
-    }
-
-    /// 保存当前 Codex 登录为一份账号快照（name 留空则用 email/id 兜底）。
-    func captureCurrentCodexAccount(name: String) {
-        let switcher = accountSwitcher
-        queryQueue.async { [weak self] in
-            do {
-                let account = try switcher.captureCurrent(name: name)
-                let accounts = switcher.store.load()
-                let active = switcher.activeAccountID()
-                let message = L10n.message("已保存账号「\(account.name)」")
-                DispatchQueue.main.async {
-                    self?.codexAccounts = accounts
-                    self?.activeCodexAccountID = active
-                    self?.accountNotice = message
-                }
-            } catch {
-                let message = L10n.message("保存失败：\(UIFormat.appError(error))")
-                DispatchQueue.main.async { self?.accountNotice = message }
-            }
-        }
-    }
-
-    /// 切换账号：后台执行「回采当前 → 原子写目标」，回主线程发布结果。
-    func switchCodexAccount(id: String) {
-        let switcher = accountSwitcher
-        queryQueue.async { [weak self] in
-            do {
-                try switcher.switchTo(id)
-                let accounts = switcher.store.load()
-                let active = switcher.activeAccountID()
-                DispatchQueue.main.async {
-                    self?.codexAccounts = accounts
-                    self?.activeCodexAccountID = active
-                    self?.accountNotice = L10n.message("已切换，请重启 Codex 生效")
-                    self?.insights.mutate { store in
-                        _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
-                        try store.conn.commit()
-                    }
-                    self?.refreshQuotas(force: true)
-                }
-            } catch {
-                let message = (error as? AccountPersistenceError) == .historyAfterSwitch
-                    ? L10n.message("切换已完成，但记录保存失败") : L10n.message("切换失败：\(UIFormat.appError(error))")
-                let switched = (error as? AccountPersistenceError) == .historyAfterSwitch
-                let active = switched ? switcher.activeAccountID() : nil
-                DispatchQueue.main.async {
-                    self?.accountNotice = message
-                    if switched {
-                        self?.activeCodexAccountID = active
-                        self?.insights.mutate { store in
-                            _ = try store.conn.execute("DELETE FROM quota_samples WHERE identity LIKE 'codex:%'")
-                            try store.conn.commit()
-                        }
-                        self?.refreshQuotas(force: true)
-                    }
-                }
-            }
-        }
-    }
-
-    func removeCodexAccount(id: String) {
-        let switcher = accountSwitcher
-        queryQueue.async { [weak self] in
-            let accounts: [CodexAccount]
-            do { accounts = try switcher.store.remove(id) } catch {
-                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
-            }
-            DispatchQueue.main.async { self?.codexAccounts = accounts }
-        }
-    }
-
-    func renameCodexAccount(id: String, name: String) {
-        let switcher = accountSwitcher
-        queryQueue.async { [weak self] in
-            let accounts: [CodexAccount]
-            do { accounts = try switcher.store.rename(id, name: name) } catch {
-                DispatchQueue.main.async { self?.accountNotice = UIFormat.appError(error) }; return
-            }
-            DispatchQueue.main.async { self?.codexAccounts = accounts }
         }
     }
 }

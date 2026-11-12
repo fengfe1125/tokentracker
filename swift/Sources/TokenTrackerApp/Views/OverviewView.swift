@@ -14,7 +14,7 @@ struct OverviewView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
 
-    private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var yi: Bool { state.prefs.unitYi }
 
     var body: some View {
         ScrollView {

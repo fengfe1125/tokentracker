@@ -97,7 +97,7 @@ struct NotchHUDDetailView: View {
         NotchHUDQuota(provider: provider, entry: state.quotaEntries.first { $0.id == provider },
                        display: preferences.quotaDisplay)
     }
-    private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var yi: Bool { state.prefs.unitYi }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

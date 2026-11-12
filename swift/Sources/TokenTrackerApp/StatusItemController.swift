@@ -72,11 +72,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 偏好 ----
 
     private var provider: String {
-        appState.settings["menubar_provider"] as? String ?? MenuBarFmt.defaultProvider
+        appState.prefs.menubarProvider
     }
-    private var compact: Bool { (appState.settings["menubar_compact"] as? NSNumber)?.boolValue ?? false }
-    private var ring: Bool { provider != "tokens" && ((appState.settings["menubar_ring"] as? NSNumber)?.boolValue ?? true) }
-    private var yi: Bool { (appState.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var compact: Bool { appState.prefs.menubarCompact }
+    private var ring: Bool { provider != "tokens" && (appState.prefs.menubarRing) }
+    private var yi: Bool { appState.prefs.unitYi }
 
     // ------------------------------------------------------------ 颜色 ----
 

@@ -40,7 +40,7 @@ struct SettingsPanelView: View {
     @State private var showForceConfirmation = false
 
     private var provider: String {
-        state.settings["menubar_provider"] as? String ?? MenuBarFmt.defaultProvider
+        state.prefs.menubarProvider
     }
 
     private func binding(_ key: String) -> Binding<Bool> {
@@ -81,14 +81,14 @@ struct SettingsPanelView: View {
                     }
 
                     Toggle(L10n.text("开机自动启动"), isOn: Binding(
-                        get: { (state.settings["launch_at_login"] as? NSNumber)?.boolValue ?? false },
+                        get: { state.prefs.launchAtLogin },
                         set: { on in
                             state.updateSetting(key: "launch_at_login", value: on)
                             applyLoginItem(on)
                         }
                     ))
                     Picker(L10n.text("终端 App（继续会话用）"), selection: Binding(
-                        get: { state.settings["terminal_app"] as? String ?? "auto" },
+                        get: { state.prefs.terminalApp },
                         set: { state.updateSetting(key: "terminal_app", value: $0) }
                     )) {
                         Text(L10n.text("自动检测")).tag("auto")
@@ -233,7 +233,7 @@ struct SettingsPanelView: View {
     private var publishSection: some View {
         Section(L10n.text("公开统计")) {
             Toggle(L10n.text("扫描后自动上传"), isOn: Binding(
-                get: { (state.settings["publish_enabled"] as? NSNumber)?.boolValue ?? false },
+                get: { state.prefs.publishEnabled },
                 set: { state.setPublishEnabled($0) }
             ))
             TextField(L10n.text("HTTPS 服务地址"), text: $publishEndpoint,
@@ -315,16 +315,16 @@ struct SettingsPanelView: View {
     }
 
     private var publishPrivacyText: String {
-        let enabled = (state.settings["publish_enabled"] as? NSNumber)?.boolValue ?? false
+        let enabled = state.prefs.publishEnabled
         return enabled
             ? L10n.text("自动上传已开启。只发送聚合数字；项目路径、会话、提示词、模型名和账号信息不会上传。")
             : L10n.text("自动上传已关闭。手动上传仍可使用；原始日志和敏感信息不会离开本机。")
     }
 
     private func loadPublishDrafts() {
-        publishEndpoint = state.settings["publish_endpoint"] as? String ?? ""
-        publishHandle = state.settings["publish_handle"] as? String ?? ""
-        publishDays = (state.settings["publish_days"] as? NSNumber)?.intValue ?? 365
+        publishEndpoint = state.prefs.publishEndpoint
+        publishHandle = state.prefs.publishHandle
+        publishDays = state.prefs.publishDays
     }
 
     // ------------------------------------------------------------ 更新 ----

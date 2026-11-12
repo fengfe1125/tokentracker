@@ -18,7 +18,7 @@ struct SessionsView: View {
     /// nil = 本视图还没发过查询（首次 .task 只记账不重查，避免和 RootView 的刷新撞车）
     @State private var lastQueriedSearch: String?
 
-    private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var yi: Bool { state.prefs.unitYi }
 
     private var title: String {
         state.agentFilter.map { L10n.text("\(toolDisplayName($0)) 的会话") } ?? L10n.text("会话记录")

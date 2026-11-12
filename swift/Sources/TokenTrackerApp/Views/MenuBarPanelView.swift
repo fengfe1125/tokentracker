@@ -29,7 +29,7 @@ struct MenuBarPanelView: View {
     @ObservedObject var state: AppState
     let actions: MenuBarPanelActions
 
-    private var yi: Bool { (state.settings["unit_yi"] as? NSNumber)?.boolValue ?? false }
+    private var yi: Bool { state.prefs.unitYi }
 
     /// 有官方数据（新鲜或过期）的账号；读不到额度的只计数。
     private var quotaCards: [SubscriptionCard] {
@@ -224,7 +224,7 @@ struct MenuBarPanelView: View {
     // ------------------------------------------------------------ 底栏 ----
 
     private var provider: Binding<String> {
-        Binding(get: { state.settings["menubar_provider"] as? String ?? MenuBarFmt.defaultProvider },
+        Binding(get: { state.prefs.menubarProvider },
                 set: { state.updateSetting(key: "menubar_provider", value: $0) })
     }
 
