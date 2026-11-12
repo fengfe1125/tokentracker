@@ -23,145 +23,14 @@ struct InsightsOverview: View {
             }
             DisclosureGroup(L10n.text("费用依据与统计覆盖")) {
                 ForEach(model.costSources) { row in HStack { Text(costSourceName(row.id));Spacer();Text(L10n.label(row.totals.costLabel)) }.font(.caption) }
-                Text(L10n.text("未计价 \(model.totals.unpriced) 条 · 时间未分配 \(model.totals.unallocatedTokens) Token")).font(.caption)
+                Text(L10n.text("未计价 \(model.totals.unpriced.formatted(.number)) 条 · 时间未分配 \(model.totals.unallocatedTokens.formatted(.number)) Token")).font(.caption)
             }
             if model.risks.isEmpty { Text(L10n.text("尚未设置预算；官方配额风险依赖新鲜样本。")).font(.caption).foregroundStyle(.secondary) }
             if let error=model.error { Text(error).font(.caption).foregroundStyle(.red) }
-        }.padding().background(.quaternary.opacity(0.3),in:RoundedRectangle(cornerRadius:12))
+        }.frame(maxWidth:.infinity,alignment:.leading).card()
     }
 }
 
-struct ProjectsView: View {
-    @ObservedObject private var language = LanguageManager.shared
-    @ObservedObject var model: InsightsModel
-    @State private var range="week"
-    @State private var from=Calendar.current.startOfDay(for:Date())
-    @State private var to=Date()
-    @State private var rename=""
-    @State private var selected:ProjectSummary?
-    @State private var showExport=false
-    @State private var showBudget=false
-    @State private var showAssignments=false
-    @State private var showCreate=false
-    var body: some View {
-        VStack(spacing:0) {
-            HStack {
-                VStack(alignment:.leading) {
-                    Text(selected?.name ?? L10n.text("项目")).font(.title2.bold())
-                    Text(L10n.text("\(model.totals.tokens) Token · \(L10n.label(model.totals.costLabel)) · 含估算，非订阅账单")).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if selected != nil { Button(L10n.text("所有项目")) { selected=nil;model.query.projectID=nil;model.refresh() } }
-                Button(L10n.text("项目管理")) { showCreate=true }
-                Button(L10n.text("预算")) { showBudget=true }
-                Button(L10n.text("导出")) { showExport=true }
-            }.padding()
-            HStack {
-                Picker(L10n.text("范围"),selection:$range) {
-                    Text(L10n.text("今天")).tag("day");Text(L10n.text("近 7 天")).tag("week");Text(L10n.text("本月")).tag("month");Text(L10n.text("全部")).tag("all");Text(L10n.text("自定义")).tag("custom")
-                }.pickerStyle(.segmented).labelsHidden()
-                TextField(L10n.text("搜索项目"),text:$model.search).textFieldStyle(.roundedBorder).frame(maxWidth:200)
-            }.padding(.horizontal)
-            Text(usageIntervalLabel(model.query)).font(.caption2).foregroundStyle(.secondary).padding(.horizontal)
-            if model.query.tool != nil || model.query.model != nil {
-                HStack { Text(L10n.text("筛选：") + (model.query.tool ?? model.query.model ?? "")).font(.caption);Button(L10n.text("清除筛选")) { model.query.tool=nil;model.query.model=nil;model.refresh() } }.padding(.horizontal)
-            }
-            if range == "custom" {
-                HStack {
-                    DatePicker(L10n.text("开始"),selection:$from,displayedComponents:.date)
-                    DatePicker(L10n.text("结束（包含当天）"),selection:$to,displayedComponents:.date)
-                    Button(L10n.text("应用")) { applyRange() }.disabled(from>to)
-                }.padding(.horizontal)
-            }
-            if !model.backfillProgress.isEmpty { Text(model.backfillProgress).font(.caption).foregroundStyle(.secondary) }
-            if model.busy { ProgressView().controlSize(.small).padding(4) }
-            if let error=model.error { Text(error).foregroundStyle(.red) }
-            ScrollView {
-                LazyVStack(alignment:.leading,spacing:12) {
-                    if let selected {
-                        HStack {
-                            TextField(L10n.text("项目名称"),text:$rename)
-                            Button(L10n.text("保存名称")) { let id=selected.id,name=rename;model.mutate { try $0.renameProject(id,name:name) } }
-                            Button(L10n.text("调整归属")) { showAssignments=true }
-                        }
-                        TotalsView(totals:model.totals)
-                        ForEach(model.risks.filter{$0.projectID==selected.id}) { risk in Text(UIFormat.riskDetail(risk)).font(.caption).foregroundStyle(risk.level>0 ? .orange : .secondary) }
-                        if let explanation=model.explanation {
-                            Text(L10n.label(explanation.status)).font(.headline)
-                            Text(UIFormat.explanation(explanation)).font(.callout).foregroundStyle(.secondary)
-                        }
-                        if model.analyticsLoading { ProgressView(L10n.text("正在加载分析…")).controlSize(.small) }
-                        Text(L10n.text("项目趋势")).font(.headline)
-                        Chart(model.daily) { row in
-                            BarMark(x:.value(L10n.text("日期"),row.id),y:.value("Token",row.totals.tokens))
-                        }.frame(height:160)
-                        Text(L10n.text("Agent 分布")).font(.headline)
-                        ForEach(model.agents) { row in HStack { Text(toolDisplayName(row.id));Spacer();Text("\(row.totals.tokens) Token") } }
-                        Text(L10n.text("模型分布")).font(.headline)
-                        ForEach(model.breakdown) { row in
-                            HStack { Text(row.id);Spacer();Text("\(row.totals.tokens) Token · \(L10n.label(row.totals.costLabel))").monospacedDigit() }
-                        }
-                        if let explanation=model.explanation { ExplanationEvidence(explanation:explanation,inspect:model.inspectChange) }
-                        Text(L10n.text("主要会话")).font(.headline)
-                        ForEach(model.sessions) { session in
-                            Button { model.onSession?(session.tool,session.sessionID) } label: {
-                                HStack { Text(session.title.isEmpty ? session.sessionID : session.title).lineLimit(1);Spacer();Text("\(session.totals.tokens) Token") }
-                            }.buttonStyle(.plain)
-                        }
-                    } else {
-                        ForEach(model.projects) { project in
-                            Button {
-                                selected=project;rename=project.name;model.query.projectID=project.id;model.refresh()
-                            } label: {
-                                VStack(alignment:.leading,spacing:8) {
-                                    HStack { Text(project.name).font(.headline);Spacer();Text("\(project.totals.tokens) Token").monospacedDigit() }
-                                    HStack { Text(L10n.text("\(project.totals.sessions) 个会话 · \(L10n.label(project.totals.costLabel))"));Spacer();if let last=project.lastActivity { Text(Date(timeIntervalSince1970:Double(last)/1000),style:.date) } }.font(.caption).foregroundStyle(.secondary)
-                                    ForEach(model.risks.filter{$0.projectID==project.id && $0.level>0}) { risk in Text(UIFormat.riskDetail(risk)).font(.caption).foregroundStyle(.orange) }
-                                    Text(L10n.text("输入 \(project.totals.input) · 输出 \(project.totals.output) · 缓存读 \(project.totals.cacheRead) · 缓存写 \(project.totals.cacheWrite)")).font(.caption2)
-                                }.padding().frame(maxWidth:.infinity,alignment:.leading).background(.quaternary.opacity(0.4),in:RoundedRectangle(cornerRadius:12))
-                            }.buttonStyle(.plain)
-                        }
-                        if model.projects.count >= 100 { Button(L10n.text("加载更多")) { model.refresh(more:true) } }
-                        if model.projects.isEmpty && !model.busy { ContentUnavailableView(L10n.text("此范围暂无项目"),systemImage:"folder",description:Text(L10n.text("来源没有可靠工作目录的用量会保留在未归属中。"))) }
-                    }
-                }.padding()
-            }
-        }
-        .navigationTitle(selected?.name ?? L10n.text("项目"))
-        .onChange(of:model.busy) { _,busy in
-            if !busy,let id=model.query.projectID,let project=model.projects.first(where:{$0.id==id}) {
-                if selected?.id != id { rename=project.name }
-                selected=project
-            } else if !busy,model.query.projectID == nil { selected=nil }
-        }
-        .sheet(isPresented:$showCreate) { ProjectCreateSheet(model:model) }
-        .onChange(of:range) { _,_ in applyRange() }
-        .task(id:model.search) { try? await Task.sleep(for:.milliseconds(250));if !Task.isCancelled { model.refresh() } }
-        .sheet(isPresented:$showExport) { ExportSheet(model:model) }
-        .sheet(isPresented:$showBudget) { BudgetSheet(model:model,projectID:selected?.id) }
-        .sheet(isPresented:$showAssignments) { AssignmentSheet(model:model,projectID:selected?.id) }
-    }
-    private func applyRange() {
-        var query=UsageQuery.period(range)
-        if range == "custom" {
-            query.start=Int64(Calendar.current.startOfDay(for:from).timeIntervalSince1970*1000)
-            query.end=Int64(Calendar.current.date(byAdding:.day,value:1,to:Calendar.current.startOfDay(for:to))!.timeIntervalSince1970*1000)
-        }
-        query.projectID=model.query.projectID;query.tool=model.query.tool;query.model=model.query.model;model.query=query;model.refresh()
-    }
-}
-struct TotalsView: View {
-    @ObservedObject private var language = LanguageManager.shared
-    let totals:UsageTotals
-    var body: some View {
-        VStack(alignment:.leading,spacing:8) {
-            Text("\(totals.tokens) Token").font(.largeTitle.bold()).monospacedDigit()
-            Text(L10n.text("非缓存输入 \(totals.input) · 输出 \(totals.output) · 缓存读 \(totals.cacheRead) · 缓存写 \(totals.cacheWrite)"))
-            Text(L10n.text("费用合计 \(L10n.label(totals.costLabel)) · 含估算，非订阅账单"))
-            Text(L10n.text("\(totals.records) 条用量记录 · 未计价 \(totals.unpriced) 条 · 时间未分配 \(totals.unallocatedTokens) Token")).font(.caption).foregroundStyle(.secondary)
-        }.padding().frame(maxWidth:.infinity,alignment:.leading).background(.quaternary.opacity(0.4),in:RoundedRectangle(cornerRadius:12))
-    }
-}
 struct BudgetSheet: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model:InsightsModel
@@ -241,69 +110,6 @@ struct ExportSheet: View {
         }.padding(24).frame(width:520).onAppear { if diagnostics { kind = .health; includePrivate = false }; model.clearExportMessage() }
     }
 }
-struct ReportsView: View {
-    @ObservedObject private var language = LanguageManager.shared
-    @ObservedObject var model:InsightsModel
-    @State private var selected:WeeklyReport?
-    @State private var week=Date()
-    @State private var reportExportQuery:UsageQuery?
-    @State private var showExport=false
-    var body: some View {
-        VStack(alignment:.leading,spacing:12) {
-            HStack {
-                Text(L10n.text("本地周报")).font(.title2.bold());Spacer()
-                DatePicker(L10n.text("周次参考日期"),selection:$week,displayedComponents:.date)
-                Button(L10n.text("生成此前完整周")) { let now=week;model.mutate { try $0.generateWeeklyReport(now:now,regenerate:true) } }
-                Button(L10n.text("导出数据")) { reportExportQuery=(selected ?? model.reports.first)?.query ?? UsageQuery.period("week");showExport=true }
-            }
-            Text(L10n.text("自然周：周一至周日 · 本地规则 · 快照不会随补扫静默变化")).font(.caption).foregroundStyle(.secondary)
-            HSplitView {
-                List(model.reports) { report in
-                    Button { selected=report } label: {
-                        VStack(alignment:.leading) {
-                            Text(Date(timeIntervalSince1970:Double(report.query.start ?? 0)/1000),style:.date)
-                            Text("\(report.totals.tokens) Token").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.buttonStyle(.plain)
-                }.frame(minWidth:180,maxWidth:240)
-                ScrollView {
-                    if let report=selected ?? model.reports.first {
-                        VStack(alignment:.leading,spacing:12) {
-                            TotalsView(totals:report.totals)
-                            HStack {
-                                Button(L10n.text("导出 Markdown")) { model.exportReport(report) }
-                                Button(L10n.text("重新生成")) {
-                                    let now=Date(timeIntervalSince1970:Double(report.query.end ?? 0)/1000+3600)
-                                    let tz=TimeZone(identifier:report.query.timeZoneID) ?? .current
-                                    selected=nil;model.mutate { try $0.generateWeeklyReport(now:now,timeZone:tz,regenerate:true) }
-                                }
-                            }
-                            Text(L10n.text("相比上一自然周：\(report.totals.tokens-report.previous.tokens) Token")).font(.headline)
-                            Text(L10n.text("覆盖不完整时，变化不代表实际增长。")).font(.caption).foregroundStyle(.secondary)
-                            Text(L10n.text("项目投入")).font(.headline)
-                            ForEach(report.projects) { project in
-                                HStack { Text(project.name);Spacer();Text("\(project.totals.tokens.formatted()) Token · \(L10n.label(project.totals.costLabel))") }.font(.callout)
-                            }
-                            Divider()
-                            Text(L10n.text("模型与费用依据")).font(.headline)
-                            ForEach(report.models) { row in HStack { Text(row.id);Spacer();Text("\(row.totals.tokens.formatted()) Token") } }
-                            ForEach(report.costSources) { row in
-                                HStack { Text(costSourceName(row.id));Spacer();Text(L10n.label(row.totals.costLabel)) }.font(.caption).foregroundStyle(.secondary)
-                            }
-                            Divider()
-                            Text(L10n.text("预算与生成时健康")).font(.headline)
-                            ForEach(report.budgets) { risk in Text(L10n.label(risk.title)+" · "+UIFormat.riskDetail(risk)).font(.callout) }
-                            ForEach(report.health) { health in HStack { Text(toolDisplayName(health.id));Spacer();Text(L10n.label(health.state)) }.font(.caption) }
-                            Text(L10n.text("执行活动 \(report.activityCount.formatted()) 次；调用成功不代表任务质量。")).font(.caption).foregroundStyle(.secondary)
-                            Text(L10n.text("时区：\(report.query.timeZoneID) · 规则 v\(report.ruleVersion) · 生成于 \(Date(timeIntervalSince1970:Double(report.generatedAt)/1000).formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))")).font(.caption2).foregroundStyle(.secondary)
-
-                        }.padding()
-                    } else { ContentUnavailableView(L10n.text("尚无周报"),systemImage:"doc.text",description:Text(L10n.text("启动扫描完成后自动生成最近一个完整周，也可以按需生成。"))) }
-                }
-            }
-        }.padding().navigationTitle(L10n.text("本地周报")).onAppear { model.refresh() }.sheet(isPresented:$showExport) { ExportSheet(model:model,queryOverride:reportExportQuery) }
-    }
-}
 struct HealthView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model:InsightsModel
@@ -325,7 +131,7 @@ struct HealthView: View {
                             Text(L10n.text("Activity 解析器 v\(health.parserVersion) · 解析异常：\(health.parseErrors.map(String.init) ?? L10n.text("未知")) · 读取异常：\(health.readErrors.map(String.init) ?? L10n.text("未知"))")).font(.caption)
                             Text(L10n.text("工具：\(activityCapability(agent:health.id,category:"tools").rawValue) · Skill：\(activityCapability(agent:health.id,category:"skills").rawValue)")).font(.caption)
                             if !health.error.isEmpty { Text(L10n.label(health.error)).foregroundStyle(.orange) }
-                        }.padding().background(.quaternary.opacity(0.3),in:RoundedRectangle(cornerRadius:10))
+                        }.frame(maxWidth:.infinity,alignment:.leading).card()
                     }
                     TotalsView(totals:model.totals)
                 }
@@ -336,6 +142,7 @@ struct HealthView: View {
 
 struct ExplanationEvidence: View {
     @ObservedObject private var language = LanguageManager.shared
+    @Environment(\.unitYi) private var yi
     let explanation: ConsumptionExplanation
     var inspect: ((ChangeContribution)->Void)?
     var body: some View {
@@ -344,7 +151,7 @@ struct ExplanationEvidence: View {
             ForEach(["project","tool","model"],id:\.self) { dimension in
                 Text(["project":L10n.text("项目贡献"),"tool":L10n.text("Agent 贡献"),"model":L10n.text("模型贡献")][dimension]!).font(.subheadline.bold())
                 ForEach(Array(explanation.changes.filter{$0.dimension==dimension}.prefix(5))) { change in
-                    Button { inspect?(change) } label: { HStack { Text(change.name).lineLimit(1).truncationMode(.middle);Spacer();Text(String(format:"%+.0f Token",change.delta)).monospacedDigit();Image(systemName:"chevron.right") }.font(.caption) }.buttonStyle(.plain)
+                    Button { inspect?(change) } label: { HStack { Text(change.name).lineLimit(1).truncationMode(.middle);Spacer();Text(UIFormat.signedCompact(Int64(change.delta),yi:yi)+" Token").monospacedDigit();Image(systemName:"chevron.right") }.font(.caption) }.buttonStyle(.plain)
                 }
             }
         }

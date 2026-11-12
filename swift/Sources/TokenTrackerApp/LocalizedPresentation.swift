@@ -4,7 +4,7 @@ import TokenTrackerCore
 /// Adapts Core-owned display values without changing stored records or CLI output.
 extension UIFormat {
     static func explanation(_ value: ConsumptionExplanation) -> String {
-        L10n.text("与过去 14 天相同时刻比较，有效样本 \(value.samples) 天；中位数 \(Int64(value.baseline)) Token，今天 \(value.current) Token。高消耗不代表浪费。")
+        L10n.text("与过去 14 天相同时刻比较，有效样本 \(value.samples) 天；中位数 \(Int64(value.baseline).formatted(.number)) Token，今天 \(value.current.formatted(.number)) Token。高消耗不代表浪费。")
     }
 
     static func riskDetail(_ risk: RiskNotice) -> String {

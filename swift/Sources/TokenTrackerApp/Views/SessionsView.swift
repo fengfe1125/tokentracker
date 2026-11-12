@@ -2,7 +2,7 @@
 //  SessionsView.swift
 //  TokenTrackerApp
 //
-//  会话记录：固定顶栏（标题 + 搜索）+ 可排序表。
+//  会话记录：工具栏搜索 + 可排序表。
 //  详情走独立浮动面板（SessionDetailWindowController），不再挤占表格宽度。
 //
 
@@ -32,11 +32,10 @@ struct SessionsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            PanelHeader(title: title, subtitle: subtitle) { searchField }
-            tableView
-        }
-        .navigationTitle(title)
+        tableView
+            .pageChrome(title: title, subtitle: subtitle)
+            .searchable(text: $state.sessionSearch, placement: .toolbar,
+                        prompt: L10n.text("搜索标题 / 项目 / 会话 / 模型"))
         // 搜索防抖：refreshData 连带跑统计、detectAll 和配额（含官方 HTTP），
         // 每敲一个字符跑一次太重
         .task(id: state.sessionSearch) {
@@ -58,32 +57,6 @@ struct SessionsView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
         }
-    }
-
-    // ------------------------------------------------------------ 搜索 ----
-
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            TextField(L10n.text("搜索标题 / 项目 / 会话 / 模型"), text: $state.sessionSearch)
-                .textFieldStyle(.plain)
-                .frame(width: 210)
-            if !state.sessionSearch.isEmpty {
-                Button {
-                    state.sessionSearch = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 6))
     }
 
     // ------------------------------------------------------------ 表 ----
@@ -110,42 +83,43 @@ struct SessionsView: View {
                     }
                 }
             }
-            .width(min: 76, ideal: 84)
+            .width(min: 60, ideal: 64, max: 96)
             TableColumn(L10n.text("会话"), value: \.title) { row in
-                Text(row.title)
-                    .font(.callout)
-                    .lineLimit(1)
-            }
-            .width(min: 140, ideal: 240)
-            TableColumn(L10n.text("项目"), value: \.projectShort) { row in
-                Text(row.projectShort)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .help(row.project)
-            }
-            .width(min: 90, ideal: 150)
-            TableColumn(L10n.text("工具"), value: \.toolName) { row in
-                // 只给色点上色，文字保持 primary（整条 Label 染色在深色模式下读不清）
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(toolColor(row.tool))
-                        .frame(width: 7, height: 7)
-                    Text(row.toolName)
+                // 项目并入会话列的副行，表格不再需要横向滚动
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.title)
                         .font(.callout)
                         .lineLimit(1)
+                    Text(row.projectShort)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
                 }
+                .help(row.project.isEmpty ? row.title : "\(row.title)\n\(row.project)")
             }
-            .width(min: 84, ideal: 96)
-            TableColumn(L10n.text("模型"), value: \.model) { row in
-                Text(row.model)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+            .width(min: 120, ideal: 130)
+            TableColumn(L10n.text("工具"), value: \.toolName) { row in
+                // 只给色点上色，文字保持 primary（整条 Label 染色在深色模式下读不清）
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(toolColor(row.tool))
+                            .frame(width: 7, height: 7)
+                        Text(row.toolName)
+                            .font(.callout)
+                            .lineLimit(1)
+                    }
+                    Text(row.model.isEmpty ? "—" : row.model)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.leading, 13)
+                }
+                .help(row.model)
             }
-            .width(min: 90, ideal: 150)
+            .width(min: 100, ideal: 120, max: 220)
             TableColumn(L10n.text("活动"), value: \SessionRowModel.activityExact) { row in
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(L10n.text("\(row.activityExact) 次"))
@@ -158,20 +132,20 @@ struct SessionsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 76, ideal: 92)
+            .width(min: 50, ideal: 54, max: 80)
             TableColumn("Tokens", value: \SessionRowModel.tokens) { row in
                 Text(UIFormat.tokens(row.tokens, yi: yi))
                     .font(.callout.monospacedDigit())
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 78, ideal: 90)
+            .width(min: 58, ideal: 62, max: 96)
             TableColumn(L10n.text("成本"), value: \SessionRowModel.cost) { row in
                 Text(UIFormat.cost(row.cost))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 66, ideal: 76)
+            .width(min: 52, ideal: 56, max: 90)
         }
         .contextMenu(forSelectionType: String.self) { selection in
             if let id = selection.first, let row = rows.first(where: { $0.id == id }) {

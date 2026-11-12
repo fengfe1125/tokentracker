@@ -16,25 +16,31 @@ final class TrendChartTests: XCTestCase {
         XCTAssertGreaterThan(size.height, 0)
     }
 
-    func testSmoothTrendStaysBetweenAdjacentSamples() {
-        // A sharp peak followed by flat zero used to overshoot both the peak and baseline.
-        for values: [CGFloat] in [[15, 60, 65, 0, 0, 1], [0, 0, 100, 0, 0], [0, 20], [5, 5, 5]] {
-            let points = values.enumerated().map { CGPoint(x: CGFloat($0.offset) * 50, y: $0.element) }
-            var segment = 0
-            HandDrawnTrendChart.smoothPath(points).forEach { element in
-                guard case let .curve(to: end, control1: c1, control2: c2) = element else { return }
-                let start = points[segment]
-                XCTAssertEqual(end, points[segment + 1])
-                let low = min(start.y, end.y), high = max(start.y, end.y)
-                for sample in 0...100 {
-                    let t = CGFloat(sample) / 100, u = 1 - t
-                    let y = u*u*u*start.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*end.y
-                    XCTAssertGreaterThanOrEqual(y, low - 0.000001)
-                    XCTAssertLessThanOrEqual(y, high + 0.000001)
-                }
-                segment += 1
-            }
-            XCTAssertEqual(segment, points.count - 1)
+    func testAxisCeilingCoversMaximumAndSplitsIntoFourEvenTicks() {
+        for value in [0.0004, 0.9, 1, 37, 118_000_000, 126_400_000, 999, 1000] {
+            let top = TrendScale.niceCeiling(value)
+            XCTAssertGreaterThanOrEqual(top, value)
+            XCTAssertLessThanOrEqual(top, value * 1.6 + 1e-12, "\(value)")
+            XCTAssertEqual(TrendScale.ticks(top: top).count, 5)
+            XCTAssertEqual(TrendScale.ticks(top: top).last, top)
         }
+        XCTAssertEqual(TrendScale.niceCeiling(0), 1)
+        XCTAssertEqual(TrendScale.niceCeiling(118_000_000), 120_000_000)
+    }
+
+    func testAxisLabelsFollowLanguageAndUnitSetting() {
+        let previous = L10n.language
+        defer { L10n.setLanguage(previous) }
+        L10n.setLanguage("zh-Hans")
+        XCTAssertEqual(TrendScale.tokenLabel(120_000_000, yi: true), "1.2亿")
+        XCTAssertEqual(TrendScale.tokenLabel(90_000_000, yi: true), "9000万")
+        XCTAssertEqual(TrendScale.tokenLabel(90_000_000, yi: false), "90M")
+        XCTAssertEqual(TrendScale.tokenLabel(0, yi: true), "0")
+        L10n.setLanguage("en")
+        XCTAssertEqual(TrendScale.tokenLabel(120_000_000, yi: true), "120M")
+        XCTAssertEqual(TrendScale.tokenLabel(1_500, yi: false), "1.5K")
+        XCTAssertEqual(TrendScale.costLabel(0), "$0")
+        XCTAssertEqual(TrendScale.costLabel(0.3), "$0.3")
+        XCTAssertEqual(TrendScale.costLabel(300), "$300")
     }
 }

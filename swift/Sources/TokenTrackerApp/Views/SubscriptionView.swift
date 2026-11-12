@@ -4,19 +4,25 @@ struct SubscriptionView: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        VStack(spacing: 0) {
-            PanelHeader(title: L10n.text("订阅配额与余额"), subtitle: nil) {
-                if state.subscriptionRefreshing { ProgressView().controlSize(.small) }
-                Button(L10n.text("刷新")) { state.refreshQuotas(force: true) }
-                    .disabled(state.subscriptionRefreshing)
-            }
-            ScrollView {
-                SubscriptionSection(cards: state.subscriptionCards,
-                                    refreshing: state.subscriptionRefreshing, showsHeading: false)
-                    .padding(20)
-            }
+        ScrollView {
+            SubscriptionSection(cards: state.subscriptionCards,
+                                refreshing: state.subscriptionRefreshing, showsHeading: false,
+                                openAccountSettings: {
+                                    UserDefaults.standard.set(SettingsTab.accounts.rawValue,
+                                                              forKey: SettingsTab.storageKey)
+                                    state.selection = .settings
+                                })
+                .padding(Metrics.pagePadding)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(L10n.text("订阅配额与余额"))
+        .pageChrome(title: L10n.text("订阅配额与余额")) {
+            if state.subscriptionRefreshing { ProgressView().controlSize(.small) }
+            Button {
+                state.refreshQuotas(force: true)
+            } label: {
+                Label(L10n.text("刷新"), systemImage: "arrow.clockwise")
+            }
+            .disabled(state.subscriptionRefreshing)
+            .help(L10n.text("刷新"))
+        }
     }
 }

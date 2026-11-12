@@ -33,9 +33,6 @@ struct ActivityView: View, @MainActor Equatable {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: L10n.text("Agent 活动"), subtitle: L10n.text("工具与 Skill 使用 · 仅保存活动元数据")) {
-                filters
-            }
             List {
                 evidenceNotice
                     .activityListRow()
@@ -43,6 +40,36 @@ struct ActivityView: View, @MainActor Equatable {
                     .activityListRow()
                 skillCoverageCard
                     .activityListRow()
+                if hasNoActivity {
+                    ContentUnavailableView {
+                        Label(L10n.text("此范围暂无活动"), systemImage: "waveform.path.ecg")
+                    } description: {
+                        Text(L10n.text("换个时间范围或 Agent，或等下一次扫描。"))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 220)
+                    .card(padding: 14)
+                    .activityListRow(bottom: 12)
+                } else {
+                    activityBreakdown
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+        .pageChrome(title: L10n.text("Agent 活动"),
+                    subtitle: L10n.text("工具与 Skill 使用 · 仅保存活动元数据")) { filters }
+        .onChange(of: state.range) { _, _ in refresh() }
+        .onChange(of: state.agent) { _, _ in refresh() }
+        .onChange(of: state.confidence) { _, _ in refresh() }
+    }
+
+    /// 整个范围内没有任何工具、Skill 或时间线记录。
+    private var hasNoActivity: Bool {
+        snapshot.toolRows.isEmpty && snapshot.skillRows.isEmpty && snapshot.timelineRows.isEmpty
+    }
+
+    @ViewBuilder
+    private var activityBreakdown: some View {
                 HStack(alignment: .top, spacing: 12) {
                     rankingCard(title: L10n.text("工具榜"), rows: snapshot.toolRows, skill: false)
                     rankingCard(title: L10n.text("Skill 榜"), rows: snapshot.skillRows, skill: true)
@@ -63,14 +90,6 @@ struct ActivityView: View, @MainActor Equatable {
                                 bottom: event.srcKey == visibleTimelineRows.last?.srcKey ? 12 : 2)
                     }
                 }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-        }
-        .navigationTitle(L10n.text("Agent 活动"))
-        .onChange(of: state.range) { _, _ in refresh() }
-        .onChange(of: state.agent) { _, _ in refresh() }
-        .onChange(of: state.confidence) { _, _ in refresh() }
     }
 
     private var filters: some View {
@@ -119,10 +138,11 @@ struct ActivityView: View, @MainActor Equatable {
             }
         }
         .font(.caption)
-        .foregroundStyle(.orange)
+        .foregroundStyle(derivedCalls > 0 ? Color.orange : Color.secondary)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 9))
+        .background((derivedCalls > 0 ? Color.orange : Color.secondary).opacity(0.09),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private var metrics: some View {
@@ -137,23 +157,12 @@ struct ActivityView: View, @MainActor Equatable {
              .primary),
             (L10n.text("错误 / 拒绝"), "\(failures)", L10n.text("\(unknownResults) 次结果未知"), .red),
         ]
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        return HStack(alignment: .top, spacing: Metrics.gridSpacing) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, item in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.0).font(.caption).foregroundStyle(.secondary)
-                    Text(item.1)
-                        .font(.system(size: 25, weight: .semibold, design: .rounded))
-                        .foregroundStyle(item.3)
-                        .monospacedDigit()
-                    Text(item.2).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.background, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+                StatTile(title: item.0, value: item.1, caption: item.2, tint: item.3)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var skillCoverageCard: some View {
@@ -191,10 +200,7 @@ struct ActivityView: View, @MainActor Equatable {
                 }
             }
         }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+        .card(padding: 14)
     }
 
     private func rankingCard(title: String, rows: [UsageStore.ActivitySummaryRow], skill: Bool) -> some View {
@@ -227,11 +233,8 @@ struct ActivityView: View, @MainActor Equatable {
                 }
             }
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+        .card(padding: 14)
     }
 
     private var matrixCard: some View {
@@ -283,10 +286,7 @@ struct ActivityView: View, @MainActor Equatable {
                 }
             }
         }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+        .card(padding: 14)
     }
 
     private var timelineHeader: some View {
@@ -298,10 +298,7 @@ struct ActivityView: View, @MainActor Equatable {
             Button(L10n.text("打开完整详情")) { openDetail() }
                 .buttonStyle(.link).font(.caption)
         }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+        .card(padding: 14)
     }
 
     private var canonicalMatrix: [String: [String: Int64]] {

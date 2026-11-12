@@ -9,8 +9,24 @@ import Foundation
 import TokenTrackerCore
 
 enum UIFormat {
-    static func tokens(_ n: Int64, yi: Bool) -> String {
-        MenuBarFmt.fmtTokens(Double(n), yi: yi && !L10n.isEnglish)
+    static func tokens(_ n: Int64, yi: Bool) -> String { compact(n, yi: yi) }
+
+    /// 主面板的紧凑数：中文开启「亿」时按量级用 万 / 亿（200 万不再显示成 0.02亿），
+    /// 其余沿用 K / M / B。状态栏标题仍走 MenuBarFmt。
+    static func compact(_ n: Int64, yi: Bool) -> String {
+        guard yi, !L10n.isEnglish else { return MenuBarFmt.fmtTokens(Double(n), yi: false) }
+        let v = Double(max(n, 0))
+        if v >= 1e8 { return String(format: "%.2f亿", v / 1e8) }
+        if v >= 1e7 { return String(format: "%.0f万", v / 1e4) }
+        if v >= 1e4 { return String(format: "%.1f万", v / 1e4) }
+        return String(max(n, 0))
+    }
+
+    /// 占比：小于 0.1% 的非零值显示为 "<0.1%"，避免看成 0。
+    static func share(_ part: Int64, of total: Int64) -> String {
+        guard total > 0, part > 0 else { return "0%" }
+        let pct = Double(part) / Double(total) * 100
+        return pct < 0.1 ? "<0.1%" : String(format: "%.1f%%", pct)
     }
 
     /// $%.2f；≥1000 → $%.2fK
@@ -62,6 +78,18 @@ enum UIFormat {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         return fmt.string(from: Date())
+    }
+
+    /// 汇总费用：无记录显示 “—”，全部未计价显示「未计价」，否则两位小数。
+    static func costLabel(_ totals: UsageTotals) -> String {
+        if totals.records == 0 { return "—" }
+        if totals.unpriced == totals.records { return L10n.text("未计价") }
+        return cost(totals.cost)
+    }
+
+    /// 带正负号的紧凑 Token 变化量。
+    static func signedCompact(_ delta: Int64, yi: Bool) -> String {
+        (delta > 0 ? "+" : delta < 0 ? "−" : "") + compact(abs(delta), yi: yi)
     }
 
     static func percent(_ v: Double?) -> String {

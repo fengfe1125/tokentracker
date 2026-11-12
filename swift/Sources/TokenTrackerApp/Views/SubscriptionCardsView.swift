@@ -1,16 +1,29 @@
 import SwiftUI
 import TokenTrackerCore
 
-/// 「订阅配额与余额」：宽窗口两列、窄窗口一列；同一行卡片等高、顶部对齐，
-/// 高度随内容增长，文字不裁剪。
+/// 「订阅配额与余额」：有数据的账号排成卡片（宽窗口两列、窄窗口一列，同行等高），
+/// 读不到额度的账号收进一张「未能读取额度」列表。
 struct SubscriptionSection: View {
     @ObservedObject private var language = LanguageManager.shared
     let cards: [SubscriptionCard]
     let refreshing: Bool
     var showsHeading = true
+    /// 「去设置里处理账号」的入口；nil 时不显示按钮。
+    var openAccountSettings: (() -> Void)?
+
+    /// 读不到额度的账号（未登录 / 凭据失效 / 无权限 / 失败 / 不支持）单独成组，
+    /// 不再各占一张几乎空白的大卡片。加载中的仍留在卡片区。
+    private static func needsAttention(_ card: SubscriptionCard) -> Bool {
+        switch card.snapshot.status {
+        case .signedOut, .expired, .forbidden, .failed, .unsupported: return true
+        case .loading, .current, .stale: return false
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let healthy = cards.filter { !Self.needsAttention($0) }
+        let problems = cards.filter(Self.needsAttention)
+        return VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
             if showsHeading {
                 HStack(spacing: 8) {
                     Text(L10n.text("订阅配额与余额")).font(.headline)
@@ -18,17 +31,83 @@ struct SubscriptionSection: View {
                 }
             }
             if cards.isEmpty {
-                Text(L10n.text("未发现本机订阅账号"))
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-            } else {
-                EqualHeightRows(minColumnWidth: 300, maxColumns: 2, spacing: 12) {
-                    ForEach(cards) { card in
-                        SubscriptionCardView(card: card)
+                ContentUnavailableView {
+                    Label(L10n.text("未发现本机订阅账号"), systemImage: "creditcard")
+                } description: {
+                    Text(L10n.text("在设置的「账号」里登录或添加 API Key 后，这里会显示官方配额与余额。"))
+                } actions: {
+                    if let openAccountSettings {
+                        Button(L10n.text("前往设置")) { openAccountSettings() }
                     }
+                }
+                .frame(maxWidth: .infinity, minHeight: 240)
+            } else {
+                if !healthy.isEmpty {
+                    EqualHeightRows(minColumnWidth: 300, maxColumns: 2, spacing: 12) {
+                        ForEach(healthy) { card in
+                            SubscriptionCardView(card: card)
+                        }
+                    }
+                }
+                if !problems.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        CardHeader(title: L10n.text("未能读取额度")) {
+                            Text("\(problems.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            if let openAccountSettings {
+                                Button(L10n.text("前往设置")) { openAccountSettings() }
+                                    .controlSize(.small)
+                            }
+                        }
+                        .padding(.bottom, 6)
+                        ForEach(Array(problems.enumerated()), id: \.element.id) { index, card in
+                            if index > 0 { Divider() }
+                            SubscriptionProblemRow(card: card)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card()
                 }
             }
         }
+    }
+}
+
+/// 读不到额度的账号：一行说明原因和来源。
+private struct SubscriptionProblemRow: View {
+    let card: SubscriptionCard
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(card.account.provider.displayName)
+                        .font(.callout.weight(.semibold))
+                    Text(SubscriptionText.account(card.account))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if card.account.isActive {
+                        Text(L10n.text("当前登录")).font(.caption2).foregroundStyle(.blue)
+                    }
+                }
+                if let message = SubscriptionText.problem(card.snapshot) {
+                    Text(message)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(SubscriptionText.sources(card.account.sources))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            StatusBadge(status: card.snapshot.status)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -105,11 +184,8 @@ struct SubscriptionCardView: View {
             Spacer(minLength: 0)
             footer
         }
-        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .card(padding: 14)
         .accessibilityElement(children: .combine)
     }
 

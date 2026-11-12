@@ -23,12 +23,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
             let hosting = NSHostingController(rootView: RootView(state: appState).appLanguage())
+            // 页面的 navigationTitle / toolbar 桥接到窗口：标题只出现一次，操作进统一工具栏
+            hosting.sceneBridgingOptions = [.title, .toolbars]
             let window = NSWindow(contentViewController: hosting)
             window.title = "TokenTracker"
             let narrow = ProcessInfo.processInfo.environment["TT_UI_PREVIEW_NARROW"] == "1"
-            window.setContentSize(NSSize(width: narrow ? 820 : 960, height: narrow ? 520 : 640))
+            window.setContentSize(NSSize(width: narrow ? 820 : 1080, height: narrow ? 520 : 720))
             window.minSize = NSSize(width: 820, height: 520)
-            window.styleMask.formUnion([.miniaturizable, .resizable])
+            window.styleMask.formUnion([.miniaturizable, .resizable, .fullSizeContentView])
+            window.toolbarStyle = .unified
             window.isReleasedWhenClosed = false     // 关闭只隐藏
             window.isRestorable = false             // 启动显示由 AppLaunchPolicy 管理
             window.delegate = self

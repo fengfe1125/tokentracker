@@ -39,9 +39,7 @@ struct UsageHeatmapView: View {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 150)
             }
         }
-        .padding(16)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .card()
         .onAppear { if model.chart == nil { model.refresh() } }
     }
 

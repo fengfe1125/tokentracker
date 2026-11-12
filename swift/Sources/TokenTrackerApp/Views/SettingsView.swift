@@ -13,8 +13,25 @@ import ServiceManagement
 import SwiftUI
 import TokenTrackerCore
 
+/// 设置分类；rawValue 同时是持久化键（其他页面可据此直接跳到某一类）。
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general, interface, accounts, reminders, data
+    static let storageKey = "tt.settings.tab"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .general: L10n.text("通用")
+        case .interface: L10n.text("界面")
+        case .accounts: L10n.text("账号")
+        case .reminders: L10n.text("提醒")
+        case .data: L10n.text("数据")
+        }
+    }
+}
+
 struct SettingsPanelView: View {
     @ObservedObject private var language = LanguageManager.shared
+    @AppStorage(SettingsTab.storageKey) private var tab = SettingsTab.general
     @ObservedObject private var notch = NotchHUDPreferences.shared
     @ObservedObject var state: AppState
     @StateObject private var updater = UpdaterModel()
@@ -40,133 +57,147 @@ struct SettingsPanelView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            PanelHeader(title: L10n.text("设置"))
-            form
-        }
-        .navigationTitle(L10n.text("设置"))
+        form
+            .navigationTitle(L10n.text("设置"))
+            .navigationSubtitle(tab.title)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker(L10n.text("设置"), selection: $tab) {
+                        ForEach(SettingsTab.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
     }
 
     private var form: some View {
         Form {
-            Section(L10n.text("状态栏")) {
-                Picker(L10n.text("标题显示"), selection: Binding(
-                    get: { provider },
-                    set: { state.updateSetting(key: "menubar_provider", value: $0) }
-                )) {
-                    ForEach(state.quotaEntries, id: \.id) { entry in
-                        LocalizedText("今日用量 + \(entry.name)").tag(entry.id)
+            switch tab {
+            case .general:
+                Section(L10n.text("通用")) {
+                    Picker(L10n.text("语言 / Language"), selection: $language.selection) {
+                        Text(L10n.text("跟随系统")).tag(AppLanguage.system)
+                        Text("简体中文").tag(AppLanguage.simplifiedChinese)
+                        Text("English").tag(AppLanguage.english)
                     }
-                    Text(L10n.text("仅今日用量")).tag("off")
-                    Text(L10n.text("仅显示 Token 数字")).tag("tokens")
-                }
-                Toggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
-                    .disabled(provider == "tokens")
-                Toggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
-                Toggle(L10n.text("大数以「亿」显示"), isOn: binding("unit_yi"))
-                    .disabled(L10n.isEnglish)
-                Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
-            }
-            SidebarSettingsSection()
-            SubscriptionAccountsSection(state: state)
-            Section(L10n.text("刘海圆环")) {
-                Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
-                Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
-                    ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
-                }
-                Text(L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。"))
-                    .font(.caption).foregroundStyle(.secondary)
-                Text(L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。"))
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(notchProviders, id: \.id) { entry in
-                    Toggle(entry.name, isOn: Binding(
-                        get: { notch.providers.contains(entry.id) },
-                        set: { notch.setProvider(entry.id, visible: $0) }
-                    ))
-                    .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
-                }
-            }
-            TaskReminderSettings()
-            Section(L10n.text("通用")) {
-                Picker(L10n.text("语言 / Language"), selection: $language.selection) {
-                    Text(L10n.text("跟随系统")).tag(AppLanguage.system)
-                    Text("简体中文").tag(AppLanguage.simplifiedChinese)
-                    Text("English").tag(AppLanguage.english)
-                }
 
-                Toggle(L10n.text("开机自动启动"), isOn: Binding(
-                    get: { (state.settings["launch_at_login"] as? NSNumber)?.boolValue ?? false },
-                    set: { on in
-                        state.updateSetting(key: "launch_at_login", value: on)
-                        applyLoginItem(on)
+                    Toggle(L10n.text("开机自动启动"), isOn: Binding(
+                        get: { (state.settings["launch_at_login"] as? NSNumber)?.boolValue ?? false },
+                        set: { on in
+                            state.updateSetting(key: "launch_at_login", value: on)
+                            applyLoginItem(on)
+                        }
+                    ))
+                    Picker(L10n.text("终端 App（继续会话用）"), selection: Binding(
+                        get: { state.settings["terminal_app"] as? String ?? "auto" },
+                        set: { state.updateSetting(key: "terminal_app", value: $0) }
+                    )) {
+                        Text(L10n.text("自动检测")).tag("auto")
+                        Text("Terminal").tag("terminal")
+                        Text("iTerm2").tag("iterm")
+                        Text("WezTerm").tag("wezterm")
+                        Text("Ghostty").tag("ghostty")
                     }
-                ))
-                Picker(L10n.text("终端 App（继续会话用）"), selection: Binding(
-                    get: { state.settings["terminal_app"] as? String ?? "auto" },
-                    set: { state.updateSetting(key: "terminal_app", value: $0) }
-                )) {
-                    Text(L10n.text("自动检测")).tag("auto")
-                    Text("Terminal").tag("terminal")
-                    Text("iTerm2").tag("iterm")
-                    Text("WezTerm").tag("wezterm")
-                    Text("Ghostty").tag("ghostty")
                 }
-            }
-            if state.detectInfo["codex"]?.installed == true {
-                codexAccountSection
-            }
-            Section(L10n.text("数据")) {
-                Button(L10n.text("在 Finder 中打开本地数据目录")) {
-                    let path = NSHomeDirectory() + "/.tokentracker"
-                    try? FileManager.default.createDirectory(atPath: path,
-                                                             withIntermediateDirectories: true)
-                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                Section(L10n.text("关于")) {
+                    HStack {
+                        Text("TokenTracker")
+                        Spacer()
+                        Text("v\(TokenTrackerCore.version)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Link(L10n.text("作者主页"), destination: URL(string: "https://sakuramu.edu.kg/")!)
+                    updateRow
                 }
-                Text(L10n.text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section(L10n.text("价格估算")) {
-                Toggle(L10n.text("自动同步官方价格"), isOn: binding("price_sync_enabled"))
-                Text(L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Text(priceSyncStatusText)
+            case .interface:
+                Section(L10n.text("状态栏")) {
+                    Picker(L10n.text("标题显示"), selection: Binding(
+                        get: { provider },
+                        set: { state.updateSetting(key: "menubar_provider", value: $0) }
+                    )) {
+                        ForEach(state.quotaEntries, id: \.id) { entry in
+                            LocalizedText("今日用量 + \(entry.name)").tag(entry.id)
+                        }
+                        Text(L10n.text("仅今日用量")).tag("off")
+                        Text(L10n.text("仅显示 Token 数字")).tag("tokens")
+                    }
+                    Toggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
+                        .disabled(provider == "tokens")
+                    Toggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
+                    Toggle(L10n.text("大数以「亿」显示"), isOn: binding("unit_yi"))
+                        .disabled(L10n.isEnglish)
+                    Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
+                }
+                SidebarSettingsSection()
+                Section(L10n.text("刘海圆环")) {
+                    Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
+                    Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
+                        ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
+                    Text(L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(notchProviders, id: \.id) { entry in
+                        Toggle(entry.name, isOn: Binding(
+                            get: { notch.providers.contains(entry.id) },
+                            set: { notch.setProvider(entry.id, visible: $0) }
+                        ))
+                        .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
+                    }
+                }
+            case .accounts:
+                SubscriptionAccountsSection(state: state)
+                if state.detectInfo["codex"]?.installed == true {
+                    codexAccountSection
+                }
+            case .reminders:
+                TaskReminderSettings()
+            case .data:
+                Section(L10n.text("数据")) {
+                    Button(L10n.text("在 Finder 中打开本地数据目录")) {
+                        let path = NSHomeDirectory() + "/.tokentracker"
+                        try? FileManager.default.createDirectory(atPath: path,
+                                                                 withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                    }
+                    Text(L10n.text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(L10n.text("立即同步")) { state.syncPricesNow() }
-                        .disabled(state.priceSyncRunning)
-                    if state.priceSyncRunning { ProgressView().controlSize(.small) }
                 }
-                if state.priceSyncLastSuccessAtMs > 0 {
-                    let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
-                    Text(L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(L10n.text("上次成功同步：从未"))
+                Section(L10n.text("价格估算")) {
+                    Toggle(L10n.text("自动同步官方价格"), isOn: binding("price_sync_enabled"))
+                    Text(L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text(priceSyncStatusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(L10n.text("立即同步")) { state.syncPricesNow() }
+                            .disabled(state.priceSyncRunning)
+                        if state.priceSyncRunning { ProgressView().controlSize(.small) }
+                    }
+                    if state.priceSyncLastSuccessAtMs > 0 {
+                        let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
+                        Text(L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(L10n.text("上次成功同步：从未"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !state.priceSyncMessage.isEmpty {
+                        Text(state.priceSyncMessage)
+                            .font(.caption)
+                            .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
+                            .lineLimit(3)
+                    }
                 }
-                if !state.priceSyncMessage.isEmpty {
-                    Text(state.priceSyncMessage)
-                        .font(.caption)
-                        .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
-                        .lineLimit(3)
-                }
-            }
-            publishSection
-            Section(L10n.text("关于")) {
-                HStack {
-                    Text("TokenTracker")
-                    Spacer()
-                    Text("v\(TokenTrackerCore.version)")
-                        .foregroundStyle(.secondary)
-                }
-                Link(L10n.text("作者主页"), destination: URL(string: "https://sakuramu.edu.kg/")!)
-                updateRow
+                publishSection
             }
         }
         // .grouped 自带内边距，外面不再叠 .padding()（此前是双份）
