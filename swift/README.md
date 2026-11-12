@@ -19,11 +19,18 @@ Sources/
     Settings/      settings.json 读写
     Store/         SQLite schema、迁移、聚合和查询
     Subscriptions/ 自有登录与 API Key 账号库、订阅配额与余额只读查询
-  TokenTrackerApp/ 状态栏、主窗口、详情窗口、设置和应用内更新
+  TokenTrackerApp/ 状态栏与速览面板、主窗口、设置和应用内更新
   tt-swift/        detect、scan、stats、activity、quotas、subscriptions
 Tests/
   TokenTrackerCoreTests/
 ```
+
+## 界面结构
+
+- 状态栏图标：左键弹出速览面板（今日用量、配额、各 Agent、最近会话），右键弹出文字菜单。
+- 主窗口五个入口：概览、用量（项目 / 会话 / 模型）、活动、报告、账号；设置固定在侧栏底部。
+- 时间范围与 Agent 筛选是一份全局范围，概览、用量、活动共用。
+- 会话详情与活动明细在主窗口内下钻；数据健康和上传记录是附着在主窗口上的面板。
 
 ## 构建和测试
 

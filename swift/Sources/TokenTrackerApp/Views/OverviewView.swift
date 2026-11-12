@@ -2,7 +2,7 @@
 //  OverviewView.swift
 //  TokenTrackerApp
 //
-//  概览：指标行（Tokens / 费用 / 记录数 / 缓存命中率）→ Token 构成条 →
+//  概览：配额条（各账号最紧的窗口）→ 指标行（Tokens / 费用 / 记录数 / 缓存命中率）→ Token 构成条 →
 //  使用趋势 → Agent 与模型分布 → 用量热力图 → 数据与风险。
 //  时间范围与扫描在窗口工具栏。数据对齐 UsageStore.stats/daily。
 //
@@ -23,6 +23,7 @@ struct OverviewView: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                quotaStrip
                 statRow
                 compositionCard
                 trendCard
@@ -94,6 +95,60 @@ struct OverviewView: View {
 
     private var rangeLabel: String {
         ["day": L10n.text("今天"), "week": L10n.text("近 7 天"), "month": L10n.text("本月"), "all": L10n.text("全部")][state.range] ?? state.range
+    }
+
+    // -------------------------------------------------------- 配额条 ----
+
+    /// 有官方数据的账号；配额不随时间范围和 Agent 筛选变化。
+    private var quotaCards: [SubscriptionCard] {
+        state.subscriptionCards.filter {
+            ($0.snapshot.status == .current || $0.snapshot.status == .stale)
+                && !($0.snapshot.windows.isEmpty && $0.snapshot.balances.isEmpty)
+        }
+    }
+
+    private var unreadableAccounts: Int {
+        state.subscriptionCards.filter {
+            switch $0.snapshot.status {
+            case .signedOut, .expired, .forbidden, .failed: return true
+            case .loading, .current, .stale, .unsupported: return false
+            }
+        }.count
+    }
+
+    @ViewBuilder
+    private var quotaStrip: some View {
+        let cards = quotaCards
+        if !cards.isEmpty || unreadableAccounts > 0 {
+            VStack(alignment: .leading, spacing: 10) {
+                CardHeader(title: L10n.text("配额")) {
+                    if unreadableAccounts > 0 {
+                        Label(L10n.text("\(unreadableAccounts) 个账号未能读取额度"),
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Button { state.selection = .accounts } label: {
+                        HStack(spacing: 3) {
+                            Text(L10n.text("账号"))
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.link)
+                }
+                if !cards.isEmpty {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: Metrics.gridSpacing)],
+                              alignment: .leading, spacing: Metrics.gridSpacing) {
+                        ForEach(cards.prefix(6)) { card in
+                            QuotaChip(card: card)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card()
+        }
     }
 
     // -------------------------------------------------------- 指标行 ----
@@ -315,6 +370,71 @@ struct OverviewView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 60)
+    }
+}
+
+/// 概览配额条里的一个账号：圆环（最紧窗口）+ 账号 + 窗口与重置时间，或余额。
+private struct QuotaChip: View {
+    let card: SubscriptionCard
+
+    private var tightest: SubscriptionWindow? {
+        card.snapshot.windows.filter { $0.usedPercent != nil }
+            .max { ($0.usedPercent ?? 0) < ($1.usedPercent ?? 0) }
+    }
+
+    var body: some View {
+        let stale = card.snapshot.status == .stale
+        HStack(spacing: 10) {
+            if let tightest {
+                RingView(pct: tightest.usedPercent, role: MenuBarFmt.quotaUrgency(tightest.usedPercent),
+                         hasData: true)
+                    .frame(width: 36, height: 36)
+                    .opacity(stale ? 0.6 : 1)
+            } else {
+                Image(systemName: "creditcard")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(card.account.provider.displayName)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    if stale {
+                        Text(SubscriptionText.status(.stale))
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if let tightest {
+                    Text(SubscriptionText.window(tightest) + " · "
+                         + L10n.text("已用 \(L10n.Template(verbatim: SubscriptionText.percent(tightest.usedPercent ?? 0)))"))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let reset = tightest.resetsAt {
+                        Text(L10n.text("\(L10n.Template(verbatim: SubscriptionText.time(reset, relative: true))) 重置"))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                } else if let balance = card.snapshot.balances.first {
+                    Text(SubscriptionText.money(balance.total, currency: balance.currency))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(SubscriptionText.account(card.account))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .help(SubscriptionText.account(card.account))
+        .accessibilityElement(children: .combine)
     }
 }
 
