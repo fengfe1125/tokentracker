@@ -23,9 +23,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
             let hosting = NSHostingController(rootView: RootView(state: appState).appLanguage())
-            // 页面的 navigationTitle / toolbar 桥接到窗口：标题只出现一次，操作进统一工具栏
+            // 页面的 navigationTitle / toolbar 桥接到窗口；标题只用于调度中心和辅助功能，顶栏里不显示
             hosting.sceneBridgingOptions = [.title, .toolbars]
-            let window = NSWindow(contentViewController: hosting)
+            let window = TitlelessWindow(contentViewController: hosting)
             window.title = "TokenTracker"
             let narrow = ProcessInfo.processInfo.environment["TT_UI_PREVIEW_NARROW"] == "1"
             window.setContentSize(NSSize(width: narrow ? 820 : 1080, height: narrow ? 520 : 720))
@@ -65,5 +65,14 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         hide()
         return false
+    }
+}
+
+/// 顶栏中间是导航标签，标题文字不画出来。SwiftUI 的标题桥接会反复把可见性改回去，
+/// 所以在窗口这一层固定为隐藏；标题本身仍然保留（调度中心、辅助功能要用）。
+private final class TitlelessWindow: NSWindow {
+    override var titleVisibility: NSWindow.TitleVisibility {
+        get { .hidden }
+        set { super.titleVisibility = .hidden }
     }
 }

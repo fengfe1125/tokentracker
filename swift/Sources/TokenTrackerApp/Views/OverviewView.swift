@@ -18,26 +18,34 @@ struct OverviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
+            VStack(alignment: .leading, spacing: Metrics.gridSpacing) {
                 if let error = state.dataError {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                quotaStrip
-                statRow
-                compositionCard
-                trendCard
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                        agentCard.frame(minWidth: 300)
-                        modelCard.frame(minWidth: 300)
+                    HStack(alignment: .top, spacing: Metrics.gridSpacing) {
+                        heroCard.frame(minWidth: 480)
+                        quotaCard.frame(width: 300)
                     }
-                    VStack(spacing: Metrics.sectionSpacing) {
+                    VStack(spacing: Metrics.gridSpacing) {
+                        heroCard
+                        quotaCard
+                    }
+                }
+                UsageHeatmapView(model: state.heatmap, yi: yi)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: Metrics.gridSpacing) {
+                        compositionCard.frame(minWidth: 250)
+                        agentCard.frame(minWidth: 250)
+                        modelCard.frame(minWidth: 250)
+                    }
+                    VStack(spacing: Metrics.gridSpacing) {
+                        compositionCard
                         agentCard
                         modelCard
                     }
                 }
-                UsageHeatmapView(model: state.heatmap, yi: yi)
                 InsightsOverview(model: state.insights, rescan: { state.requestScan() })
             }
             .padding(Metrics.pagePadding)
@@ -56,42 +64,9 @@ struct OverviewView: View {
             }
         }
         .navigationTitle(L10n.text("用量概览"))
-        .navigationSubtitle(updatedText ?? "")
-        .toolbar {
-            ScopeToolbar(state: state)
-            ToolbarItem(placement: .primaryAction) {
-                // 点按立即扫描，展开选择自动刷新间隔
-                Menu {
-                    Picker(L10n.text("刷新间隔"), selection: intervalSelection) {
-                        Text("30s").tag(30)
-                        Text(L10n.text("1分钟")).tag(60)
-                        Text(L10n.text("5分钟")).tag(300)
-                        Text(L10n.text("10分钟")).tag(600)
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Label(state.scanning ? L10n.text("扫描中…") : L10n.text("扫描"),
-                          systemImage: "arrow.clockwise")
-                } primaryAction: {
-                    state.requestScan()
-                }
-                .disabled(state.scanning)
-                .help(L10n.text("立即扫描"))
-            }
-        }
     }
 
-    private var updatedText: String? {
-        state.updatedAt.map {
-            L10n.text("更新于 ") + UIFormat.dateTime(ms: Int64($0.timeIntervalSince1970 * 1000))
-        }
-    }
 
-    /// 自动刷新间隔：读写设置键 scan_interval
-    private var intervalSelection: Binding<Int> {
-        Binding(get: { state.scanIntervalSeconds },
-                set: { state.updateSetting(key: "scan_interval", value: $0) })
-    }
 
     private var rangeLabel: String {
         ["day": L10n.text("今天"), "week": L10n.text("近 7 天"), "month": L10n.text("本月"), "all": L10n.text("全部")][state.range] ?? state.range
@@ -116,63 +91,108 @@ struct OverviewView: View {
         }.count
     }
 
-    @ViewBuilder
-    private var quotaStrip: some View {
+    /// 右侧配额列表：每个账号一行，点一行去账号页看这个账号。
+    private var quotaCard: some View {
         let cards = quotaCards
-        if !cards.isEmpty || unreadableAccounts > 0 {
-            VStack(alignment: .leading, spacing: 10) {
-                CardHeader(title: L10n.text("配额")) {
-                    if unreadableAccounts > 0 {
-                        Label(L10n.text("\(unreadableAccounts) 个账号未能读取额度"),
-                              systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+        return VStack(alignment: .leading, spacing: 4) {
+            CardHeader(title: L10n.text("配额")) {
+                Button { state.selection = .accounts } label: {
+                    HStack(spacing: 3) {
+                        Text(L10n.text("账号"))
+                        Image(systemName: "chevron.right").font(.caption2)
                     }
-                    Button { state.selection = .accounts } label: {
-                        HStack(spacing: 3) {
-                            Text(L10n.text("账号"))
-                            Image(systemName: "chevron.right").font(.caption2)
-                        }
-                        .font(.caption)
-                    }
-                    .buttonStyle(.link)
+                    .font(.caption)
                 }
-                if !cards.isEmpty {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: Metrics.gridSpacing)],
-                              alignment: .leading, spacing: Metrics.gridSpacing) {
-                        ForEach(cards.prefix(6)) { card in
-                            QuotaChip(card: card)
-                        }
-                    }
-                }
+                .buttonStyle(.link)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .card()
+            .padding(.bottom, 4)
+            if cards.isEmpty && unreadableAccounts == 0 {
+                Text(L10n.text("登录或添加 API Key 后，这里会显示官方配额与余额。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(cards.prefix(6)) { card in
+                Button {
+                    state.accountFocus = card.id
+                    state.selection = .accounts
+                } label: {
+                    QuotaRow(card: card)
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 6)
+                        .hoverHighlight()
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, -6)
+            }
+            if unreadableAccounts > 0 {
+                Button { state.selection = .accounts } label: {
+                    Pill(text: L10n.text("\(unreadableAccounts) 个账号未能读取额度"), tint: .orange)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 
-    // -------------------------------------------------------- 指标行 ----
+    // -------------------------------------------------------- 首屏大数字 ----
 
-    private var statRow: some View {
+    private var scopeLabel: String {
+        var parts = [L10n.text("真实消耗 Tokens"), rangeLabel]
+        if let agent = state.agentFilter { parts.append(toolDisplayName(agent)) }
+        return parts.joined(separator: " · ")
+    }
+
+    private var heroCard: some View {
         let total = state.statTotal
         let unpriced = total.events > 0 && total.unpriced == total.events
-        return HStack(alignment: .top, spacing: Metrics.gridSpacing) {
-            StatTile(title: L10n.text("真实消耗 Tokens"),
-                     value: UIFormat.compact(total.tokens, yi: yi),
-                     caption: total.tokens.formatted(.number))
-            StatTile(title: L10n.text("费用合计"),
-                     value: unpriced ? L10n.text("未计价") : UIFormat.cost(total.cost),
-                     caption: L10n.text("含估算，非订阅账单"))
-            StatTile(title: L10n.text("用量记录数"),
-                     value: total.events.formatted(.number),
-                     caption: L10n.text("\(total.sessions) 个会话"))
-            StatTile(title: L10n.text("缓存命中率"),
-                     value: UIFormat.percent(total.cacheHitRate)) {
-                MeterBar(fraction: (total.cacheHitRate ?? 0) / 100)
-                    .padding(.top, 5)
+        let points = trendPoints
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scopeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Text(UIFormat.compact(total.tokens, yi: yi))
+                    .font(.system(size: 44, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .help(total.tokens.formatted(.number))
+            }
+            HStack(alignment: .top, spacing: 26) {
+                kpi(L10n.text("费用合计"), unpriced ? L10n.text("未计价") : UIFormat.cost(total.cost),
+                    help: L10n.text("含估算，非订阅账单"))
+                kpi(L10n.text("用量记录数"), total.events.formatted(.number))
+                kpi(L10n.text("会话"), total.sessions.formatted(.number))
+                kpi(L10n.text("缓存命中率"), UIFormat.percent(total.cacheHitRate))
+                Spacer(minLength: 0)
+                trendLegend
+            }
+            if points.isEmpty {
+                ContentUnavailableView(L10n.text("暂无数据"), systemImage: "chart.bar.xaxis",
+                                       description: Text(L10n.text("点右上角「扫描」")))
+                    .frame(height: 200)
+            } else {
+                TrendChart(points: points, isHourly: state.range == "day", yi: yi)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .animation(.snappy(duration: 0.35), value: total.tokens)
+    }
+
+    private func kpi(_ title: String, _ value: String, help: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .lineLimit(1)
+        }
+        .help(help ?? "")
+        .accessibilityElement(children: .combine)
     }
 
     // ------------------------------------------------------ Token 构成 ----
@@ -213,7 +233,8 @@ struct OverviewView: View {
                 .clipShape(Capsule())
             }
             .frame(height: 10)
-            HStack(alignment: .top, spacing: Metrics.gridSpacing) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading,
+                      spacing: Metrics.gridSpacing) {
                 ForEach(TokenKind.allCases) { kind in
                     let value = tokens(kind, in: total)
                     VStack(alignment: .leading, spacing: 3) {
@@ -233,6 +254,7 @@ struct OverviewView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .card()
     }
 
@@ -260,21 +282,6 @@ struct OverviewView: View {
                        cacheRead: acc[$0]!.cr, cacheWrite: acc[$0]!.cw,
                        cost: acc[$0]!.c)
         }
-    }
-
-    private var trendCard: some View {
-        let points = trendPoints
-        return VStack(alignment: .leading, spacing: 12) {
-            CardHeader(title: L10n.text("使用趋势")) { trendLegend }
-            if points.isEmpty {
-                ContentUnavailableView(L10n.text("暂无数据"), systemImage: "chart.bar.xaxis",
-                                       description: Text(L10n.text("点右上角「扫描」")))
-                    .frame(height: 220)
-            } else {
-                TrendChart(points: points, isHourly: state.range == "day", yi: yi)
-            }
-        }
-        .card()
     }
 
     private var trendLegend: some View {
@@ -373,8 +380,8 @@ struct OverviewView: View {
     }
 }
 
-/// 概览配额条里的一个账号：圆环（最紧窗口）+ 账号 + 窗口与重置时间，或余额。
-private struct QuotaChip: View {
+/// 概览配额列表里的一个账号：名称 + 最紧窗口的占用条与重置时间，或余额。
+private struct QuotaRow: View {
     let card: SubscriptionCard
 
     private var tightest: SubscriptionWindow? {
@@ -384,55 +391,35 @@ private struct QuotaChip: View {
 
     var body: some View {
         let stale = card.snapshot.status == .stale
-        HStack(spacing: 10) {
-            if let tightest {
-                RingView(pct: tightest.usedPercent, role: MenuBarFmt.quotaUrgency(tightest.usedPercent),
-                         hasData: true)
-                    .frame(width: 36, height: 36)
-                    .opacity(stale ? 0.6 : 1)
-            } else {
-                Image(systemName: "creditcard")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(card.account.provider.displayName)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    if stale {
-                        Text(SubscriptionText.status(.stale))
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(providerColor(card.account.provider)).frame(width: 7, height: 7)
+                Text(card.account.provider.displayName).font(.callout.weight(.medium)).lineLimit(1)
+                if stale {
+                    Text(SubscriptionText.status(.stale)).font(.caption2).foregroundStyle(.orange)
                 }
+                Spacer(minLength: 6)
                 if let tightest {
-                    Text(SubscriptionText.window(tightest) + " · "
-                         + L10n.text("已用 \(L10n.Template(verbatim: SubscriptionText.percent(tightest.usedPercent ?? 0)))"))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if let reset = tightest.resetsAt {
-                        Text(L10n.text("\(L10n.Template(verbatim: SubscriptionText.time(reset, relative: true))) 重置"))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+                    Text(SubscriptionText.percent(tightest.usedPercent ?? 0))
+                        .font(.callout.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(quotaColor(tightest.usedPercent))
                 } else if let balance = card.snapshot.balances.first {
                     Text(SubscriptionText.money(balance.total, currency: balance.currency))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(SubscriptionText.account(card.account))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .font(.callout.monospacedDigit().weight(.semibold))
                 }
             }
-            Spacer(minLength: 0)
+            if let tightest {
+                MeterBar(fraction: (tightest.usedPercent ?? 0) / 100,
+                         tint: quotaColor(tightest.usedPercent).opacity(stale ? 0.5 : 1), height: 4)
+                Text(SubscriptionText.window(tightest)
+                     + (tightest.resetsAt.map { " · " + L10n.text("\(L10n.Template(verbatim: SubscriptionText.time($0, relative: true))) 重置") } ?? ""))
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            } else {
+                Text(SubscriptionText.account(card.account))
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
         }
-        .padding(8)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .contentShape(Rectangle())
         .help(SubscriptionText.account(card.account))
         .accessibilityElement(children: .combine)
     }

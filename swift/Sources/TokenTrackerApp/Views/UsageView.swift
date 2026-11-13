@@ -2,7 +2,7 @@
 //  UsageView.swift
 //  TokenTrackerApp
 //
-//  用量：同一份范围下按 项目 / 会话 / 模型 三个角度看，标签在工具栏中间切换。
+//  用量：同一份范围下按 项目 / 会话 / 模型 三个角度看，标签在范围栏最前面切换（RootView）。
 //
 
 import SwiftUI
@@ -22,18 +22,6 @@ struct UsageView: View {
             case .models:
                 ModelsView(state: state)
             }
-        }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker(L10n.text("用量"), selection: $state.usageTab) {
-                    Text(L10n.text("项目")).tag(UsageTab.projects)
-                    Text(L10n.text("会话")).tag(UsageTab.sessions)
-                    Text(L10n.text("模型")).tag(UsageTab.models)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-            ScopeToolbar(state: state, compact: true)
         }
     }
 }

@@ -41,6 +41,12 @@ struct AppPreferences {
     var publishEndpoint: String { string("publish_endpoint", "") }
     var publishHandle: String { string("publish_handle", "") }
     var publishDays: Int { int("publish_days", 365) }
+    /// 状态栏面板里显示的端口
+    var menubarPorts: [Int] {
+        ((values["menubar_ports"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }.sorted()
+    }
+    /// 手动填写的启动命令：项目目录 → 命令
+    var projectCommands: [String: String] { values["project_commands"] as? [String: String] ?? [:] }
 }
 
 extension AppState {

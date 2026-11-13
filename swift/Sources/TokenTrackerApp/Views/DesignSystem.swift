@@ -9,12 +9,13 @@
 
 import AppKit
 import SwiftUI
+import TokenTrackerCore
 
 enum Metrics {
     static let pagePadding: CGFloat = 20
     static let sectionSpacing: CGFloat = 16
     static let gridSpacing: CGFloat = 12
-    static let cardRadius: CGFloat = 12
+    static let cardRadius: CGFloat = 16
     static let cardPadding: CGFloat = 16
 }
 
@@ -25,6 +26,14 @@ extension Color {
             ? NSColor(white: 1, alpha: 0.06) : .white
     })
     static let cardBorder = Color.primary.opacity(0.07)
+    /// 卡片内的下沉面板、输入底色
+    static let sunkSurface = Color.primary.opacity(0.05)
+    /// 强调色：导航选中、主按钮、图表主色
+    static let brand = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.66, green: 0.55, blue: 1.0, alpha: 1)
+            : NSColor(red: 0.48, green: 0.31, blue: 0.88, alpha: 1)
+    })
     static let costSeries = Color.pink
 }
 
@@ -36,12 +45,11 @@ private struct CardSurface: ViewModifier {
         content
             .padding(padding)
             .background(Color.cardSurface, in: shape)
-            .overlay(shape.strokeBorder(Color.cardBorder))
     }
 }
 
 extension View {
-    /// 统一卡片：内边距 + 表面 + 细描边（不用阴影，深色模式下同样可辨）。
+    /// 统一卡片：内边距 + 表面，不描边也不用阴影。
     func card(padding: CGFloat = Metrics.cardPadding) -> some View {
         modifier(CardSurface(padding: padding))
     }
@@ -52,6 +60,12 @@ extension View {
         navigationTitle(title)
             .navigationSubtitle(subtitle ?? "")
             .toolbar { ToolbarItemGroup(placement: .primaryAction) { actions() } }
+    }
+
+    /// 卡片里的下沉面板。
+    func sunkPanel(padding: CGFloat = 12, radius: CGFloat = 12) -> some View {
+        self.padding(padding)
+            .background(Color.sunkSurface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 
     func pageChrome(title: String, subtitle: String? = nil) -> some View {
@@ -216,4 +230,59 @@ private struct HoverHighlight: ViewModifier {
 extension View {
     /// 可点按行的悬停反馈。
     func hoverHighlight() -> some View { modifier(HoverHighlight()) }
+}
+
+/// 状态胶囊：文字 + 同色浅底。
+struct Pill: View {
+    let text: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .foregroundStyle(tint)
+            .background(tint.opacity(0.14), in: Capsule())
+    }
+}
+
+/// 可选中的筛选胶囊。
+struct FilterChip<Label: View>: View {
+    let selected: Bool
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) { label() }
+                .font(.callout)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .foregroundStyle(selected ? Color.brand : Color.secondary)
+                .fontWeight(selected ? .semibold : .regular)
+                .background(selected ? Color.brand.opacity(0.14) : .clear, in: Capsule())
+                .overlay(Capsule().strokeBorder(selected ? .clear : Color.primary.opacity(0.1)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 配额占用的颜色：充足绿、偏紧橙、告急红；没有数据时为灰。
+func quotaColor(_ percent: Double?) -> Color {
+    guard percent != nil else { return .secondary }
+    switch MenuBarFmt.quotaUrgency(percent) {
+    case "quota_crit": return .red
+    case "quota_warn": return .orange
+    default: return .green
+    }
+}
+
+/// 订阅账号的代表色：有对应 Agent 的沿用 Agent 颜色。
+func providerColor(_ provider: SubscriptionProvider) -> Color {
+    MenuBarFmt.toolHex[provider.rawValue] == nil ? Color.brand : toolColor(provider.rawValue)
 }

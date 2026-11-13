@@ -58,14 +58,20 @@ struct SettingsPanelView: View {
                 PublishHistoryView(state: state).appLanguage()
                     .frame(width: 660, height: 460)
             }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
+            // 工具栏中间是导航标签，设置的分页放在内容顶部
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
                     Picker(L10n.text("设置"), selection: $tab) {
                         ForEach(SettingsTab.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .fixedSize()
+                    .padding(.vertical, 8)
+                    Divider()
                 }
+                .frame(maxWidth: .infinity)
+                .background(.bar)
             }
     }
 
@@ -139,6 +145,7 @@ struct SettingsPanelView: View {
                         .disabled(L10n.isEnglish)
                     Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
                 }
+                MenuBarPortsSection(state: state, model: state.ports)
                 SidebarSettingsSection()
                 Section(L10n.text("刘海圆环")) {
                     Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
@@ -438,5 +445,80 @@ struct SettingsPanelView: View {
         } catch {
             // 开发模式（swift run / 未打包）注册会失败，静默忽略
         }
+    }
+}
+
+/// 「状态栏显示的端口」：勾选本机正在监听的端口，或提前加上还没运行的端口号。
+struct MenuBarPortsSection: View {
+    @ObservedObject private var language = LanguageManager.shared
+    @ObservedObject var state: AppState
+    @ObservedObject var model: PortsModel
+    @State private var draft = ""
+    @State private var hint: String?
+
+    private static let limit = 20
+
+    private var pinned: [Int] { state.prefs.menubarPorts }
+    private var all: [Int] { Set(model.ports.map(\.port)).union(pinned).sorted() }
+
+    var body: some View {
+        Section(L10n.text("状态栏显示的端口")) {
+            Text(L10n.text("勾选的端口只有正在运行时才出现在状态栏面板里。"))
+                .font(.caption).foregroundStyle(.secondary)
+            if all.isEmpty {
+                Text(model.loaded ? L10n.text("没有正在监听的端口") : L10n.text("正在扫描端口…"))
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(all, id: \.self) { number in
+                Toggle(isOn: Binding(get: { pinned.contains(number) },
+                                     set: { set(number, $0) })) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: ":\(number)").font(.body.monospaced())
+                        Text(owner(number)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+            HStack {
+                TextField("", text: $draft, prompt: Text(L10n.text("添加端口号，例如 8080")))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 220)
+                    .onSubmit(add)
+                Button(L10n.text("添加"), action: add)
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                if let hint { Text(hint).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .onAppear { model.beginWatching() }
+        .onDisappear { model.endWatching() }
+    }
+
+    private func owner(_ number: Int) -> String {
+        guard let port = model.ports.first(where: { $0.port == number }) else { return L10n.text("未运行") }
+        return port.projectName ?? port.process
+    }
+
+    private func set(_ number: Int, _ on: Bool) {
+        var next = Set(pinned)
+        if on {
+            guard next.count < Self.limit else {
+                hint = L10n.text("最多选择 \(Self.limit) 个端口")
+                return
+            }
+            next.insert(number)
+        } else {
+            next.remove(number)
+        }
+        hint = nil
+        state.updateSetting(key: "menubar_ports", value: next.sorted())
+    }
+
+    private func add() {
+        guard let number = Int(draft.trimmingCharacters(in: .whitespaces)), (1...65535).contains(number) else {
+            hint = L10n.text("端口号需要是 1–65535 之间的整数")
+            return
+        }
+        draft = ""
+        set(number, true)
     }
 }

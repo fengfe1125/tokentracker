@@ -233,8 +233,9 @@ final class HeatmapCanvasView: NSView {
 
     /// GitHub-style greens tuned separately for light and dark appearances.
     static func color(_ level: Int) -> NSColor {
-        let light: [UInt32] = [0xEBEDF0, 0x9BE9A8, 0x40C463, 0x30A14E, 0x216E39]
-        let dark: [UInt32] = [0x2D333B, 0x0E4429, 0x006D32, 0x26A641, 0x39D353]
+        // 与强调色同一色相，由浅到深
+        let light: [UInt32] = [0xEBEDF0, 0xDCD0F7, 0xB9A2F0, 0x9470E6, 0x6F45D8]
+        let dark: [UInt32] = [0x2D333B, 0x3B2D6E, 0x5C45B0, 0x8566E0, 0xA88CFF]
         return NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let rgb = (isDark ? dark : light)[max(0, min(4, level))]

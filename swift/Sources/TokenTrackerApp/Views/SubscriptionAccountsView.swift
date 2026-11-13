@@ -2,57 +2,11 @@ import AppKit
 import SwiftUI
 import TokenTrackerCore
 
-/// 设置页「订阅账号」：TokenTracker 自己登录、添加或导入的账号。
-struct SubscriptionAccountsSection: View {
+/// 「登录账号…」菜单：有区域的供应商展开成子菜单。
+struct SubscriptionLoginMenu: View {
     @ObservedObject var state: AppState
-    @ObservedObject private var language = LanguageManager.shared
-    @State private var addingKey = false
-    @State private var removing: SubscriptionCard?
-
-    private let menuBarProviders: Set<SubscriptionProvider> = [.claude, .codex, .kimi, .go]
 
     var body: some View {
-        Section(L10n.text("订阅账号")) {
-            HStack(spacing: 8) {
-                loginMenu
-                Button(L10n.text("添加 API Key…")) { addingKey = true }
-                Button(L10n.text("从本机导入 API Key")) { state.importSubscriptionKeys() }
-                Spacer()
-                if state.subscriptionRefreshing { ProgressView().controlSize(.small) }
-                Button(L10n.text("刷新")) { state.refreshQuotas(force: true) }
-                    .disabled(state.subscriptionRefreshing)
-            }
-            if let notice = state.subscriptionNotice {
-                Text(notice).font(.caption).foregroundStyle(.secondary)
-            }
-            if state.subscriptionCards.isEmpty {
-                Text(L10n.text("还没有订阅账号。登录或添加 API Key 后，概览会显示官方配额与余额。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(state.subscriptionCards) { card in
-                row(card)
-            }
-            Text(L10n.text("账号由 TokenTracker 自己登录并续期，与其他软件的登录互不影响；凭据保存在 ~/.tokentracker/subscription_accounts.json（仅本人可读）。导入只复制一次 API Key，之后不再读取其他软件的配置。"))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .sheet(isPresented: $addingKey) { AddAPIKeySheet(state: state) }
-        .sheet(item: Binding(get: { state.subscriptionLogin }, set: { if $0 == nil { state.cancelSubscriptionLogin() } })) { login in
-            SubscriptionLoginSheet(state: state, login: login)
-        }
-        .confirmationDialog(L10n.text("移除这个订阅账号？"), isPresented: Binding(
-            get: { removing != nil }, set: { if !$0 { removing = nil } })) {
-            Button(L10n.text("移除"), role: .destructive) {
-                if let card = removing { state.removeSubscriptionAccount(card.id) }
-                removing = nil
-            }
-            Button(L10n.text("取消"), role: .cancel) { removing = nil }
-        } message: {
-            Text(L10n.text("只删除 TokenTracker 保存的凭据，不影响其他软件或官方账号。"))
-        }
-    }
-
-    private var loginMenu: some View {
         Menu(L10n.text("登录账号…")) {
             ForEach(SubscriptionAuth.loginProviders, id: \.self) { provider in
                 let regions = SubscriptionAuth.regions(for: provider)
@@ -79,36 +33,10 @@ struct SubscriptionAccountsSection: View {
         default: return region
         }
     }
-
-    private func row(_ card: SubscriptionCard) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(card.account.provider.displayName)
-                    Text(SubscriptionText.account(card.account)).foregroundStyle(.secondary)
-                }
-                Text(SubscriptionText.sources(card.account.sources))
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-            Spacer()
-            Text(SubscriptionText.status(card.snapshot.status)).foregroundStyle(.secondary)
-            if menuBarProviders.contains(card.account.provider) {
-                if card.account.isActive {
-                    Text(L10n.text("菜单栏")).foregroundStyle(.blue)
-                } else {
-                    Button(L10n.text("用于菜单栏")) { state.setSubscriptionMenuBarAccount(card.id) }
-                        .buttonStyle(.borderless)
-                }
-            }
-            Button(L10n.text("移除")) { removing = card }
-                .buttonStyle(.borderless)
-        }
-        .font(.caption)
-    }
 }
 
 /// 登录弹窗：设备码 / 粘贴授权码 / 浏览器登录。
-private struct SubscriptionLoginSheet: View {
+struct SubscriptionLoginSheet: View {
     @ObservedObject var state: AppState
     let login: SubscriptionLoginState
     @State private var code = ""
@@ -196,7 +124,7 @@ private struct SubscriptionLoginSheet: View {
 }
 
 /// 手动添加 API Key。
-private struct AddAPIKeySheet: View {
+struct AddAPIKeySheet: View {
     @ObservedObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var provider: SubscriptionProvider = .deepseek

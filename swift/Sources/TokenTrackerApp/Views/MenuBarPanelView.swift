@@ -3,8 +3,8 @@
 //  TokenTrackerApp
 //
 //  菜单栏速览面板：左键点状态栏图标弹出，不开主窗口就能看完
-//  今日用量、各账号配额、各 Agent 今日量、风险和最近会话。
-//  需要细看时从这里进主面板；状态栏显示方式等低频项在「⋯」里（右键菜单同样可用）。
+//  今日用量、风险、各账号配额、选定的运行中端口和最近会话。
+//  需要细看时从这里进主面板；状态栏显示方式在设置里改，刘海圆环等低频项在「⋯」里。
 //
 
 import SwiftUI
@@ -16,6 +16,7 @@ struct MenuBarPanelActions {
     var openSession: (_ tool: String, _ sessionID: String) -> Void = { _, _ in }
     var openAccounts: () -> Void = {}
     var openSettings: () -> Void = {}
+    var openPort: (_ port: Int) -> Void = { _ in }
     var openTasks: () -> Void = {}
     var quit: () -> Void = {}
 }
@@ -25,7 +26,6 @@ struct MenuBarPanelView: View {
 
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject private var notch = NotchHUDPreferences.shared
-    @ObservedObject private var sidebar = SidebarPreferences.shared
     @ObservedObject var state: AppState
     let actions: MenuBarPanelActions
 
@@ -48,14 +48,6 @@ struct MenuBarPanelView: View {
         }.count
     }
 
-    /// 今日有用量的 Agent，按侧栏设置里的隐藏项过滤，用量从高到低。
-    private var agentRows: [(tool: String, tokens: Int64)] {
-        state.todayByTool
-            .filter { $0.value > 0 && sidebar.isVisible($0.key, in: .agents) }
-            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
-            .map { ($0.key, $0.value) }
-    }
-
     private var risks: [RiskNotice] { state.insights.risks.filter { $0.level > 0 } }
 
     var body: some View {
@@ -67,7 +59,11 @@ struct MenuBarPanelView: View {
             if !quotaCards.isEmpty || unreadableCount > 0 {
                 section(L10n.text("配额")) { quotas }
             }
-            section(L10n.text("今日各 Agent")) { agents }
+            if !state.prefs.menubarPorts.isEmpty {
+                section(L10n.text("运行中的端口")) {
+                    PanelPorts(model: state.ports, pinned: state.prefs.menubarPorts, actions: actions)
+                }
+            }
             if !state.recentSessions.isEmpty {
                 section(L10n.text("最近会话")) { sessions }
             }
@@ -75,6 +71,9 @@ struct MenuBarPanelView: View {
             footer
         }
         .frame(width: Self.width)
+        .tint(.brand)
+        .onAppear { state.ports.beginWatching() }
+        .onDisappear { state.ports.endWatching() }
     }
 
     private func section<Content: View>(_ title: String? = nil,
@@ -166,30 +165,6 @@ struct MenuBarPanelView: View {
         }
     }
 
-    // ----------------------------------------------------------- Agent ----
-
-    @ViewBuilder
-    private var agents: some View {
-        let rows = agentRows
-        let top = rows.first?.tokens ?? 0
-        if rows.isEmpty {
-            Text(L10n.text("今日暂无数据"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
-            VStack(spacing: 0) {
-                ForEach(rows.prefix(6), id: \.tool) { row in
-                    ShareRow(fraction: top > 0 ? Double(row.tokens) / Double(top) : 0,
-                             tint: toolColor(row.tool),
-                             primary: UIFormat.compact(row.tokens, yi: yi)) {
-                        Circle().fill(toolColor(row.tool)).frame(width: 7, height: 7)
-                        Text(toolDisplayName(row.tool)).font(.callout).lineLimit(1)
-                    }
-                }
-            }
-        }
-    }
-
     // ------------------------------------------------------------ 会话 ----
 
     private var sessions: some View {
@@ -223,11 +198,6 @@ struct MenuBarPanelView: View {
 
     // ------------------------------------------------------------ 底栏 ----
 
-    private var provider: Binding<String> {
-        Binding(get: { state.prefs.menubarProvider },
-                set: { state.updateSetting(key: "menubar_provider", value: $0) })
-    }
-
     private var footer: some View {
         HStack(spacing: 10) {
             Button(action: actions.openMain) {
@@ -254,13 +224,6 @@ struct MenuBarPanelView: View {
                 .buttonStyle(.borderless)
                 .help(L10n.text("设置"))
             Menu {
-                Picker(L10n.text("状态栏显示"), selection: provider) {
-                    ForEach(state.quotaEntries, id: \.id) { entry in
-                        Text(L10n.text("今日用量 + \(entry.name)")).tag(entry.id)
-                    }
-                    Text(L10n.text("仅今日用量")).tag("off")
-                    Text(L10n.text("仅显示 Token 数字")).tag("tokens")
-                }
                 Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
                 Button(L10n.text("任务提醒"), action: actions.openTasks)
                 Divider()
@@ -356,14 +319,65 @@ private struct HourBars: View {
             HStack(alignment: .bottom, spacing: 1.5) {
                 ForEach(Array(hours.enumerated()), id: \.offset) { hour, value in
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(hour == current ? Color.accentColor
+                        .fill(hour == current ? Color.brand
                               : hour > current ? Color.primary.opacity(0.08)
-                              : Color.accentColor.opacity(0.45))
+                              : Color.brand.opacity(0.45))
                         .frame(height: max(2, geo.size.height * value / top))
                 }
             }
             .frame(maxHeight: .infinity, alignment: .bottom)
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// 面板里的端口：只显示设置里选中、且此刻正在监听的端口。
+private struct PanelPorts: View {
+    @ObservedObject var model: PortsModel
+    let pinned: [Int]
+    let actions: MenuBarPanelActions
+
+    var body: some View {
+        let running = model.ports.filter { pinned.contains($0.port) }
+        if running.isEmpty {
+            Button(action: actions.openSettings) {
+                HStack(spacing: 4) {
+                    Text(model.loaded ? L10n.text("所选端口现在都没有运行") : L10n.text("正在扫描端口…"))
+                    Image(systemName: "chevron.right").font(.caption2)
+                }
+                .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(running) { port in
+                    Button { actions.openPort(port.port) } label: {
+                        HStack(spacing: 8) {
+                            Text(verbatim: ":\(port.port)")
+                                .font(.caption.monospaced().weight(.medium))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .foregroundStyle(tint(port))
+                                .background(tint(port).opacity(0.14),
+                                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            Text(port.process).font(.callout).lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 8)
+                            Text(port.projectName ?? (model.isSystem(port) ? L10n.text("系统进程") : L10n.text("未匹配")))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .hoverHighlight()
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, -6)
+        }
+    }
+
+    private func tint(_ port: ListeningPort) -> Color {
+        port.projectID == nil ? .secondary : model.color(port.projectID)
     }
 }

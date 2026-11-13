@@ -28,6 +28,10 @@ public struct SettingsStore {
         "publish_endpoint": "",         // 形如 https://tt.example.com（必须 https）
         "publish_handle": "",           // 服务上的用户名
         "publish_days": 365,            // 热力图窗口天数
+
+        // 端口页。只存本机，不参与公开统计。
+        "menubar_ports": [Int](),               // 状态栏面板里显示的端口（运行时才出现）
+        "project_commands": [String: String](), // 手动填写的启动命令：项目目录 → 命令
     ]
 
     public let path: String
@@ -95,6 +99,20 @@ public struct SettingsStore {
             return (value as? String).map { terminalApps.contains($0) } ?? false
         case "scan_interval":
             return [30, 60, 300, 600].contains((value as? NSNumber)?.intValue ?? 0)
+        case "menubar_ports":
+            guard let list = value as? [Any], list.count <= 20 else { return false }
+            return list.allSatisfy { item in
+                guard let number = item as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      number.doubleValue == Double(number.intValue) else { return false }
+                return (1...65535).contains(number.intValue)
+            }
+        case "project_commands":
+            guard let map = value as? [String: Any], map.count <= 100 else { return false }
+            return map.allSatisfy { directory, command in
+                guard directory.hasPrefix("/"), directory.count <= 1024, !directory.contains("\0"),
+                      let command = command as? String else { return false }
+                return PortControl.isValidCommand(command)
+            }
         default:
             return false
         }

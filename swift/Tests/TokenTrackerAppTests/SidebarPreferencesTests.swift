@@ -17,7 +17,7 @@ final class SidebarPreferencesTests: XCTestCase {
         XCTAssertEqual(reloaded.layout, prefs.layout)
         XCTAssertFalse(reloaded.isVisible("usage", in: .navigation))
         XCTAssertFalse(reloaded.isVisible("dsh", in: .agents))
-        XCTAssertEqual(reloaded.order(.navigation)[3], "accounts")
+        XCTAssertEqual(reloaded.order(.navigation)[4], "accounts")
         XCTAssertEqual(reloaded.order(.agents)[2], "dsh")
         reloaded.setVisible("settings", in: .navigation, visible: false)
         XCTAssertFalse(reloaded.layout.hiddenNavigation.contains("settings"))
@@ -33,9 +33,9 @@ final class SidebarPreferencesTests: XCTestCase {
         let prefs = SidebarPreferences(defaults: defaults)
         prefs.setVisible("usage", in: .navigation, visible: false)
         prefs.move(in: .navigation, from: IndexSet(integer: 0), to: 4)
-        XCTAssertEqual(prefs.order(.navigation), ["usage", "activity", "reports", "overview", "accounts"])
+        XCTAssertEqual(prefs.order(.navigation), ["usage", "ports", "activity", "overview", "reports", "accounts"])
         prefs.move(in: .navigation, from: IndexSet(integer: 4), to: 0)
-        XCTAssertEqual(prefs.order(.navigation), ["accounts", "usage", "activity", "reports", "overview"])
+        XCTAssertEqual(prefs.order(.navigation), ["reports", "usage", "ports", "activity", "overview", "accounts"])
         let before = prefs.layout
         prefs.move(in: .navigation, from: IndexSet(integer: 99), to: 0)
         prefs.move(in: .navigation, from: [], to: 0)
@@ -63,7 +63,8 @@ final class SidebarPreferencesTests: XCTestCase {
         layout.navigation = ["reports", "projects", "subscriptions", "overview", "sessions", "activity"]
         layout.hiddenNavigation = ["projects", "reports"]
         let normalized = layout.normalized()
-        XCTAssertEqual(normalized.navigation, ["reports", "usage", "accounts", "overview", "activity"])
+        // 之后新增的「端口」补在最后，不打乱用户已有的顺序
+        XCTAssertEqual(normalized.navigation, ["reports", "usage", "accounts", "overview", "activity", "ports"])
         XCTAssertEqual(normalized.hiddenNavigation, ["reports"])
     }
 }

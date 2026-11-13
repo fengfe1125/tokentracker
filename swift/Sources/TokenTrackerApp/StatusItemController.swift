@@ -223,6 +223,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             openSession: { [weak self] tool, session in self?.closePanel(); self?.onOpenSession?(tool, session) },
             openAccounts: { [weak self] in self?.closePanel(); self?.onOpenAccounts?() },
             openSettings: { [weak self] in self?.closePanel(); self?.onOpenSettings?() },
+            openPort: { [weak self] port in
+                guard let self else { return }
+                self.closePanel()
+                self.appState.ports.filter = .all
+                self.appState.ports.selectedPort = port
+                self.appState.selection = .ports
+                self.onOpenMain?()
+            },
             openTasks: { [weak self] in self?.closePanel(); self?.onOpenTasks?() },
             quit: { [weak self] in self?.onQuit?() })
         let hosting = NSHostingController(

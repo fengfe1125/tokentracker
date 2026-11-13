@@ -12,9 +12,9 @@ import Combine
 import Foundation
 import TokenTrackerCore
 
-/// 侧边栏导航
+/// 主窗口导航
 enum NavSelection: Hashable {
-    case overview, usage, activity, reports, accounts, settings
+    case overview, usage, ports, activity, reports, accounts, settings
 }
 
 /// 主窗口里的下钻页（代替原来的独立详情窗口）
@@ -54,6 +54,8 @@ final class AppState: ObservableObject {
     /// 上传记录面板（附着在主窗口上）
     @Published var showingPublishHistory = false
     @Published var usageTab = UsageTab.projects
+    /// 账号页当前选中的账号；从概览或状态栏面板点配额行时带过来
+    @Published var accountFocus: String?
     // 全局范围：时间 + Agent。概览、用量、活动共用，切页保留。
     @Published var range = "week" {
         didSet {
@@ -123,6 +125,8 @@ final class AppState: ObservableObject {
     }
 
     let insights: InsightsModel
+    /// 端口页与状态栏面板共用
+    let ports: PortsModel
     let readStore: UsageStore
     let settingsStore: SettingsStore
     let scanRoots: ScanRoots
@@ -193,6 +197,7 @@ final class AppState: ObservableObject {
         let tokenStore = KeychainPublishTokenStore()
         let historyStore = PublishHistoryStore(path: preview ? previewHome + "/publish_history.json" : NSHomeDirectory() + "/.tokentracker/publish_history.json")
         self.settingsStore = settingsStore
+        ports = PortsModel(path: path, settings: settingsStore)
         publishTokenStore = tokenStore
         publishHistoryStore = historyStore
         publisher = PublicStatsPublisher(settings: settingsStore, tokens: tokenStore,

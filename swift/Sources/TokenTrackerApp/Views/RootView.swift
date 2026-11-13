@@ -2,8 +2,8 @@
 //  RootView.swift
 //  TokenTrackerApp
 //
-//  主面板骨架：NavigationSplitView 侧栏（五个入口，扫描状态与设置固定在底部）+
-//  详情区。页面标题、操作与全局范围在窗口工具栏。快捷键 ⌘1–⌘5 切视图、⌘R 扫描。
+//  主面板骨架：窗口工具栏中间是导航标签（TopTabBar），右侧是扫描状态与扫描；
+//  内容区顶部是全局范围栏（ScopeBar），下面是页面。快捷键 ⌘1–⌘6 切视图、⌘R 扫描。
 //
 
 import SwiftUI
@@ -14,78 +14,65 @@ struct RootView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var sidebar = SidebarPreferences.shared
 
-    @State private var columns = NavigationSplitViewVisibility.all
+    @State private var windowWidth: CGFloat = 1080
 
     private var yi: Bool { state.prefs.unitYi }
 
+    /// 时间范围和 Agent 筛选只对这三页有意义。
+    private var scoped: Bool {
+        state.detail == nil && [.overview, .usage, .activity].contains(state.selection)
+    }
+
     var body: some View {
-        NavigationSplitView(columnVisibility: $columns) {
-            List(selection: $state.selection) {
-                Section {
-                    ForEach(sidebar.layout.navigation.compactMap(SidebarNavigationItem.init(rawValue:))
-                        .filter { sidebar.isVisible($0.id, in: .navigation) }) { item in
-                        Label(item.title, systemImage: item.symbol).tag(item.selection)
+        // 不用 NavigationStack：它会把页面标题画进工具栏，和中间的导航标签抢位置
+        Group {
+            VStack(spacing: 0) {
+                if scoped {
+                    ScopeBar(state: state) {
+                        if state.selection == .usage {
+                            Picker(L10n.text("用量"), selection: $state.usageTab) {
+                                Text(L10n.text("项目")).tag(UsageTab.projects)
+                                Text(L10n.text("会话")).tag(UsageTab.sessions)
+                                Text(L10n.text("模型")).tag(UsageTab.models)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .fixedSize()
+                            Divider().frame(height: 16)
+                        }
                     }
+                    Divider()
+                }
+                page.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    TopTabBar(state: state, compact: windowWidth < 980)
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    scanStatus
+                    scanMenu
                 }
             }
-            .listStyle(.sidebar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    scanStatusRow
-                    settingsRow
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 300)
-        } detail: {
-            if let route = state.detail {
-                detailPage(route)
-            } else {
-            switch state.selection {
-            case .overview:
-                OverviewView(state: state)
-            case .usage:
-                UsageView(state: state)
-            case .activity:
-                ActivityView(state: state.activityPage, refresh: state.refreshActivity,
-                             openDetail: state.showActivityDetail)
-                    .equatable()
-                    .toolbar { ScopeToolbar(state: state, compact: true) }
-            case .reports:
-                ReportsView(model: state.insights)
-            case .accounts:
-                AccountsView(state: state)
-            case .settings:
-                SettingsPanelView(state: state)
-            }
+        }
+        .tint(.brand)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { windowWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, width in windowWidth = width }
             }
         }
         .background { HealthSheetHost(model: state.insights, yi: yi) }
         .frame(minWidth: 820, minHeight: 520)
         .environment(\.unitYi, yi)
-        // 每个页面都至少有这一项，窗口工具栏常驻，切页时标题栏高度不跳
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation { columns = columns == .detailOnly ? .all : .detailOnly }
-                } label: {
-                    Label(L10n.text("切换侧栏"), systemImage: "sidebar.leading")
-                }
-                .help(L10n.text("切换侧栏"))
-            }
-        }
-        // 快捷键：⌘1/⌘2/⌘3 切视图 · ⌘R 扫描（⌘, 设置走系统 Settings 场景，⌘W 关闭面板）
+        // 快捷键：⌘1–⌘6 按导航顺序切页 · ⌘R 扫描（⌘, 设置走系统 Settings 场景，⌘W 关闭面板）
         .background {
             VStack {
-                Button("") { state.selection = .overview }
-                    .keyboardShortcut("1", modifiers: .command)
-                Button("") { state.selection = .usage }
-                    .keyboardShortcut("2", modifiers: .command)
-                Button("") { state.selection = .activity }
-                    .keyboardShortcut("3", modifiers: .command)
-                Button("") { state.selection = .reports }
-                    .keyboardShortcut("4", modifiers: .command)
-                Button("") { state.selection = .accounts }
-                    .keyboardShortcut("5", modifiers: .command)
+                ForEach(Array(TopTabBar.items(sidebar).prefix(9).enumerated()), id: \.element.id) { index, item in
+                    Button("") { state.selection = item.selection }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                }
                 Button("") { state.requestScan() }
                     .keyboardShortcut("r", modifiers: .command)
             }
@@ -95,6 +82,32 @@ struct RootView: View {
         .onChange(of: state.selection) { _, _ in state.refreshVisibleData() }
         .onChange(of: state.usageTab) { _, _ in state.refreshVisibleData() }
         .onAppear { state.refreshVisibleData() }
+    }
+
+    @ViewBuilder
+    private var page: some View {
+        if let route = state.detail {
+            detailPage(route)
+        } else {
+            switch state.selection {
+            case .overview:
+                OverviewView(state: state)
+            case .usage:
+                UsageView(state: state)
+            case .ports:
+                PortsView(model: state.ports, state: state)
+            case .activity:
+                ActivityView(state: state.activityPage, refresh: state.refreshActivity,
+                             openDetail: state.showActivityDetail)
+                    .equatable()
+            case .reports:
+                ReportsView(model: state.insights)
+            case .accounts:
+                AccountsView(state: state)
+            case .settings:
+                SettingsPanelView(state: state)
+            }
+        }
     }
 
     /// 下钻页：会话详情 / 活动明细。返回用工具栏的后退、Esc 或 ⌘[。
@@ -124,52 +137,44 @@ struct RootView: View {
     }
 
     /// 扫描状态：上次更新时间；点按查看各数据源的健康状况。
-    private var scanStatusRow: some View {
+    private var scanStatus: some View {
         Button {
             state.insights.showHealth(rescan: { state.requestScan() })
         } label: {
-            HStack(spacing: 6) {
-                if state.scanning {
-                    ProgressView().controlSize(.mini)
-                    Text(L10n.text("扫描中…"))
-                } else {
-                    Image(systemName: state.dataError == nil ? "checkmark.circle" : "exclamationmark.triangle")
-                        .foregroundStyle(state.dataError == nil ? Color.secondary : Color.orange)
+            HStack(spacing: 5) {
+                Image(systemName: state.dataError == nil ? "checkmark.circle" : "exclamationmark.triangle")
+                    .foregroundStyle(state.dataError == nil ? Color.secondary : Color.orange)
+                if windowWidth >= 980 {
                     Text(state.updatedAt.map {
                         L10n.text("更新于 ") + $0.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(L10n.locale))
                     } ?? L10n.text("尚未扫描"))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 0)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .help(L10n.text("数据健康"))
     }
 
-    /// 设置固定在侧栏底部，不和数据页面混排。
-    private var settingsRow: some View {
-        let selected = state.selection == .settings
-        return Button {
-            state.selection = .settings
+    /// 点按立即扫描，展开选择自动刷新间隔。
+    private var scanMenu: some View {
+        Menu {
+            Picker(L10n.text("刷新间隔"), selection: Binding(
+                get: { state.scanIntervalSeconds },
+                set: { state.updateSetting(key: "scan_interval", value: $0) })) {
+                Text("30s").tag(30)
+                Text(L10n.text("1分钟")).tag(60)
+                Text(L10n.text("5分钟")).tag(300)
+                Text(L10n.text("10分钟")).tag(600)
+            }
+            .pickerStyle(.inline)
         } label: {
-            Label(L10n.text("设置"), systemImage: "gearshape")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(selected ? Color.primary.opacity(0.1) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(Rectangle())
+            Label(state.scanning ? L10n.text("扫描中…") : L10n.text("扫描"), systemImage: "arrow.clockwise")
+        } primaryAction: {
+            state.requestScan()
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 10)
-        .padding(.top, 2)
-        .padding(.bottom, 8)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .disabled(state.scanning)
+        .help(L10n.text("立即扫描"))
     }
 }
 

@@ -7,13 +7,15 @@ import TokenTrackerCore
 final class TrendChartTests: XCTestCase {
     @MainActor
     func testSubscriptionCardsHandleUnboundedHostMeasurement() async {
-        let view = NSHostingView(rootView: SubscriptionSection(
-            cards: SubscriptionCard.previewCards(), refreshing: false, showsHeading: false))
-        let size = view.fittingSize
-        XCTAssertTrue(size.width.isFinite)
-        XCTAssertTrue(size.height.isFinite)
-        XCTAssertGreaterThan(size.width, 0)
-        XCTAssertGreaterThan(size.height, 0)
+        // 账号页的额度区：AppKit 创建窗口时会用无限宽度来量，结果必须有限
+        for card in SubscriptionCard.previewCards() {
+            let view = NSHostingView(rootView: AccountQuotaView(card: card))
+            let size = view.fittingSize
+            XCTAssertTrue(size.width.isFinite, card.id)
+            XCTAssertTrue(size.height.isFinite, card.id)
+            XCTAssertGreaterThan(size.width, 0, card.id)
+            XCTAssertGreaterThan(size.height, 0, card.id)
+        }
     }
 
     func testAxisCeilingCoversMaximumAndSplitsIntoFourEvenTicks() {

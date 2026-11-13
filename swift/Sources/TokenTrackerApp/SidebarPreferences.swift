@@ -3,12 +3,13 @@ import Foundation
 import TokenTrackerCore
 
 enum SidebarNavigationItem: String, CaseIterable, Identifiable {
-    case overview, usage, activity, reports, accounts
+    case overview, usage, ports, activity, reports, accounts
     var id: String { rawValue }
     var selection: NavSelection {
         switch self {
         case .overview: .overview
         case .usage: .usage
+        case .ports: .ports
         case .activity: .activity
         case .reports: .reports
         case .accounts: .accounts
@@ -18,6 +19,7 @@ enum SidebarNavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .overview: L10n.text("概览")
         case .usage: L10n.text("用量")
+        case .ports: L10n.text("端口")
         case .activity: L10n.text("活动")
         case .reports: L10n.text("报告")
         case .accounts: L10n.text("账号")
@@ -27,6 +29,7 @@ enum SidebarNavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "chart.bar.fill"
         case .usage: "list.bullet.rectangle"
+        case .ports: "network"
         case .activity: "point.3.connected.trianglepath.dotted"
         case .reports: "doc.text"
         case .accounts: "creditcard"
