@@ -13,6 +13,7 @@ description: 准备 TokenTracker 发布、制作发行包或验证更新安装�
 - 版本来源是 `swift/Sources/TokenTrackerCore/TokenTrackerCore.swift` 的 `version`，打包脚本将其写入 Info.plist。只在任务包含版本升级时改版本。
 - App 打包入口为 `scripts/build_swift_app.sh`；DMG 入口为 `scripts/release_swift.sh`，后者已包含 App 构建，无需重复运行前者。
 - 脚本重建 `dist/TokenTracker.app` 和同版本 DMG。需要保留旧产物时先另存副本。
+- 测试版：版本号带预发布后缀（如 `0.6.0-beta.1`），GitHub Release 必须勾选 pre-release（`gh release create --prerelease`）。只有打开设置里「接收测试版更新」的用户会收到；正式版通道读 `releases/latest`，不会看到预发布。同一核心版本下预发布排在正式版之前，所以之后发 `0.6.0` 时测试版用户会正常升上去。
 - 默认签名是 ad-hoc；Developer ID 与公证按当前脚本说明及可用凭据执行，不把 ad-hoc 产物报告为已公证。
 
 ## 发布验证

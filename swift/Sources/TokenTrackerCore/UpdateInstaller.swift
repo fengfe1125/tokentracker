@@ -112,9 +112,14 @@ public struct UpdateInstaller: Sendable {
         return ReleaseInfo(tag: tag, htmlURL: obj["html_url"] as? String ?? "", dmg: dmg)
     }
 
-    public func latestRelease() throws -> ReleaseInfo {
-        try Self.parseRelease(
-            fetch("https://api.github.com/repos/\(UpdateChecker.repo)/releases/latest"))
+    /// beta = 测试版通道：从发布列表（含预发布）里取版本号最高的一条。
+    public func latestRelease(beta: Bool = false) throws -> ReleaseInfo {
+        let data = try fetch(UpdateChecker.releasesURL(beta: beta))
+        guard beta else { return try Self.parseRelease(data) }
+        guard let newest = UpdateChecker.newestRelease(inList: data) else {
+            throw UpdateInstallError.noRelease
+        }
+        return try Self.parseRelease(JSONSerialization.data(withJSONObject: newest))
     }
 
     // ------------------------------------------------------------ 校验 ----

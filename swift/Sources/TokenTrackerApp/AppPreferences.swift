@@ -35,6 +35,8 @@ struct AppPreferences {
     /// 自动扫描/刷新节奏（秒）
     var scanInterval: Int { int("scan_interval", 60) }
     var priceSyncEnabled: Bool { bool("price_sync_enabled", true) }
+    /// 接收测试版（预发布）更新
+    var updateBeta: Bool { bool("update_beta", false) }
     var publishEnabled: Bool { bool("publish_enabled", false) }
     var publishEndpoint: String { string("publish_endpoint", "") }
     var publishHandle: String { string("publish_handle", "") }

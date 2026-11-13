@@ -802,3 +802,5 @@
 "下一个会话" = "Next Session";
 "返回" = "Back";
 "本地时区" = "Local time zone";
+"接收测试版更新" = "Receive beta updates";
+"开启后会收到尚未正式发布的开发版本，可能不稳定；关闭后只接收正式版，已装的测试版不会自动回退。" = "When on, you also get development builds that are not released yet and may be unstable. When off, only stable releases are offered; an installed beta is not rolled back.";

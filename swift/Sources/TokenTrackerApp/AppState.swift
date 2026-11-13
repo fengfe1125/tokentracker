@@ -328,8 +328,9 @@ final class AppState: ObservableObject {
         // 网络失败静默，绝不阻塞启动
         guard !isPreview else { return }
         let checker = UpdateChecker()
+        let beta = prefs.updateBeta
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
-            let info = checker.check()
+            let info = checker.check(beta: beta)
             DispatchQueue.main.async { self?.updateInfo = info }
         }
     }

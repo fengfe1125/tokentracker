@@ -44,12 +44,13 @@ final class UpdaterModel: ObservableObject {
         guard !busy else { return }
         stage = .checking
         let installer = self.installer
+        let beta = state?.prefs.updateBeta ?? false
         Task {
             let result: Result<(UpdateInfo?, ReleaseInfo), Error> = await Task.detached {
                 do {
                     // force：手动检查要绕开 24h 缓存；顺带把共享缓存刷新掉
-                    let cached = UpdateChecker().check(force: true)
-                    return .success((cached, try installer.latestRelease()))
+                    let cached = UpdateChecker().check(force: true, beta: beta)
+                    return .success((cached, try installer.latestRelease(beta: beta)))
                 } catch {
                     return .failure(error)
                 }

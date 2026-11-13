@@ -106,6 +106,18 @@ struct SettingsPanelView: View {
                             .foregroundStyle(.secondary)
                     }
                     Link(L10n.text("作者主页"), destination: URL(string: "https://sakuramu.edu.kg/")!)
+                    Toggle(L10n.text("接收测试版更新"), isOn: Binding(
+                        get: { state.prefs.updateBeta },
+                        set: { on in
+                            state.updateSetting(key: "update_beta", value: on)
+                            // 换通道后旧的检查结果不再适用，马上按新通道查一次
+                            state.updateInfo = nil
+                            updater.check(applyTo: state)
+                        }
+                    ))
+                    Text(L10n.text("开启后会收到尚未正式发布的开发版本，可能不稳定；关闭后只接收正式版，已装的测试版不会自动回退。"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     updateRow
                 }
             case .interface:
