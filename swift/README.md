@@ -9,21 +9,30 @@ Python 实现已移除。
 ```text
 Sources/
   TokenTrackerCore/
+    Accounts/      Codex 多账号存储与切换
     Billing/       Claude、Kimi、Codex、OpenCode Go 官方配额
     Activity/      工具与 Skill 活动模型、归一化和证据等级
+    Differential/  差分基线 expected.json 的对照模型与导出
+    Insights/      洞察规则、项目归属补全与报告导出
     MenuBar/       状态栏格式化纯逻辑
     Ports/         本机监听端口扫描、项目匹配、启动命令识别与进程控制
     Pricing/       价格表与成本计算
+    Public/        公开统计载荷构建、发布与发布记录
     Quotas/        本地窗口和官方配额合并
     Resume/        会话恢复与终端启动
     Scanners/      七个工具的数据源适配器
     Settings/      settings.json 读写
     Store/         SQLite schema、迁移、聚合和查询
     Subscriptions/ 自有登录与 API Key 账号库、订阅配额与余额只读查询
+    Tasks/         任务提醒 Hook 事件、配置与本机 socket 通信
+    ScanScheduler.swift / UpdateChecker.swift / UpdateInstaller.swift
+                   后台扫描调度、更新检查（含测试版通道）与安装
   TokenTrackerApp/ 状态栏与速览面板、主窗口、设置和应用内更新
-  tt-swift/        detect、scan、stats、activity、quotas、subscriptions
+  TokenTrackerHook/ 供各工具 Hook 调用的任务提醒辅助程序
+  tt-swift/        detect、scan、stats、activity、export-public、publish、quotas、subscriptions
 Tests/
-  TokenTrackerCoreTests/
+  TokenTrackerCoreTests/   Core 单元测试、差分测试与 Fixtures/
+  TokenTrackerAppTests/    App 层状态、格式化与本地化测试
 ```
 
 ## 界面结构
@@ -59,7 +68,7 @@ swift test --package-path swift
 
 App 与 CLI 共用以下本机数据：
 
-- `~/.tokentracker/usage.db`（schema v6；用量事件保留供应商和费率版本）
+- `~/.tokentracker/usage.db`（schema v7，以 `UsageStore.schemaVersion` 为准；用量事件保留供应商和费率版本；各版本变化见 `docs/migrations.md`）
 - `~/.tokentracker/settings.json`
 - `~/.tokentracker/prices.json`（供应商官方公开费率目录，按事件时间版本化）
 - `~/.tokentracker/official_cache.json`
