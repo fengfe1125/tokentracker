@@ -137,7 +137,7 @@ final class InsightsModel: NSObject, ObservableObject {
                 let budgets=overviewOnly ? nil : try store.budgets()
                 let breakdown=overviewOnly ? nil : try store.breakdown(query,dimension:"model")
                 let daily=(overviewOnly || query.projectID == nil) ? nil : try store.dailyBreakdown(query,cancellation:cancellation)
-                let agents=(overviewOnly || query.projectID == nil) ? nil : try store.breakdown(query,dimension:"tool")
+                let agents=overviewOnly ? nil : try store.breakdown(query,dimension:"tool")
                 let sessions=(overviewOnly || query.projectID == nil) ? nil : try store.projectSessions(query)
                 DispatchQueue.main.async {
                     guard let self,version==self.generation else { return }

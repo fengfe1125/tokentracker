@@ -1024,3 +1024,28 @@
 "重启" = "Restart";
 "顶栏与 Agent 显示" = "Top Bar & Agents";
 "任务提醒 Hooks" = "Task Reminder Hooks";
+
+/* Usage page visualizations */
+"{0} 个项目" = "{0} projects";
+"主力模型" = "Top Model";
+"会话分布" = "Session Breakdown";
+"共 {0} 项未计价" = "{0} unpriced item(s)";
+"其他 ({0})" = "Other ({0})";
+"占比 {0}" = "{0} share";
+"展开图表" = "Show Charts";
+"已排除 {0} 项未计价数据" = "Excluded {0} unpriced item(s)";
+"当前范围暂无已计价数据" = "No priced usage in this range";
+"收起" = "Hide";
+"模型 Token 构成" = "Token Breakdown by Model";
+"模型占比" = "Model Share";
+"活跃模型" = "Active Models";
+"点击柱条选中会话" = "Click a bar to select";
+"缓存 {0}" = "Cache {0}";
+"缓存命中率对比" = "Cache Hit Rate Comparison";
+"费用" = "Cost";
+"跨 {0} 个 Agent" = "Across {0} agent(s)";
+"输入侧总计" = "Total input side";
+"输入侧缓存读取占比" = "Cache read share of input side";
+"项目 Token 构成" = "Token Breakdown by Project";
+"项目占比" = "Project Share";
+"高消耗会话" = "Top Sessions";

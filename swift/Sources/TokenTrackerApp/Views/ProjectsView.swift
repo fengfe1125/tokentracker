@@ -83,6 +83,7 @@ struct ProjectsView: View {
     @State private var showAssignments = false
     @State private var showCreate = false
     @State private var showRename = false
+    @State private var donutMetric: UsageChartMetric = .tokens
 
     var body: some View {
         ScrollView {
@@ -97,6 +98,9 @@ struct ProjectsView: View {
                     detail(selected)
                 } else {
                     projectList
+                    if !model.projects.isEmpty {
+                        projectAnalytics
+                    }
                 }
             }
             .padding(.horizontal, Metrics.pagePadding)
@@ -335,6 +339,82 @@ struct ProjectsView: View {
         .help(totals.tokens.formatted(.number) + " Token")
     }
 
+    // -------------------------------------------------------- 项目可视化 ----
+
+    @ViewBuilder
+    private var projectAnalytics: some View {
+        let donutData = UsageChartBuilder.projectDonut(projects: model.projects, metric: donutMetric)
+        let mixItems = UsageChartBuilder.projectMix(projects: model.projects)
+        let openByID: (String) -> Void = { id in
+            if let project = model.projects.first(where: { $0.id == id }) {
+                open(project)
+            }
+        }
+        let filterModel: (String) -> Void = { modelName in
+            model.query.model = model.query.model == modelName ? nil : modelName
+            model.refresh()
+        }
+
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
+                UsageDonutCard(
+                    title: L10n.text("项目占比"),
+                    centerSubtitle: L10n.text("\(donutData.itemCount) 个项目"),
+                    data: donutData,
+                    metric: $donutMetric,
+                    yi: yi,
+                    onSelect: openByID
+                )
+                .frame(minWidth: 360)
+                TokenMixBarCard(
+                    title: L10n.text("项目 Token 构成"),
+                    items: mixItems,
+                    totalCount: model.projects.filter { $0.totals.tokens > 0 }.count,
+                    yi: yi,
+                    onSelect: openByID
+                )
+                .frame(minWidth: 360)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: Metrics.sectionSpacing) {
+                UsageDonutCard(
+                    title: L10n.text("项目占比"),
+                    centerSubtitle: L10n.text("\(donutData.itemCount) 个项目"),
+                    data: donutData,
+                    metric: $donutMetric,
+                    yi: yi,
+                    onSelect: openByID
+                )
+                TokenMixBarCard(
+                    title: L10n.text("项目 Token 构成"),
+                    items: mixItems,
+                    totalCount: model.projects.filter { $0.totals.tokens > 0 }.count,
+                    yi: yi,
+                    onSelect: openByID
+                )
+            }
+        }
+
+        // 搜索项目名时隐藏全局 Agent / 模型卡片，避免和已筛选的项目列表口径混在一起
+        if model.search.isEmpty && (!model.agents.isEmpty || !model.breakdown.isEmpty) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
+                    breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
+                        .frame(minWidth: 300)
+                    breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false,
+                                  onSelect: filterModel)
+                        .frame(minWidth: 300)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: Metrics.sectionSpacing) {
+                    breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
+                    breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false,
+                                  onSelect: filterModel)
+                }
+            }
+        }
+    }
+
     // -------------------------------------------------------- 项目详情 ----
 
     @ViewBuilder
@@ -375,6 +455,7 @@ struct ProjectsView: View {
                 breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false)
                     .frame(minWidth: 300)
             }
+            .fixedSize(horizontal: false, vertical: true)
             VStack(spacing: Metrics.sectionSpacing) {
                 breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
                 breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false)
@@ -384,52 +465,52 @@ struct ProjectsView: View {
     }
 
     private var trendCard: some View {
-        let top = TrendScale.niceCeiling(Double(model.daily.map(\.totals.tokens).max() ?? 0))
-        let labels: [String] = {
-            let ids = model.daily.map(\.id)
-            guard ids.count > 8 else { return ids }
-            return (0..<6).map { ids[$0 * (ids.count - 1) / 5] }
-        }()
+        let points: [TrendPoint] = model.daily.map { row in
+            let pricedCost = (row.totals.records > 0 && row.totals.unpriced == row.totals.records) ? 0 : row.totals.cost
+            return TrendPoint(
+                id: row.id,
+                day: row.id,
+                input: Double(row.totals.input),
+                output: Double(row.totals.output),
+                cacheRead: Double(row.totals.cacheRead),
+                cacheWrite: Double(row.totals.cacheWrite),
+                cost: pricedCost
+            )
+        }
+        let hasCost = points.contains { $0.cost > 0 }
         return VStack(alignment: .leading, spacing: 12) {
             CardHeader(title: L10n.text("项目趋势")) {
-                if model.analyticsLoading { ProgressView().controlSize(.small) }
+                HStack(spacing: 12) {
+                    if !points.isEmpty {
+                        ForEach(TokenKind.allCases) { kind in
+                            HStack(spacing: 4) {
+                                RoundedRectangle(cornerRadius: 2).fill(kind.color).frame(width: 8, height: 8)
+                                Text(kind.title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        if hasCost {
+                            HStack(spacing: 4) {
+                                Capsule().fill(Color.costSeries).frame(width: 10, height: 2)
+                                Text(L10n.text("成本")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                    }
+                    if model.analyticsLoading { ProgressView().controlSize(.small) }
+                }
             }
-            if model.daily.isEmpty {
+            if points.isEmpty {
                 emptyRows
             } else {
-                Chart(model.daily) { row in
-                    BarMark(x: .value("day", row.id), y: .value("tokens", Double(row.totals.tokens)),
-                            width: .ratio(0.62))
-                        .foregroundStyle(Color.accentColor.opacity(0.85))
-                }
-                .chartYScale(domain: 0...top)
-                .chartXAxis {
-                    AxisMarks(values: labels) { value in
-                        AxisValueLabel {
-                            if let day = value.as(String.self) {
-                                Text(String(day.suffix(5))).font(.caption2)
-                            }
-                        }
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: TrendScale.ticks(top: top)) { value in
-                        AxisGridLine().foregroundStyle(Color.primary.opacity(0.07))
-                        AxisValueLabel {
-                            if let v = value.as(Double.self) {
-                                Text(TrendScale.tokenLabel(v, yi: yi)).font(.caption2)
-                            }
-                        }
-                    }
-                }
-                .frame(height: 170)
+                TrendChart(points: points, isHourly: false, yi: yi)
+                    .equatable()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
     }
 
-    private func breakdownCard(title: String, rows: [UsageBreakdown], isTool: Bool) -> some View {
+    private func breakdownCard(title: String, rows: [UsageBreakdown], isTool: Bool,
+                               onSelect: ((String) -> Void)? = nil) -> some View {
         let shown = Array(rows.prefix(8))
         let top = shown.map(\.totals.tokens).max() ?? 0
         return VStack(alignment: .leading, spacing: 6) {
@@ -444,10 +525,10 @@ struct ProjectsView: View {
             } else {
                 ForEach(shown) { row in
                     let tint = isTool ? toolColor(row.id) : Color.accentColor
-                    ShareRow(fraction: top > 0 ? Double(row.totals.tokens) / Double(top) : 0,
-                             tint: tint,
-                             primary: UIFormat.compact(row.totals.tokens, yi: yi),
-                             secondary: UIFormat.costLabel(row.totals)) {
+                    let rowView = ShareRow(fraction: top > 0 ? Double(row.totals.tokens) / Double(top) : 0,
+                                           tint: tint,
+                                           primary: UIFormat.compact(row.totals.tokens, yi: yi),
+                                           secondary: UIFormat.costLabel(row.totals)) {
                         if isTool { Circle().fill(tint).frame(width: 8, height: 8) }
                         Text(isTool ? toolDisplayName(row.id)
                              : row.id.isEmpty ? L10n.text("（未知模型）") : row.id)
@@ -455,10 +536,23 @@ struct ProjectsView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                    if let onSelect, !row.id.isEmpty {
+                        Button { onSelect(row.id) } label: {
+                            rowView
+                                .padding(.horizontal, 6)
+                                .hoverHighlight()
+                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, -6)
+                        .help(L10n.text("查看用到这个模型的项目"))
+                    } else {
+                        rowView
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .card()
     }
 

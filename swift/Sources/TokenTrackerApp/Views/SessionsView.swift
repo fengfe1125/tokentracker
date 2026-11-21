@@ -38,6 +38,13 @@ struct SessionsView: View {
                 selectedSessionCard(selected)
                     .padding(.horizontal, Metrics.pagePadding)
                     .padding(.vertical, 10)
+            } else if !sortedRows.isEmpty {
+                Divider()
+                SessionSummaryDock(rows: sortedRows, yi: yi) { id in
+                    state.selectedSessionID = id
+                }
+                .padding(.horizontal, Metrics.pagePadding)
+                .padding(.vertical, 10)
             }
         }
         .pageChrome(title: title, subtitle: subtitle) {
