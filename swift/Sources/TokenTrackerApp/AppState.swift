@@ -61,7 +61,7 @@ final class AppState: ObservableObject {
         didSet {
             guard range != oldValue else { return }
             persistScope()
-            refreshVisibleData()
+            refreshVisibleData(scopeOnly: true)
         }
     }
     /// nil = 全部 Agent
@@ -69,7 +69,7 @@ final class AppState: ObservableObject {
         didSet {
             guard agentFilter != oldValue else { return }
             persistScope()
-            refreshVisibleData()
+            refreshVisibleData(scopeOnly: true)
         }
     }
     @Published var statRows: [UsageStore.ToolStats] = []
@@ -135,6 +135,11 @@ final class AppState: ObservableObject {
 
     private var dataGeneration = 0
     private var dataCancellation: ExportCancellation?
+    private let queryLoader: OverviewQueryLoader
+    private var cachedScopeVersion: Int64?
+    private var cachedScopeZone: String?
+    private var cachedScopeHour: Date?
+    private var cachedScopes: [OverviewQueryLoader.ScopeKey: OverviewQueryLoader.ScopeSnapshot] = [:]
     private var sessionsGeneration = 0
     private var quotaBusy = false
     private var quotaPending = false
@@ -185,6 +190,7 @@ final class AppState: ObservableObject {
         let path = dbPath ?? env["TOKENTRACKER_DB"]
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
         readStore = try! UsageStore(path: path)
+        queryLoader = OverviewQueryLoader(path: path)
         insights = InsightsModel(path: path)
         heatmap = UsageHeatmapModel(path: path)
         priceCatalogPath = env["TOKENTRACKER_PRICES"] ?? PriceCatalogStore.sharedPath
@@ -223,9 +229,11 @@ final class AppState: ObservableObject {
         publishTokenConfigured = !preview && tokenStore.read(handle: handle) != nil
         codex.onActiveChanged = { [weak self] active in
             guard let self else { return }
-            self.insights.codexAccountID = active ?? "unknown"
+            let next = active ?? "unknown"
+            guard self.insights.codexAccountID != next else { return }
+            self.insights.codexAccountID = next
             self.insights.risks.removeAll { $0.id.hasPrefix("quota:codex:") }
-            self.insights.refresh()
+            self.insights.refresh(overviewOnly: self.selection == .overview)
         }
         codex.onSwitched = { [weak self] in
             // 换了账号：旧账号的配额采样作废，立即重查
@@ -562,77 +570,110 @@ final class AppState: ObservableObject {
 
     // ------------------------------------------------------------ 数据 ----
 
-    func refreshVisibleData() {
+    func refreshVisibleData(scopeOnly: Bool = false) {
         applyScope()
-        insights.refresh()
-        refreshData()
+        insights.refresh(overviewOnly: selection == .overview)
+        refreshData(scopeOnly: scopeOnly)
         if selection == .activity { refreshActivity() }
     }
 
-    func refreshData() {
-        heatmap.request = HeatmapRequest(range: range, tool: agentFilter)
+    private func applyScopeSnapshot(_ snapshot: OverviewQueryLoader.ScopeSnapshot, range: String, search: String) {
+        if statRows != snapshot.rows { statRows = snapshot.rows }
+        if statTotal != snapshot.total { statTotal = snapshot.total }
+        if statSummary != snapshot.summary { statSummary = snapshot.summary }
+        if dailyRows != snapshot.daily { dailyRows = snapshot.daily }
+        if modelRows != snapshot.models { modelRows = snapshot.models }
+        if search == sessionSearch, sessionRows != snapshot.sessions {
+            sessionRows = snapshot.sessions
+        }
+        if loadedRange != range { loadedRange = range }
+    }
+
+    func refreshData(scopeOnly: Bool = false) {
+        let range = range
+        let search = sessionSearch
+        let roots = scanRoots
+        let toolFilter = agentFilter
+        let fullSessions = selection == .usage && usageTab == .sessions
+        let nextHeatmap = HeatmapRequest(range: range, tool: toolFilter)
+        if heatmap.request != nextHeatmap { heatmap.request = nextHeatmap }
+        var warmHit = false
+        if scopeOnly {
+            let calendar = Calendar.current
+            let currentZone = calendar.timeZone.identifier
+            let currentHour = calendar.dateInterval(of: .hour, for: Date())?.start
+            let key = OverviewQueryLoader.ScopeKey(
+                range: range, tool: toolFilter, search: search, fullSessions: fullSessions)
+            let fullKey = OverviewQueryLoader.ScopeKey(
+                range: range, tool: toolFilter, search: search, fullSessions: true)
+            if cachedScopeZone == currentZone, cachedScopeHour == currentHour,
+               let hit = cachedScopes[key] ?? (!fullSessions ? cachedScopes[fullKey] : nil) {
+                applyScopeSnapshot(hit, range: range, search: search)
+                warmHit = true
+            }
+            // 同帧同步切换热力图缓存，避免「今天 ↔ 近 7 天」出现主卡片与热力图先后跳动。
+            heatmap.applyCachedIfAvailable(for: nextHeatmap)
+        }
         heatmap.refresh()
         dataGeneration += 1
         let generation = dataGeneration
         dataCancellation?.cancel()
         let cancellation = ExportCancellation()
         dataCancellation = cancellation
-        dataLoading = true
-        dataErrorTemplate = nil
-        codex.reload()   // 账号列表与 active 跟随轮询热反映
-        let path = readStore.path
-        let range = range
-        let search = sessionSearch
-        let pricePath = priceCatalogPath
-        let roots = scanRoots
-        let toolFilter = agentFilter
+        if !warmHit && !dataLoading { dataLoading = true }
+        if dataErrorTemplate != nil { dataErrorTemplate = nil }
+        if !scopeOnly {
+            codex.reload()   // 账号列表与 active 跟随轮询/切页热反映，切换范围时不重复触发
+        }
+        let loader = queryLoader
         queryQueue.async { [weak self] in
             guard let self else { return }
             do {
-                try cancellation.check()
-                let store = try UsageStore(path: path)
-                try store.conn.execute("BEGIN")
-                defer { try? store.conn.rollback() }
-                let (rows, total, summary) = try store.stats(rangeKey: range, tool: toolFilter)
-                try cancellation.check()
-                let allDaily = try store.daily(rangeKey: range)
-                let daily = toolFilter.map { tool in allDaily.filter { $0.tool == tool } } ?? allDaily
-                try cancellation.check()
-                let models = try store.models(rangeKey: range, tool: toolFilter)
-                let sessions = try store.sessions(rangeKey: range, tool: toolFilter,
-                                                  limit: Self.sessionLimit,
-                                                  query: search.isEmpty ? nil : search)
-                let dayStats = try store.stats(rangeKey: "day")
-                let dayHours = Self.hourBuckets(range == "day" ? allDaily : try store.daily(rangeKey: "day"))
-                let recent = try store.sessions(rangeKey: "day", limit: 3)
-                let detect = ScanRunner(store: store, prices: PriceTable.load(from: pricePath),
-                                        roots: roots).detectAll()
+                let result = try loader.load(
+                    range: range,
+                    tool: toolFilter,
+                    search: search,
+                    fullSessions: fullSessions,
+                    refreshDetect: !scopeOnly,
+                    roots: roots,
+                    cancellation: cancellation)
                 DispatchQueue.main.async {
                     guard generation == self.dataGeneration, range == self.range,
                           toolFilter == self.agentFilter else { return }
-                    let newTokens = dayStats.total.tokens
+                    if self.cachedScopeVersion != result.dataVersion
+                        || self.cachedScopeZone != result.zone
+                        || self.cachedScopeHour != result.hour {
+                        self.cachedScopes.removeAll()
+                        self.cachedScopeVersion = result.dataVersion
+                        self.cachedScopeZone = result.zone
+                        self.cachedScopeHour = result.hour
+                    }
+                    for (scopeKey, snapshot) in result.warmedScopes {
+                        self.cachedScopes[scopeKey] = snapshot
+                    }
+                    let newTokens = result.today.today.tokens
                     if let prev = self.today?.tokens, prev != newTokens {
                         self.onTokensChanged?()   // 数值刷新闪光
                     }
-                    self.today = MenuBarToday(tokens: newTokens, cost: dayStats.total.cost, unpriced: dayStats.total.events > 0 && dayStats.total.unpriced == dayStats.total.events)
-
-                    self.statRows = rows
-                    self.statTotal = total
-                    self.statSummary = summary
-                    self.dailyRows = daily
-                    self.modelRows = models
-                    if search == self.sessionSearch { self.sessionRows = sessions }
-                    self.detectInfo = detect
-                    self.todayByTool = Dictionary(uniqueKeysWithValues:
-                        dayStats.rows.map { ($0.tool, $0.tokens) })
-                    self.todayHours = dayHours
-                    self.recentSessions = recent
+                    if self.today != result.today.today { self.today = result.today.today }
+                    self.applyScopeSnapshot(result.scope, range: range, search: search)
+                    if let detect = result.detect, self.detectInfo != detect {
+                        self.detectInfo = detect
+                    }
+                    if self.todayByTool != result.today.todayByTool {
+                        self.todayByTool = result.today.todayByTool
+                    }
+                    if self.todayHours != result.today.todayHours {
+                        self.todayHours = result.today.todayHours
+                    }
+                    if self.recentSessions != result.today.recent {
+                        self.recentSessions = result.today.recent
+                    }
                     self.updatedAt = Date()
-                    self.loadedRange = range
-                    self.dataLoading = false
+                    if self.dataLoading { self.dataLoading = false }
                     if ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" {
                         FileHandle.standardError.write(Data(
-                            "[tt] refreshData OK: today=\(newTokens) sessions=\(sessions.count)\n".utf8))
+                            "[tt] refreshData OK: today=\(newTokens) sessions=\(result.scope.sessions.count)\n".utf8))
                     }
                 }
             } catch is CancellationError {
@@ -643,7 +684,7 @@ final class AppState: ObservableObject {
                     "[tt] refreshData FAILED: \(error)\n".utf8))
                 DispatchQueue.main.async {
                     guard generation == self.dataGeneration else { return }
-                    self.dataLoading = false
+                    if self.dataLoading { self.dataLoading = false }
                     self.dataErrorTemplate = L10n.message("用量读取失败，请重新扫描后重试")
                 }
             }
@@ -813,11 +854,11 @@ final class AppState: ObservableObject {
         sessionsGeneration += 1
         let generation = sessionsGeneration
         let path = readStore.path, range = range, search = sessionSearch
-        let tool = agentFilter
+        let tool = agentFilter, roots = scanRoots
         detailQueue.async { [weak self] in
             do {
                 let rows = try UsageStore(path: path).sessions(rangeKey: range, tool: tool,
-                    limit: Self.sessionLimit, query: search.isEmpty ? nil : search)
+                    limit: Self.sessionLimit, query: search.isEmpty ? nil : search, roots: roots)
                 DispatchQueue.main.async {
                     guard let self, generation == self.sessionsGeneration,
                           search == self.sessionSearch, range == self.range else { return }
@@ -939,9 +980,9 @@ final class AppState: ObservableObject {
     }
 
     func showInsightSession(tool:String,sessionID:String) {
-        let path=readStore.path
+        let path=readStore.path, roots=scanRoots
         detailQueue.async { [weak self] in
-            guard let row=try? UsageStore(path:path).sessions(rangeKey:"all",tool:tool,limit:300,query:sessionID).first(where:{$0.sessionID==sessionID}) else { return }
+            guard let row=try? UsageStore(path:path).sessions(rangeKey:"all",tool:tool,limit:300,query:sessionID,roots:roots).first(where:{$0.sessionID==sessionID}) else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if !self.sessionRows.contains(where:{$0.tool==tool && $0.sessionID==sessionID}) { self.sessionRows.insert(row,at:0) }
@@ -954,11 +995,181 @@ final class AppState: ObservableObject {
 
     /// 会话详情走查询队列：选中一行不应该在主线程读库（大库时会顿）。
     func sessionDetail(tool: String, sessionID: String) async -> UsageStore.SessionDetail? {
-        let path = readStore.path
+        let path = readStore.path, roots = scanRoots
         return await withCheckedContinuation { cont in
             detailQueue.async {
-                cont.resume(returning: try? UsageStore(path:path).sessionDetail(tool: tool, sessionID: sessionID))
+                cont.resume(returning: try? UsageStore(path:path).sessionDetail(tool: tool, sessionID: sessionID, roots: roots))
             }
+        }
+    }
+}
+
+/// 复用 queryQueue 专属只读连接与按 PRAGMA data_version 失效的内存快照，
+/// 让概览里切换「今天 / 近 7 天 / 本月 / 全部」和 Agent 时跳过重复开库、检测与全量扫描。
+private final class OverviewQueryLoader: @unchecked Sendable {
+    struct ScopeKey: Hashable {
+        let range: String
+        let tool: String?
+        let search: String
+        let fullSessions: Bool
+    }
+
+    struct ScopeSnapshot {
+        let rows: [UsageStore.ToolStats]
+        let total: UsageStore.ToolStats
+        let summary: UsageStore.TimeSummary
+        let daily: [UsageStore.DailyRow]
+        let models: [UsageStore.ModelRow]
+        let sessions: [UsageStore.SessionRow]
+    }
+
+    struct TodaySnapshot {
+        let today: MenuBarToday
+        let todayByTool: [String: Int64]
+        let todayHours: [Double]
+        let recent: [UsageStore.SessionRow]
+    }
+
+    struct LoadResult {
+        let scope: ScopeSnapshot
+        let today: TodaySnapshot
+        let detect: [String: DetectInfo]?
+        let dataVersion: Int64
+        let zone: String
+        let hour: Date
+        let warmedScopes: [ScopeKey: ScopeSnapshot]
+    }
+
+    private let path: String
+    private var store: UsageStore?
+    private var dataVersion: Int64?
+    private var zoneID: String?
+    private var hourStamp: Date?
+    private var dayStamp: Date?
+    private var scopeCache: [ScopeKey: ScopeSnapshot] = [:]
+    private var todayCache: TodaySnapshot?
+    private var detectCache: [String: DetectInfo]?
+
+    init(path: String) { self.path = path }
+
+    func load(range: String, tool: String?, search: String, fullSessions: Bool,
+              refreshDetect: Bool, roots: ScanRoots,
+              cancellation: ExportCancellation) throws -> LoadResult {
+        try cancellation.check()
+        do {
+            if store == nil { store = try UsageStore(path: path) }
+            let store = store!
+            try store.conn.execute("BEGIN")
+            defer { try? store.conn.rollback() }
+            // 先建立读快照，再读 PRAGMA data_version，才能感知其他连接的新提交。
+            _ = try store.conn.queryOne("SELECT id FROM usage_events LIMIT 1")
+            let version = try store.conn.scalarInt("PRAGMA data_version")
+            let calendar = Calendar.current
+            let now = Date()
+            let currentZone = calendar.timeZone.identifier
+            let currentDay = calendar.startOfDay(for: now)
+            let currentHour = calendar.dateInterval(of: .hour, for: now)!.start
+
+            if version != dataVersion || currentZone != zoneID || currentDay != dayStamp {
+                dataVersion = version
+                zoneID = currentZone
+                dayStamp = currentDay
+                hourStamp = currentHour
+                scopeCache.removeAll()
+                todayCache = nil
+            } else if currentHour != hourStamp {
+                hourStamp = currentHour
+                scopeCache.removeAll()
+                todayCache = nil
+            }
+
+            let key = ScopeKey(range: range, tool: tool, search: search, fullSessions: fullSessions)
+            let fullKey = ScopeKey(range: range, tool: tool, search: search, fullSessions: true)
+            let scopeSnapshot: ScopeSnapshot
+            var dayAllDaily: [UsageStore.DailyRow]?
+            if let hit = scopeCache[key] ?? (!fullSessions ? scopeCache[fullKey] : nil) {
+                scopeSnapshot = hit
+            } else {
+                try cancellation.check()
+                let (rows, total, summary) = try store.stats(rangeKey: range, tool: tool)
+                try cancellation.check()
+                let allDaily = try store.daily(rangeKey: range)
+                if range == "day" { dayAllDaily = allDaily }
+                let daily = tool.map { selected in allDaily.filter { $0.tool == selected } } ?? allDaily
+                try cancellation.check()
+                let models = try store.models(rangeKey: range, tool: tool)
+                try cancellation.check()
+                let sessions = try store.sessions(
+                    rangeKey: range, tool: tool,
+                    limit: AppState.sessionLimit,
+                    query: search.isEmpty ? nil : search,
+                    roots: fullSessions ? roots : nil,
+                    includeMetadata: fullSessions)
+                scopeSnapshot = ScopeSnapshot(
+                    rows: rows, total: total, summary: summary,
+                    daily: daily, models: models, sessions: sessions)
+                scopeCache[key] = scopeSnapshot
+            }
+
+            var loadedDayStats: (rows: [UsageStore.ToolStats], total: UsageStore.ToolStats, summary: UsageStore.TimeSummary)?
+            var loadedDayDaily: [UsageStore.DailyRow]?
+            let todaySnapshot: TodaySnapshot
+            if let cachedToday = todayCache {
+                todaySnapshot = cachedToday
+            } else {
+                try cancellation.check()
+                let dayStats = try store.stats(rangeKey: "day")
+                let dayDaily = try dayAllDaily ?? store.daily(rangeKey: "day")
+                loadedDayStats = dayStats
+                loadedDayDaily = dayDaily
+                let dayHours = AppState.hourBuckets(dayDaily)
+                let recent = try store.sessions(rangeKey: "day", limit: 3, roots: roots)
+                let today = MenuBarToday(
+                    tokens: dayStats.total.tokens,
+                    cost: dayStats.total.cost,
+                    unpriced: dayStats.total.events > 0 && dayStats.total.unpriced == dayStats.total.events)
+                let byTool = Dictionary(uniqueKeysWithValues: dayStats.rows.map { ($0.tool, $0.tokens) })
+                todaySnapshot = TodaySnapshot(today: today, todayByTool: byTool,
+                                              todayHours: dayHours, recent: recent)
+                todayCache = todaySnapshot
+            }
+
+            // 默认在「近 7 天」启动时 TodaySnapshot 已查出今天的 stats/daily，
+            // 顺手补齐「今天」的 models/sessions 轻量快照，首次点「今天」零延迟直出。
+            if range == "week", tool == nil, search.isEmpty, !fullSessions {
+                let dayKey = ScopeKey(range: "day", tool: nil, search: "", fullSessions: false)
+                if scopeCache[dayKey] == nil, let dayStats = loadedDayStats, let dayDaily = loadedDayDaily {
+                    try cancellation.check()
+                    let dayModels = try store.models(rangeKey: "day", tool: nil)
+                    try cancellation.check()
+                    let daySessions = try store.sessions(
+                        rangeKey: "day", tool: nil,
+                        limit: AppState.sessionLimit, query: nil,
+                        roots: nil, includeMetadata: false)
+                    scopeCache[dayKey] = ScopeSnapshot(
+                        rows: dayStats.rows, total: dayStats.total, summary: dayStats.summary,
+                        daily: dayDaily, models: dayModels, sessions: daySessions)
+                }
+            }
+
+            let detect: [String: DetectInfo]?
+            if refreshDetect || detectCache == nil {
+                try cancellation.check()
+                let scanned = ScanRunner(store: store, prices: .default, roots: roots).detectAll()
+                detectCache = scanned
+                detect = scanned
+            } else {
+                detect = nil
+            }
+            return LoadResult(scope: scopeSnapshot, today: todaySnapshot, detect: detect,
+                              dataVersion: version, zone: currentZone, hour: currentHour,
+                              warmedScopes: scopeCache)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            store = nil
+            dataVersion = nil
+            throw error
         }
     }
 }

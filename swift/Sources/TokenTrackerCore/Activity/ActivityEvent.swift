@@ -53,10 +53,13 @@ public enum ActivityNormalizer {
         let low = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let names = [
             "bash": "shell", "shell": "shell", "execute_command": "shell", "exec_command": "shell",
-            "read": "file.read", "read_file": "file.read", "write": "file.write",
-            "write_file": "file.write", "edit": "file.edit", "apply_patch": "file.edit",
-            "glob": "file.search", "grep": "file.search", "search": "web.search",
-            "web_search": "web.search", "skill": "skill.activate", "skill_view": "skill.activate",
+            "run_command": "shell",
+            "read": "file.read", "read_file": "file.read", "view_file": "file.read",
+            "write": "file.write", "write_file": "file.write",
+            "edit": "file.edit", "edit_file": "file.edit", "apply_patch": "file.edit",
+            "glob": "file.search", "grep": "file.search",
+            "search": "web.search", "web_search": "web.search", "search_web": "web.search",
+            "skill": "skill.activate", "skill_view": "skill.activate",
         ]
         if let value = names[low] { return value }
         if low.hasPrefix("mcp__") {
@@ -128,6 +131,7 @@ public let activityCapabilities: [String: [String: String]] = [
     "hermes": ["tools": "exact", "skills": "exact", "agents": "unknown"],
     "pi": ["tools": "exact", "skills": "unknown", "agents": "unknown"],
     "codex": ["tools": "exact", "skills": "derived", "agents": "exact"],
+    "antigravity": ["tools": "exact", "skills": "derived", "agents": "exact"],
 ]
 
 public func activityCapability(agent: String, category: String) -> ActivityCapability {

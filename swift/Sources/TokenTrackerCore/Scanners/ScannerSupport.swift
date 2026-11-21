@@ -240,7 +240,8 @@ private let contextPrefixes = ["# AGENTS.md", "<INSTRUCTIONS>", "<environment_co
                                "## Referenced ChatGPT conversation", "<task-notification",
                                "The following is the Codex agent history",
                                "<turn_aborted>", "<external_codex_apps", "[Request interrupted by user",
-                               "[Workflow harness", "<bash-input>", "<bash-stdout>", "<bash-stderr>"]
+                               "[Workflow harness", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+                               "<SYSTEM_MESSAGE>", "<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>"]
 
 /// Codex 历史转储的行："[3] tool exec call: …"、"[176] assistant: …"
 private let historyDumpLine = try! NSRegularExpression(pattern: #"^\[\d+\] (tool|assistant|user)\b"#)
@@ -248,12 +249,25 @@ private let historyDumpLine = try! NSRegularExpression(pattern: #"^\[\d+\] (tool
 /// "[Image: original 1653x2339, …]"、"[Image #2]"、"<pasted_content id=\"…\">"
 private let leadingAttachment = try! NSRegularExpression(
     pattern: #"^(<image\b[^>]*>|</image>|\[Image[^\]]*\]|<pasted_content\b[^>]*>|</pasted_content>)\s*"#)
+private let antigravityRequestRegex = try! NSRegularExpression(
+    pattern: #"(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>"#)
+private let antigravityTrailingMetaRegex = try! NSRegularExpression(
+    pattern: #"(?s)<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE)>.*?</(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE)>"#)
 private let codexRequestMarker = "## My request for Codex:"
 
 /// 把一条用户消息整理成会话标题。返回 nil 表示它不是用户真正的输入
 /// （调用方应继续找下一条）。结果已压缩空白并截到 120 字符。
 public func sessionTitle(fromUserText raw: String) -> String? {
-    var text = collapseWhitespace(raw)
+    var extracted = raw
+    let rawRange = NSRange(extracted.startIndex..., in: extracted)
+    if let match = antigravityRequestRegex.firstMatch(in: extracted, range: rawRange),
+       let bodyRange = Range(match.range(at: 1), in: extracted) {
+        extracted = String(extracted[bodyRange])
+    } else if extracted.contains("<ADDITIONAL_METADATA>") || extracted.contains("<USER_SETTINGS_CHANGE>") {
+        extracted = antigravityTrailingMetaRegex.stringByReplacingMatches(
+            in: extracted, range: rawRange, withTemplate: "")
+    }
+    var text = collapseWhitespace(extracted)
     // Codex 附带文件时把真正的请求放在固定标记之后
     if text.hasPrefix("# Files mentioned by the user") {
         guard let marker = text.range(of: codexRequestMarker) else { return nil }
@@ -286,7 +300,7 @@ private func contentText(_ content: Any?) -> String {
 }
 
 /// user_text：从 JSONL 行提取首个真实用户消息（跳过 AGENTS.md/环境上下文注入）。
-/// 覆盖 claude(type=user)、pi(type=message role=user)、codex(response_item role=user)。
+/// 覆盖 claude(type=user)、pi(type=message role=user)、codex(response_item role=user)、antigravity(type=USER_INPUT)。
 public func userText(_ obj: [String: Any]) -> String {
     var text = ""
     let kind = obj["type"] as? String
@@ -298,6 +312,8 @@ public func userText(_ obj: [String: Any]) -> String {
         if let payload = obj["payload"] as? [String: Any], payload["role"] as? String == "user" {
             text = contentText(payload["content"])
         }
+    } else if kind == "USER_INPUT" {
+        text = contentText(obj["content"])
     }
     return sessionTitle(fromUserText: text) ?? ""
 }

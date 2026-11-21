@@ -11,7 +11,7 @@
 var MAX_BYTES = 65536;
 var MAX_DAYS = 731;
 var MAX_AGENTS = 16;
-var AGENT_IDS = ['claude', 'codex', 'opencode', 'dsh', 'hermes', 'kimi', 'pi'];
+var AGENT_IDS = ['claude', 'codex', 'opencode', 'dsh', 'hermes', 'kimi', 'pi', 'antigravity'];
 
 var RE_DAY = /^\d{4}-\d{2}-\d{2}$/;
 var RE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;

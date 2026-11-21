@@ -11,7 +11,7 @@ public struct BudgetRule: Codable, Identifiable, Sendable, Equatable {
     }
     public var valid: Bool { ["tokens","usd"].contains(unit) && ["day","calendarWeek","month"].contains(period) && limit.isFinite && limit > 0 }
 }
-public struct RiskNotice: Identifiable, Sendable, Codable {
+public struct RiskNotice: Identifiable, Sendable, Codable, Equatable {
     public var id: String, cycle: String, title: String, detail: String
     public var projectID: String?
     public var level: Int

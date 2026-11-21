@@ -19,9 +19,9 @@ final class DifferentialExportTests: XCTestCase {
         let export = try loadBaseline()
         XCTAssertEqual(export.formatVersion, TokenTrackerCore.differentialFormatVersion)
         XCTAssertEqual(Set(export.scanResults.keys),
-                       ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"])
-        XCTAssertEqual(export.events.count, 19)
-        XCTAssertEqual(export.sessionMeta.count, 7)
+                       ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi", "antigravity"])
+        XCTAssertEqual(export.events.count, 21)
+        XCTAssertEqual(export.sessionMeta.count, 8)
         XCTAssertEqual(export.snapshots.count, 4)
     }
 

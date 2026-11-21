@@ -33,6 +33,13 @@ function clone(o) { return JSON.parse(JSON.stringify(o)); }
     // ---- 1. 必须接受 golden fixture ----
     const base = validatePayload(golden, NOW);
     ok('接受 golden fixture', base.ok, base.error);
+    {
+        const withAg = clone(golden);
+        withAg.agents.push({ id: 'antigravity', tokens: 12345, cost_usd: 0 });
+        withAg.longest_burst.agent = 'antigravity';
+        const r = validatePayload(withAg, NOW);
+        ok('接受 antigravity agent id 与 longest_burst.agent', r.ok, r.error);
+    }
 
     // ---- 2. 必须拒绝的变异 ----
     const mutations = [

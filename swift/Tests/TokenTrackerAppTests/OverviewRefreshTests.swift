@@ -202,4 +202,105 @@ final class OverviewRefreshTests: XCTestCase {
         state.closeDetail()
         XCTAssertNil(state.detail)
     }
+
+    func testOverviewDayWeekSwitchUsesWarmCacheKeepsExplanationAndUpgradesSessionMetadata() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let jsonl = directory.appendingPathComponent("s-today.jsonl")
+        try Data("{\"cwd\":\"\(directory.path)\"}\n".utf8).write(to: jsonl)
+
+        let keys = ["TT_UI_PREVIEW", "TOKENTRACKER_SETTINGS", "TOKENTRACKER_PRICES"]
+        let previous = keys.map { ProcessInfo.processInfo.environment[$0] }
+        setenv(keys[0], "1", 1)
+        setenv(keys[1], directory.appendingPathComponent("settings.json").path, 1)
+        setenv(keys[2], directory.appendingPathComponent("prices.json").path, 1)
+        let state = AppState(dbPath: directory.appendingPathComponent("usage.db").path)
+        for (key, value) in zip(keys, previous) {
+            if let value { setenv(key, value, 1) } else { unsetenv(key) }
+        }
+
+        let now = Date()
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
+        try state.readStore.setScanCursor(tool: "claude", cursor: [jsonl.path: [0, 0]])
+        try state.readStore.putEvent(tool: "claude", srcKey: "\(jsonl.path)|0", sessionID: "s-today",
+                                     ts: Int64(now.timeIntervalSince1970 * 1000), input: 10)
+        try state.readStore.putEvent(tool: "dsh", srcKey: "yesterday", sessionID: "s-yesterday",
+                                     ts: Int64(yesterday.timeIntervalSince1970 * 1000), input: 20)
+
+        // 首次在概览加载默认「近 7 天」
+        let initialData = expectation(description: "Initial week overview loaded")
+        let initialHeatmap = expectation(description: "Initial week heatmap loaded")
+        let initialExplanation = expectation(description: "Initial explanation loaded")
+        var subs: [AnyCancellable] = []
+        subs.append(state.$updatedAt.dropFirst().sink { _ in
+            if state.loadedRange == "week", state.statTotal.tokens == 30 { initialData.fulfill() }
+        })
+        subs.append(state.heatmap.$loading.dropFirst().filter { !$0 }.prefix(1).sink { _ in
+            initialHeatmap.fulfill()
+        })
+        subs.append(state.insights.$explanation.compactMap { $0 }.prefix(1).sink { _ in
+            initialExplanation.fulfill()
+        })
+        state.refreshVisibleData()
+        await fulfillment(of: [initialData, initialHeatmap, initialExplanation], timeout: 5)
+        subs.removeAll()
+
+        let baselineExplanation = try XCTUnwrap(state.insights.explanation)
+        // 概览页使用轻量会话查询，避免切范围做磁盘路径解析
+        XCTAssertEqual(state.sessionRows.first(where: { $0.sessionID == "s-today" })?.filePath, "")
+
+        // 首次从「近 7 天」切到「今天」：主指标与热力图同步直出、不闪 loading、不清空底部 explanation
+        let dayValidated = expectation(description: "Day switch validated")
+        let daySub = state.$updatedAt.dropFirst().prefix(1).sink { _ in dayValidated.fulfill() }
+        state.range = "day"
+        XCTAssertEqual(state.loadedRange, "day")
+        XCTAssertEqual(state.statTotal.tokens, 10)
+        XCTAssertEqual(state.heatmap.loadedRequest?.range, "day")
+        XCTAssertEqual(state.heatmap.chart?.totalTokens, 10)
+        XCTAssertFalse(state.dataLoading)
+        XCTAssertEqual(state.insights.explanation?.status, baselineExplanation.status)
+        await fulfillment(of: [dayValidated], timeout: 5)
+        daySub.cancel()
+
+        // 切回「近 7 天」同样同步直出
+        let weekValidated = expectation(description: "Week switch validated")
+        let weekSub = state.$updatedAt.dropFirst().prefix(1).sink { _ in weekValidated.fulfill() }
+        state.range = "week"
+        XCTAssertEqual(state.loadedRange, "week")
+        XCTAssertEqual(state.statTotal.tokens, 30)
+        XCTAssertEqual(state.heatmap.loadedRequest?.range, "week")
+        XCTAssertEqual(state.heatmap.chart?.totalTokens, 30)
+        XCTAssertFalse(state.dataLoading)
+        await fulfillment(of: [weekValidated], timeout: 5)
+        weekSub.cancel()
+
+        // 写入新事件后切回「今天」，后台必须按 PRAGMA data_version 失效缓存并刷新新值
+        try state.readStore.putEvent(tool: "claude", srcKey: "\(jsonl.path)|1", sessionID: "s-today",
+                                     ts: Int64(now.timeIntervalSince1970 * 1000), input: 7)
+        let refreshedDay = expectation(description: "Day invalidated after write")
+        let refreshSub = state.$updatedAt.dropFirst().sink { _ in
+            if state.statTotal.tokens == 17 { refreshedDay.fulfill() }
+        }
+        state.range = "day"
+        await fulfillment(of: [refreshedDay], timeout: 5)
+        refreshSub.cancel()
+        XCTAssertEqual(state.statTotal.tokens, 17)
+
+        // 切到「用量 → 会话」后，加载完整元数据（含文件路径与存在标记）
+        let fullSessionsLoaded = expectation(description: "Sessions tab loads full metadata")
+        let sessionSub = state.$updatedAt.dropFirst().sink { _ in
+            if state.sessionRows.first(where: { $0.sessionID == "s-today" })?.filePath == jsonl.path {
+                fullSessionsLoaded.fulfill()
+            }
+        }
+        state.selection = .usage
+        state.usageTab = .sessions
+        state.refreshVisibleData()
+        await fulfillment(of: [fullSessionsLoaded], timeout: 5)
+        sessionSub.cancel()
+        let todayRow = try XCTUnwrap(state.sessionRows.first(where: { $0.sessionID == "s-today" }))
+        XCTAssertEqual(todayRow.filePath, jsonl.path)
+        XCTAssertTrue(todayRow.fileExists)
+    }
 }

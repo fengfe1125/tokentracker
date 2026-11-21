@@ -23,8 +23,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
             let hosting = NSHostingController(rootView: RootView(state: appState).appLanguage())
-            // 页面的 navigationTitle / toolbar 桥接到窗口；标题只用于调度中心和辅助功能，顶栏里不显示
-            hosting.sceneBridgingOptions = [.title, .toolbars]
+            // RootView 的固定工具栏桥接到窗口；页面不再往工具栏里放东西。
+            // 标题固定为 TokenTracker，只用于调度中心和辅助功能，顶栏里不显示
+            hosting.sceneBridgingOptions = [.toolbars]
             let window = TitlelessWindow(contentViewController: hosting)
             window.title = "TokenTracker"
             let narrow = ProcessInfo.processInfo.environment["TT_UI_PREVIEW_NARROW"] == "1"
@@ -32,6 +33,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window.minSize = NSSize(width: 820, height: 520)
             window.styleMask.formUnion([.miniaturizable, .resizable, .fullSizeContentView])
             window.toolbarStyle = .unified
+            // 标题栏透明、不画分隔线：工具栏、页面栏和内容是同一块背景
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
             window.isReleasedWhenClosed = false     // 关闭只隐藏
             window.isRestorable = false             // 启动显示由 AppLaunchPolicy 管理
             window.delegate = self
@@ -42,6 +46,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if window?.isVisible == false { window?.center() }
         if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
+        // 不让页面栏里的搜索框一打开就抢焦点、亮起蓝框
+        DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
         log2("MainWindowController.show: done, visible=\(window?.isVisible == true)")
     }
 

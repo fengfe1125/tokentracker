@@ -2,6 +2,46 @@
   "format_version": 4,
   "events": [
     {
+      "tool": "antigravity",
+      "src_key": "ag-sess-1|step_1",
+      "session_id": "ag-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787619600000,
+      "model": "claude-sonnet-4-5",
+      "input": 1000,
+      "output": 200,
+      "cache_read": 2000,
+      "cache_write": 0,
+      "cost": 0.0066,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "antigravity_jsonl",
+      "source_scope": "",
+      "provider": "anthropic",
+      "price_version_id": "test:anthropic:claude-sonnet-4-5"
+    },
+    {
+      "tool": "antigravity",
+      "src_key": "ag-sess-1|step_2",
+      "session_id": "ag-sess-1",
+      "project": "/repo/webapp",
+      "ts": 1787623200000,
+      "model": "gemini-4-neon-xhigh",
+      "input": 500,
+      "output": 100,
+      "cache_read": 3000,
+      "cache_write": 0,
+      "cost": null,
+      "time_quality": "exact",
+      "interval_start": null,
+      "cost_source": "estimate",
+      "source_kind": "antigravity_jsonl",
+      "source_scope": "",
+      "provider": "google",
+      "price_version_id": null
+    },
+    {
       "tool": "claude",
       "src_key": "s-claude-1|msg_1",
       "session_id": "s-claude-1",
@@ -384,6 +424,27 @@
   ],
   "activities": [
     {
+      "agent": "antigravity",
+      "session_id": "ag-sess-1",
+      "turn_id": "step_1",
+      "raw_name": "run_command",
+      "canonical_name": "shell",
+      "namespace": "built-in",
+      "call_id": "",
+      "parent_call_id": "",
+      "started_at": 1787619600000,
+      "ended_at": null,
+      "duration_ms": null,
+      "status": "unknown",
+      "source_kind": "antigravity_jsonl",
+      "confidence": "exact",
+      "event_kind": "tool",
+      "event_layer": "execution",
+      "skill_name": "",
+      "skill_confidence": "",
+      "src_key": "ag-sess-1|tool|step_1|0"
+    },
+    {
       "agent": "claude",
       "session_id": "s-claude-1",
       "turn_id": "",
@@ -533,6 +594,11 @@
   ],
   "session_meta": [
     {
+      "tool": "antigravity",
+      "session_id": "ag-sess-1",
+      "title": "检查 Antigravity 扫描器"
+    },
+    {
       "tool": "claude",
       "session_id": "s-claude-1",
       "title": "帮我修一下登录页样式"
@@ -619,6 +685,13 @@
       "files": 1,
       "activity_added": 1,
       "activity_updated": 1
+    },
+    "antigravity": {
+      "added": 2,
+      "updated": 0,
+      "files": 1,
+      "activity_added": 1,
+      "activity_updated": 0
     }
   },
   "snapshots": [

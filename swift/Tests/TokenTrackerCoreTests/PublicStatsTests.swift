@@ -271,4 +271,32 @@ final class PublicStatsTests: XCTestCase {
         // 数组长度与 range.days 的不变式在空库上同样必须成立。
         XCTAssertEqual(payload.daily.tokens.count, payload.range.days)
     }
+
+    func testAntigravityIncludedInAgentsAndExactBurstAndLeaksNothing() throws {
+        let dir = try TempDir()
+        let store = try dir.store()
+        try store.putEvent(tool: "antigravity", srcKey: "conv-secret|step_1",
+                           sessionID: "conv-secret", project: "/Users/sakura/private-ag-repo",
+                           ts: daysAgo(1), model: "gemini-4-neon-xhigh",
+                           input: 1200, output: 300, cacheRead: 500)
+        try store.putEvent(tool: "antigravity", srcKey: "conv-secret|step_2",
+                           sessionID: "conv-secret", project: "/Users/sakura/private-ag-repo",
+                           ts: daysAgo(1) + 15 * 60_000, model: "gemini-4-neon-xhigh",
+                           input: 400, output: 100, cacheRead: 1500)
+        try store.setSessionTitle(tool: "antigravity", sessionID: "conv-secret",
+                                  title: "机密 Antigravity 对话")
+        try store.conn.commit()
+
+        let payload = try PublicStatsBuilder.build(store: store, nowMs: noonToday())
+        XCTAssertEqual(payload.agents.map(\.id), ["antigravity"])
+        XCTAssertEqual(payload.agents[0].tokens, 4000)
+        XCTAssertEqual(payload.longestBurst?.agent, "antigravity")
+        XCTAssertEqual(payload.longestBurst?.seconds, 15 * 60)
+        XCTAssertFalse(payload.caveats.snapshotOnlyAgents.contains("antigravity"))
+
+        let encoded = String(data: try payload.encoded(), encoding: .utf8)!
+        for secret in ["conv-secret", "private-ag-repo", "gemini-4-neon-xhigh", "机密 Antigravity 对话"] {
+            XCTAssertFalse(encoded.contains(secret), "公开载荷泄漏敏感字段：\(secret)")
+        }
+    }
 }

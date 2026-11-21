@@ -2,7 +2,7 @@ import Foundation
 import TokenTrackerCore
 
 /// Mirrors the overview range keys and UsageStore.rangeBounds day boundaries.
-struct HeatmapRequest: Equatable, Sendable {
+struct HeatmapRequest: Equatable, Hashable, Sendable {
     var range = "week"
     /// nil = 全部 Agent；否则只统计这个工具
     var tool: String?

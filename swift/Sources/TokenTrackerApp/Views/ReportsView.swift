@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  本地周报：左侧按周选择，右侧为该周快照（汇总、与上周对比、项目投入、
-//  模型与费用依据、预算与生成时健康）。生成与导出在窗口工具栏。
+//  模型与费用依据、预算与生成时健康）。生成在周列表标题旁，重新生成与导出在详情标题旁。
 //
 
 import SwiftUI
@@ -34,6 +34,7 @@ struct ReportsView: View {
                     Button(L10n.text("生成周报")) { generate(for: Date()) }
                 }
             } else {
+                // 与设置页同一种结构：左侧列表、右侧详情，没有额外的页面栏
                 HStack(spacing: 0) {
                     weekList
                     Divider()
@@ -42,28 +43,6 @@ struct ReportsView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-            }
-        }
-        .navigationTitle(L10n.text("本地周报"))
-        .navigationSubtitle(report.map(weekLabel) ?? "")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button { showGenerate = true } label: {
-                    Label(L10n.text("生成周报"), systemImage: "plus")
-                }
-                .help(L10n.text("生成周报"))
-                .popover(isPresented: $showGenerate, arrowEdge: .bottom) { generatePopover }
-                Menu {
-                    Button(L10n.text("导出 Markdown")) { if let report { model.exportReport(report) } }
-                    Button(L10n.text("导出数据")) {
-                        reportExportQuery = report?.query ?? UsageQuery.period("week")
-                        showExport = true
-                    }
-                } label: {
-                    Label(L10n.text("导出"), systemImage: "square.and.arrow.up")
-                }
-                .disabled(report == nil)
-                .help(L10n.text("导出"))
             }
         }
         .onAppear { model.refresh() }
@@ -126,24 +105,61 @@ struct ReportsView: View {
     }
 
     private var weekList: some View {
-        List(selection: Binding(get: { report?.id }, set: { selectedID = $0 })) {
-            ForEach(model.reports) { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(weekLabel(item))
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    Text(year(item) + " · " + UIFormat.compact(item.totals.tokens, yi: yi)
-                         + " · " + UIFormat.costLabel(item.totals))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(L10n.text("本地周报")).font(.headline)
+                Spacer()
+                Button { showGenerate = true } label: {
+                    Label(L10n.text("生成周报"), systemImage: "plus")
                 }
-                .padding(.vertical, 3)
-                .tag(item.id)
+                .buttonStyle(.pageIcon)
+                .help(L10n.text("生成周报"))
+                .popover(isPresented: $showGenerate, arrowEdge: .bottom) { generatePopover }
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(model.reports) { item in
+                        weekRow(item)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
         }
-        .listStyle(.inset)
-        .frame(width: 180)
+        .frame(width: 220)
+    }
+
+    private func weekRow(_ item: WeeklyReport) -> some View {
+        let selected = item.id == report?.id
+        return Button { selectedID = item.id } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(weekLabel(item))
+                    .font(.callout.weight(selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? Color.brand : Color.primary)
+                    .lineLimit(1)
+                Text(year(item) + " · " + UIFormat.compact(item.totals.tokens, yi: yi)
+                     + " · " + UIFormat.costLabel(item.totals))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.brand.opacity(0.13))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // -------------------------------------------------------------- 详情 ----
@@ -166,7 +182,22 @@ struct ReportsView: View {
                 } label: {
                     Label(L10n.text("重新生成"), systemImage: "arrow.clockwise")
                 }
-                .controlSize(.small)
+                .buttonStyle(.pageIcon)
+                .help(L10n.text("重新生成"))
+                Menu {
+                    Button(L10n.text("导出 Markdown")) { model.exportReport(report) }
+                    Button(L10n.text("导出数据")) {
+                        reportExportQuery = report.query
+                        showExport = true
+                    }
+                } label: {
+                    Label(L10n.text("导出"), systemImage: "square.and.arrow.up")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.pageIcon)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(L10n.text("导出"))
             }
             TotalsView(totals: report.totals)
             changeCard(report)

@@ -12,10 +12,27 @@ public enum ProjectBackfill {
         let metadataRows=try store.conn.query("""
         SELECT u.tool,u.src_key,u.project FROM usage_events u
         LEFT JOIN project_sources p ON p.tool=u.tool AND p.src_key=u.src_key
-        WHERE p.src_key IS NULL AND u.tool IN ('codex','pi','dsh','kimi')
+        WHERE p.src_key IS NULL AND u.tool IN ('codex','pi','dsh','kimi','antigravity')
         AND u.project LIKE '/%' AND u.src_key NOT LIKE 'cli|%' LIMIT 500
         """)
         for row in metadataRows { try store.recordProjectPath(tool:row.string("tool"),srcKey:row.string("src_key"),path:row.string("project")) }
+        let antigravityMap = AntigravityWorkspaceMap.load(path: roots.antigravityWorkspaceMap)
+        if !antigravityMap.isEmpty {
+            let unmapped = try store.conn.query("""
+            SELECT u.src_key,u.session_id,u.project FROM usage_events u
+            LEFT JOIN project_sources p ON p.tool=u.tool AND p.src_key=u.src_key
+            WHERE u.tool='antigravity' AND p.src_key IS NULL LIMIT 500
+            """)
+            for row in unmapped {
+                guard let workspace = antigravityMap[row.string("session_id")] else { continue }
+                if row.string("project").isEmpty {
+                    _ = try store.conn.execute(
+                        "UPDATE usage_events SET project=? WHERE tool='antigravity' AND src_key=? AND project=''",
+                        [workspace, row.string("src_key")])
+                }
+                try store.recordProjectPath(tool: "antigravity", srcKey: row.string("src_key"), path: workspace)
+            }
+        }
         try store.conn.commit()
         var files:[(String,String)]=[]
         for (tool,root) in [("claude",roots.claude),("codex",roots.codexSessions)] {

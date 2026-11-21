@@ -76,7 +76,9 @@ struct ModelsView: View {
             .padding(.vertical, 6)
             .card(padding: 0)
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-            .padding(Metrics.pagePadding)
+            .padding(.horizontal, Metrics.pagePadding)
+            .padding(.bottom, Metrics.pagePadding)
+            .padding(.top, 10)
         }
         .pageChrome(title: L10n.text("模型"),
                     subtitle: L10n.text("\(rows.count) 个模型"))

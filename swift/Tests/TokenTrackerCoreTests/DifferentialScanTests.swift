@@ -36,6 +36,8 @@ final class DifferentialScanTests: XCTestCase {
         roots.kimiCodeHome = "\(corpus)/kimi-code/server/events"
         roots.kimiCLI = "\(corpus)/kimi-cli-nonexistent"
         roots.piRoots = ["\(corpus)/pi/sessions"]
+        roots.antigravityRoots = ["\(corpus)/antigravity/brain"]
+        roots.antigravityWorkspaceMap = "\(corpus)/antigravity/workspaces.json"
         return roots
     }
 

@@ -65,6 +65,7 @@ TokenTracker is useful if you:
 | Pi | ✓ | — | ✓ |
 | opencode | ✓ | — | ✓ |
 | Hermes Agent | ✓ | — | ✓ |
+| Antigravity | ✓ | — | ✓ |
 
 > Quota availability depends on the official interfaces and local login state provided by each service. Token and cost tracking does not require a shared cloud account.
 
@@ -155,6 +156,7 @@ The `./tt` launcher in the repository root builds `tt-swift` on first use and fo
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | message usage |
 | opencode | `~/.local/share/opencode/opencode.db` | cumulative session usage |
 | Hermes Agent | `~/.hermes/**/*.db` | session_model_usage |
+| Antigravity | `~/.gemini/antigravity*/brain/*/.system_generated/logs/transcript.jsonl` | `PLANNER_RESPONSE` usage (optional `hooks.json` workspace map) |
 
 Environment variables can override the data source paths. See the individual scanners and `ScanRoots` for the complete list.
 

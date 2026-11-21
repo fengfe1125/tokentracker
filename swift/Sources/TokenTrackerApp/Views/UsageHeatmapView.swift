@@ -6,10 +6,10 @@ struct UsageHeatmapView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model: UsageHeatmapModel
     let yi: Bool
+    @State private var slowLoading = false
 
-    private var chart: UsageHeatmap? {
-        model.loadedRequest == model.request ? model.chart : nil
-    }
+    /// 切换范围时保留上一帧热力图，避免闪出空白加载圈和二次跳动。
+    private var chart: UsageHeatmap? { model.chart }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -17,9 +17,9 @@ struct UsageHeatmapView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(L10n.text("Token 用量热力图")).font(.headline)
-                        if model.loading { ProgressView().controlSize(.mini) }
+                        if slowLoading { ProgressView().controlSize(.mini) }
                     }
-                    Text((model.request.tool.map(toolDisplayName) ?? L10n.text("全部 Agent")) + " · "
+                    Text(((model.loadedRequest?.tool ?? model.request.tool).map(toolDisplayName) ?? L10n.text("全部 Agent")) + " · "
                          + (chart.map(rangeText) ?? L10n.text("本地时区")))
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -41,6 +41,11 @@ struct UsageHeatmapView: View {
             }
         }
         .card()
+        .task(id: model.loading) {
+            guard model.loading else { slowLoading = false; return }
+            try? await Task.sleep(for: .milliseconds(250))
+            if !Task.isCancelled { slowLoading = true }
+        }
         .onAppear { if model.chart == nil { model.refresh() } }
     }
 
@@ -79,7 +84,10 @@ private struct HeatmapStats: View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value).font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text(value)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
                 if let detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
             }
         }
@@ -94,10 +102,18 @@ private struct HeatmapChartPanel: View {
     @State private var width: CGFloat = 640
 
     var body: some View {
+        let canvasHeight = HeatmapGridLayout(chart: chart, width: width).height
         VStack(alignment: .leading, spacing: 12) {
-            HeatmapCanvas(chart: chart, locale: locale) { focused = $0 }
-                .frame(height: HeatmapGridLayout(chart: chart, width: width).height)
+            // 外层平滑改变裁剪高度，内层 NSView 禁用帧内插值一次性重绘，避免每帧 120Hz 重复 draw(_:)。
+            Color.clear
+                .frame(height: canvasHeight)
                 .frame(maxWidth: .infinity)
+                .overlay(alignment: .topLeading) {
+                    HeatmapCanvas(chart: chart, locale: locale) { focused = $0 }
+                        .frame(height: canvasHeight)
+                        .transaction { $0.animation = nil }
+                }
+                .clipped()
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             HStack(alignment: .center, spacing: 12) {
                 detail.frame(maxWidth: .infinity, alignment: .leading)
@@ -225,23 +241,27 @@ final class HeatmapCanvasView: NSView {
     override var acceptsFirstResponder: Bool { true }
     private(set) var chart: UsageHeatmap?
     private var locale = Locale.current
-    private var labels: [String] = []
     private var hovered: Int?
     private var selected: Int?
     private var focusIndex: Int? { hovered ?? selected }
     var onFocus: ((UsageHeatmap.Day?) -> Void)?
 
-    /// GitHub-style greens tuned separately for light and dark appearances.
-    static func color(_ level: Int) -> NSColor {
-        // 与强调色同一色相，由浅到深
+    /// 预建 5 级动态色，避免每次 draw 为每个格子重新分配 NSColor 闭包。
+    private static let levelColors: [NSColor] = {
         let light: [UInt32] = [0xEBEDF0, 0xDCD0F7, 0xB9A2F0, 0x9470E6, 0x6F45D8]
         let dark: [UInt32] = [0x2D333B, 0x3B2D6E, 0x5C45B0, 0x8566E0, 0xA88CFF]
-        return NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let rgb = (isDark ? dark : light)[max(0, min(4, level))]
-            return NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
-                           blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+        return (0..<5).map { level in
+            NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                let rgb = (isDark ? dark : light)[level]
+                return NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
+                               blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+            }
         }
+    }()
+
+    static func color(_ level: Int) -> NSColor {
+        levelColors[max(0, min(4, level))]
     }
     static func hourLabel(_ date: Date, short: Bool) -> String {
         let parts = Calendar.current.dateComponents([.month, .day, .hour], from: date)
@@ -258,7 +278,6 @@ final class HeatmapCanvasView: NSView {
         guard chart?.id != newChart.id || self.locale != locale else { return }
         chart = newChart; self.locale = locale
         hovered = nil; selected = nil
-        labels = newChart.cells.map { $0.map { Self.label($0, unit: newChart.unit, locale: locale) } ?? "" }
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(L10n.text("Token 用量热力图"))
@@ -343,7 +362,8 @@ final class HeatmapCanvasView: NSView {
         invalidate(old); invalidate(focusIndex)
         let day = focusIndex.flatMap { chart?.cells[$0] }
         onFocus?(day)
-        setAccessibilityValue(focusIndex.map { labels[$0] } ?? L10n.text("请选择一个格子"))
+        let value = day.flatMap { d in chart.map { Self.label(d, unit: $0.unit, locale: locale) } }
+        setAccessibilityValue(value ?? L10n.text("请选择一个格子"))
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }

@@ -31,10 +31,20 @@ struct SessionsView: View {
     }
 
     var body: some View {
-        tableView
-            .pageChrome(title: title, subtitle: subtitle)
-            .searchable(text: $state.sessionSearch, placement: .toolbar,
-                        prompt: L10n.text("搜索标题 / 项目 / 会话 / 模型"))
+        VStack(spacing: 0) {
+            tableView
+            if let selected = selectedRow {
+                Divider()
+                selectedSessionCard(selected)
+                    .padding(.horizontal, Metrics.pagePadding)
+                    .padding(.vertical, 10)
+            }
+        }
+        .pageChrome(title: title, subtitle: subtitle) {
+            PageSearchField(text: $state.sessionSearch,
+                            prompt: L10n.text("搜索标题 / 项目 / 会话 / 模型"))
+                .frame(width: 220)
+        }
         // 搜索防抖：refreshData 连带跑统计、detectAll 和配额（含官方 HTTP），
         // 每敲一个字符跑一次太重
         .task(id: state.sessionSearch) {
@@ -67,6 +77,69 @@ struct SessionsView: View {
         rows.sorted(using: sortOrder)
     }
 
+    private var selectedRow: SessionRowModel? {
+        guard let id = state.selectedSessionID else { return nil }
+        return sortedRows.first { $0.id == id }
+    }
+
+    private func selectedSessionCard(_ row: SessionRowModel) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(toolColor(row.tool))
+                    .frame(width: 8, height: 8)
+                Text(row.toolName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text(row.title)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Button {
+                    state.selectedSessionID = row.id
+                    state.showSessionDetail()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(L10n.text("查看详情"))
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button {
+                    state.selectedSessionID = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.text("关闭预览"))
+            }
+            SessionMetadataRows(
+                tool: row.tool,
+                timeText: row.fullTimeText,
+                folderPath: row.workspacePath,
+                folderExists: row.workspaceExists,
+                fallbackProject: row.project,
+                sessionID: row.sessionID,
+                models: row.models,
+                stats: row.stats,
+                filePath: row.filePath,
+                fileExists: row.fileExists,
+                yi: yi,
+                showTool: false,
+                compact: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 12)
+    }
+
     private var tableView: some View {
         Table(sortedRows, selection: $state.selectedSessionID, sortOrder: $sortOrder) {
             TableColumn(L10n.text("时间"), value: \SessionRowModel.sortTs) { row in
@@ -80,23 +153,24 @@ struct SessionsView: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
+                .help(row.fullTimeText)
             }
             .width(min: 60, ideal: 64, max: 96)
             TableColumn(L10n.text("会话"), value: \.title) { row in
-                // 项目并入会话列的副行，表格不再需要横向滚动
+                // 文件夹与会话 ID 并入会话列的副行，表格不再需要横向滚动
                 VStack(alignment: .leading, spacing: 1) {
                     Text(row.title)
                         .font(.callout)
                         .lineLimit(1)
-                    Text(row.projectShort)
+                    Text(row.sessionSubtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.head)
+                        .truncationMode(.middle)
                 }
-                .help(row.project.isEmpty ? row.title : "\(row.title)\n\(row.project)")
+                .help(row.sessionTooltip)
             }
-            .width(min: 120, ideal: 130)
+            .width(min: 140, ideal: 180)
             TableColumn(L10n.text("工具"), value: \.toolName) { row in
                 // 只给色点上色，文字保持 primary（整条 Label 染色在深色模式下读不清）
                 VStack(alignment: .leading, spacing: 1) {
@@ -108,16 +182,16 @@ struct SessionsView: View {
                             .font(.callout)
                             .lineLimit(1)
                     }
-                    Text(row.model.isEmpty ? "—" : row.model)
+                    Text(row.modelShort)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .padding(.leading, 13)
                 }
-                .help(row.model)
+                .help(row.modelsText)
             }
-            .width(min: 100, ideal: 120, max: 220)
+            .width(min: 110, ideal: 135, max: 230)
             TableColumn(L10n.text("活动"), value: \SessionRowModel.activityExact) { row in
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(L10n.text("\(row.activityExact) 次"))
@@ -130,20 +204,39 @@ struct SessionsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 50, ideal: 54, max: 80)
+            .width(min: 48, ideal: 54, max: 80)
             TableColumn("Tokens", value: \SessionRowModel.tokens) { row in
                 Text(UIFormat.tokens(row.tokens, yi: yi))
                     .font(.callout.monospacedDigit())
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(UIFormat.sessionTokenBreakdown(row.stats, yi: yi))
             }
-            .width(min: 58, ideal: 62, max: 96)
+            .width(min: 58, ideal: 64, max: 96)
             TableColumn(L10n.text("成本"), value: \SessionRowModel.cost) { row in
-                Text(UIFormat.cost(row.cost))
+                Text(row.costLabel)
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(UIFormat.sessionTokenBreakdown(row.stats, yi: yi) + "\n" + row.costLabel)
             }
-            .width(min: 52, ideal: 56, max: 90)
+            .width(min: 54, ideal: 60, max: 92)
+            TableColumn(L10n.text("文件")) { row in
+                HStack {
+                    Spacer(minLength: 0)
+                    Button {
+                        SessionFileActions.revealFile(row.filePath)
+                    } label: {
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(row.fileExists ? Color.secondary : Color.secondary.opacity(0.25))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!row.fileExists)
+                    .help(fileButtonHelp(row))
+                    Spacer(minLength: 0)
+                }
+            }
+            .width(36)
         }
         .contextMenu(forSelectionType: String.self) { selection in
             if let id = selection.first, let row = rows.first(where: { $0.id == id }) {
@@ -152,10 +245,22 @@ struct SessionsView: View {
                     state.showSessionDetail()
                 }
                 Divider()
-                Button(L10n.text("在 Finder 中打开项目目录")) { openInFinder(row.project) }
+                Button(L10n.text("在 Finder 中显示记录文件")) {
+                    SessionFileActions.revealFile(row.filePath)
+                }
+                .disabled(!row.fileExists)
+                Button(L10n.text("在 Finder 中打开文件夹")) {
+                    SessionFileActions.openFolder(row.workspacePath)
+                }
+                .disabled(!row.workspaceExists)
+                Divider()
                 Button(L10n.text("复制会话 ID")) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(row.sessionID, forType: .string)
+                    SessionFileActions.copy(row.sessionID)
+                }
+                if !row.filePath.isEmpty {
+                    Button(L10n.text("复制文件路径")) {
+                        SessionFileActions.copy(row.filePath)
+                    }
                 }
             }
         } primaryAction: { selection in    // primaryAction = 双击
@@ -176,13 +281,12 @@ struct SessionsView: View {
         }
     }
 
-    private func openInFinder(_ project: String) {
-        guard !project.isEmpty else { return }
-        let url = URL(fileURLWithPath: project)
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: project, isDirectory: &isDir) {
-            NSWorkspace.shared.open(url)
-        }
+    private func fileButtonHelp(_ row: SessionRowModel) -> String {
+        if row.filePath.isEmpty { return L10n.text("未找到原记录文件") }
+        let path = abbreviateHomePath(row.filePath)
+        return row.fileExists
+            ? "\(L10n.text("在 Finder 中显示"))\n\(path)"
+            : "\(L10n.text("原记录文件已不存在"))\n\(path)"
     }
 }
 
@@ -195,17 +299,63 @@ struct SessionRowModel: Identifiable {
     var toolName: String { toolDisplayName(row.tool) }
     var title: String {
         if let title = row.title, !title.isEmpty { return title }
+        if !row.workspacePath.isEmpty { return (row.workspacePath as NSString).lastPathComponent }
         return row.project.isEmpty ? row.sessionID : row.project
     }
     var project: String { row.project }
-    /// 列表里只显示最后一段（完整路径进 tooltip）；claude 的 slug 原样留着
-    var projectShort: String {
+    var workspacePath: String { row.workspacePath }
+    var workspaceExists: Bool { row.workspaceExists }
+    var filePath: String { row.filePath }
+    var fileExists: Bool { row.fileExists }
+    var stats: UsageStore.ToolStats { row.stats }
+
+    /// 优先显示真实工作文件夹的最后一段，退回原始 project
+    var folderShort: String {
+        if !row.workspacePath.isEmpty {
+            return (row.workspacePath as NSString).lastPathComponent
+        }
         guard !row.project.isEmpty else { return "—" }
         guard row.project.hasPrefix("/") else { return row.project }
         return (row.project as NSString).lastPathComponent
     }
+    var projectShort: String { folderShort }
+
+    var displayFolder: String {
+        if !row.workspacePath.isEmpty { return abbreviateHomePath(row.workspacePath) }
+        return row.project
+    }
+
+    var sessionSubtitle: String {
+        var parts: [String] = []
+        if folderShort != "—" { parts.append(folderShort) }
+        if !row.sessionID.isEmpty { parts.append(row.sessionID) }
+        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+    }
+
+    var sessionTooltip: String {
+        var lines = [title]
+        if !displayFolder.isEmpty { lines.append(displayFolder) }
+        if !row.sessionID.isEmpty { lines.append(row.sessionID) }
+        return lines.joined(separator: "\n")
+    }
+
     var model: String { row.model }
-    var hasTime: Bool { row.lastSeen != nil }
+    var models: [String] {
+        let list = row.models.filter { !$0.isEmpty }
+        if !list.isEmpty { return list }
+        return row.model.isEmpty ? [] : [row.model]
+    }
+    var modelShort: String {
+        guard let primary = models.first else { return "—" }
+        if models.count > 1 { return "\(primary) +\(models.count - 1)" }
+        return primary
+    }
+    var modelsText: String {
+        models.isEmpty ? "—" : models.joined(separator: " · ")
+    }
+
+    var hasTime: Bool { row.lastSeen != nil || (row.ts ?? 0) > 0 }
+    var firstTs: Int64? { row.firstTs }
 
     /// last_seen 是 SQLite datetime()："YYYY-MM-DD HH:MM:SS"
     private var lastSeenParts: (date: String, time: String)? {
@@ -220,6 +370,9 @@ struct SessionRowModel: Identifiable {
         guard let date = lastSeenParts?.date, date != UIFormat.todayString else { return nil }
         return date
     }
+    var fullTimeText: String {
+        UIFormat.sessionTimeRange(firstMs: row.firstTs, lastMs: row.ts, fallbackLastSeen: row.lastSeen)
+    }
 
     var sortTs: Int64 { row.ts ?? 0 }
     var activityExact: Int64 { row.activityExact }
@@ -227,6 +380,8 @@ struct SessionRowModel: Identifiable {
     var skills: Int64 { row.skills }
     var tokens: Int64 { row.stats.tokens }
     var cost: Double { row.stats.cost }
+    var isUnpriced: Bool { row.stats.events > 0 && row.stats.unpriced == row.stats.events }
+    var costLabel: String { UIFormat.sessionCost(row.stats) }
 }
 
 private func activitySubtitle(_ row: SessionRowModel) -> String {

@@ -4,7 +4,7 @@
 //
 //  项目：范围筛选 → 汇总指标 → 项目列表（按占比排的行）；
 //  点进单个项目后显示变化说明、趋势、Agent / 模型分布和主要会话。
-//  搜索、预算、导出与项目管理在窗口工具栏。
+//  搜索、预算、导出与项目管理在页面栏。
 //
 
 import Charts
@@ -99,41 +99,50 @@ struct ProjectsView: View {
                     projectList
                 }
             }
-            .padding(Metrics.pagePadding)
+            .padding(.horizontal, Metrics.pagePadding)
+            .padding(.bottom, Metrics.pagePadding)
+            .padding(.top, 10)
         }
-        .navigationTitle(selected.map(projectDisplayName) ?? L10n.text("项目"))
-        .navigationSubtitle(model.backfillProgress)
-        .searchable(text: $model.search, placement: .toolbar, prompt: L10n.text("搜索项目"))
-        .toolbar {
+        .pageChrome(title: selected.map(projectDisplayName) ?? L10n.text("项目"),
+                    subtitle: [selected.map(projectDisplayName), model.backfillProgress]
+                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                    leading: {
             if selected != nil {
-                ToolbarItem(placement: .navigation) {
-                    Button { showAll() } label: {
-                        Label(L10n.text("所有项目"), systemImage: "chevron.left")
-                    }
-                    .help(L10n.text("所有项目"))
+                Button { showAll() } label: {
+                    Label(L10n.text("所有项目"), systemImage: "chevron.left")
                 }
+                .buttonStyle(.pageIcon)
+                .help(L10n.text("所有项目"))
             }
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button { showBudget = true } label: {
-                    Label(L10n.text("预算"), systemImage: "gauge.with.needle")
-                }
-                .help(selected == nil ? L10n.text("全局预算") : L10n.text("项目预算"))
-                Button { showExport = true } label: {
-                    Label(L10n.text("导出"), systemImage: "square.and.arrow.up")
-                }
-                .help(L10n.text("导出当前筛选的数据"))
-                Menu {
-                    Button(L10n.text("项目管理")) { showCreate = true }
-                    Button(L10n.text("自定义日期范围…")) { showCustom = true }
-                    if selected != nil {
-                        Divider()
-                        Button(L10n.text("重命名…")) { showRename = true }
-                        Button(L10n.text("调整归属")) { showAssignments = true }
+        }) {
+            HStack(spacing: 8) {
+                PageSearchField(text: $model.search, prompt: L10n.text("搜索项目"))
+                    .frame(width: 144)
+                PageActionDivider()
+                HStack(spacing: 2) {
+                    Button { showBudget = true } label: {
+                        Label(L10n.text("预算"), systemImage: "gauge.with.needle")
                     }
-                } label: {
-                    Label(L10n.text("项目管理"), systemImage: "ellipsis.circle")
+                    .help(selected == nil ? L10n.text("全局预算") : L10n.text("项目预算"))
+                    Button { showExport = true } label: {
+                        Label(L10n.text("导出"), systemImage: "square.and.arrow.up")
+                    }
+                    .help(L10n.text("导出当前筛选的数据"))
+                    Menu {
+                        Button(L10n.text("项目管理")) { showCreate = true }
+                        Button(L10n.text("自定义日期范围…")) { showCustom = true }
+                        if selected != nil {
+                            Divider()
+                            Button(L10n.text("重命名…")) { showRename = true }
+                            Button(L10n.text("调整归属")) { showAssignments = true }
+                        }
+                    } label: {
+                        Label(L10n.text("项目管理"), systemImage: "ellipsis.circle")
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .help(L10n.text("项目管理"))
                 }
-                .help(L10n.text("项目管理"))
             }
         }
         .onChange(of: model.busy) { _, busy in
@@ -208,9 +217,12 @@ struct ProjectsView: View {
                         .buttonStyle(.link)
                         .font(.caption)
                 }
-                if model.busy { ProgressView().controlSize(.small) }
                 Spacer(minLength: 0)
+                // 固定占位：加载转圈出现、消失时这一行不变高
+                ProgressView().controlSize(.small)
+                    .opacity(model.busy ? 1 : 0)
             }
+            .frame(height: 18)
             if showCustom || model.customRange {
                 HStack(spacing: 12) {
                     DatePicker(L10n.text("开始"), selection: $from, displayedComponents: .date)

@@ -2,8 +2,8 @@
 //  SettingsView.swift
 //  TokenTrackerApp
 //
-//  设置：与 ~/.tokentracker/settings.json 双向同步（SettingsStore 白名单
-//  校验写入），状态栏 5s 内热生效。开机启动走 SMAppService。
+//  设置：左侧分类，右侧白色卡片分组（SettingsComponents）。与 ~/.tokentracker/settings.json
+//  双向同步（SettingsStore 白名单校验写入），状态栏 5s 内热生效。开机启动走 SMAppService。
 //  账号管理在「账号」页（AccountsView）。
 //
 
@@ -14,15 +14,74 @@ import TokenTrackerCore
 
 /// 设置分类；rawValue 同时是持久化键（其他页面可据此直接跳到某一类）。
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, interface, reminders, data
+    case general, menubar, notch, navigation, reminders, data, publish, about
     static let storageKey = "tt.settings.tab"
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: L10n.text("通用")
-        case .interface: L10n.text("界面")
-        case .reminders: L10n.text("提醒")
-        case .data: L10n.text("数据")
+        case .menubar: L10n.text("状态栏")
+        case .notch: L10n.text("刘海圆环")
+        case .navigation: L10n.text("导航")
+        case .reminders: L10n.text("任务提醒")
+        case .data: L10n.text("价格与数据")
+        case .publish: L10n.text("公开统计")
+        case .about: L10n.text("关于与更新")
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .general: "gearshape.fill"
+        case .menubar: "menubar.rectangle"
+        case .notch: "circle.circle.fill"
+        case .navigation: "square.grid.2x2.fill"
+        case .reminders: "bell.badge.fill"
+        case .data: "dollarsign.circle.fill"
+        case .publish: "globe"
+        case .about: "info.circle.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .general: .gray
+        case .menubar: .blue
+        case .notch: .orange
+        case .navigation: .teal
+        case .reminders: .red
+        case .data: .green
+        case .publish: .cyan
+        case .about: .gray
+        }
+    }
+}
+
+private struct SettingsCategoryBoundsKey: PreferenceKey {
+    static var defaultValue: [SettingsTab: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [SettingsTab: Anchor<CGRect>],
+                       nextValue: () -> [SettingsTab: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct SettingsCategoryPressStyle: ButtonStyle {
+    @Binding var isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        BodyView(configuration: configuration, isPressed: $isPressed)
+    }
+
+    private struct BodyView: View {
+        let configuration: Configuration
+        @Binding var isPressed: Bool
+
+        var body: some View {
+            configuration.label
+                .onChange(of: configuration.isPressed) { _, value in
+                    isPressed = value
+                }
+                .onDisappear {
+                    if isPressed { isPressed = false }
+                }
         }
     }
 }
@@ -38,6 +97,9 @@ struct SettingsPanelView: View {
     @State private var publishDays = 365
     @State private var publishToken = ""
     @State private var showForceConfirmation = false
+    @State private var hoveredTab: SettingsTab?
+    @State private var pressedTab: SettingsTab?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var provider: String {
         state.prefs.menubarProvider
@@ -51,169 +113,26 @@ struct SettingsPanelView: View {
     }
 
     var body: some View {
-        form
-            .navigationTitle(L10n.text("设置"))
-            .navigationSubtitle(tab.title)
-            .sheet(isPresented: $state.showingPublishHistory) {
-                PublishHistoryView(state: state).appLanguage()
-                    .frame(width: 660, height: 460)
-            }
-            // 工具栏中间是导航标签，设置的分页放在内容顶部
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    Picker(L10n.text("设置"), selection: $tab) {
-                        ForEach(SettingsTab.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .padding(.vertical, 8)
-                    Divider()
+        HStack(spacing: 0) {
+            categoryList
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    content
                 }
+                .frame(maxWidth: 680, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
-                .background(.bar)
             }
-    }
-
-    private var form: some View {
-        Form {
-            switch tab {
-            case .general:
-                Section(L10n.text("通用")) {
-                    Picker(L10n.text("语言 / Language"), selection: $language.selection) {
-                        Text(L10n.text("跟随系统")).tag(AppLanguage.system)
-                        Text("简体中文").tag(AppLanguage.simplifiedChinese)
-                        Text("English").tag(AppLanguage.english)
-                    }
-
-                    Toggle(L10n.text("开机自动启动"), isOn: Binding(
-                        get: { state.prefs.launchAtLogin },
-                        set: { on in
-                            state.updateSetting(key: "launch_at_login", value: on)
-                            applyLoginItem(on)
-                        }
-                    ))
-                    Picker(L10n.text("终端 App（继续会话用）"), selection: Binding(
-                        get: { state.prefs.terminalApp },
-                        set: { state.updateSetting(key: "terminal_app", value: $0) }
-                    )) {
-                        Text(L10n.text("自动检测")).tag("auto")
-                        Text("Terminal").tag("terminal")
-                        Text("iTerm2").tag("iterm")
-                        Text("WezTerm").tag("wezterm")
-                        Text("Ghostty").tag("ghostty")
-                    }
-                }
-                Section(L10n.text("关于")) {
-                    HStack {
-                        Text("TokenTracker")
-                        Spacer()
-                        Text("v\(TokenTrackerCore.version)")
-                            .foregroundStyle(.secondary)
-                    }
-                    Link(L10n.text("作者主页"), destination: URL(string: "https://sakuramu.edu.kg/")!)
-                    Toggle(L10n.text("接收测试版更新"), isOn: Binding(
-                        get: { state.prefs.updateBeta },
-                        set: { on in
-                            state.updateSetting(key: "update_beta", value: on)
-                            // 换通道后旧的检查结果不再适用，马上按新通道查一次
-                            state.updateInfo = nil
-                            updater.check(applyTo: state)
-                        }
-                    ))
-                    Text(L10n.text("开启后会收到尚未正式发布的开发版本，可能不稳定；关闭后只接收正式版，已装的测试版不会自动回退。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    updateRow
-                }
-            case .interface:
-                Section(L10n.text("状态栏")) {
-                    Picker(L10n.text("标题显示"), selection: Binding(
-                        get: { provider },
-                        set: { state.updateSetting(key: "menubar_provider", value: $0) }
-                    )) {
-                        ForEach(state.quotaEntries, id: \.id) { entry in
-                            LocalizedText("今日用量 + \(entry.name)").tag(entry.id)
-                        }
-                        Text(L10n.text("仅今日用量")).tag("off")
-                        Text(L10n.text("仅显示 Token 数字")).tag("tokens")
-                    }
-                    Toggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
-                        .disabled(provider == "tokens")
-                    Toggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
-                    Toggle(L10n.text("大数以「亿」显示"), isOn: binding("unit_yi"))
-                        .disabled(L10n.isEnglish)
-                    Text(L10n.text("中文使用万／亿；英文使用 K/M/B。")).font(.caption).foregroundStyle(.secondary)
-                }
-                MenuBarPortsSection(state: state, model: state.ports)
-                SidebarSettingsSection()
-                Section(L10n.text("刘海圆环")) {
-                    Toggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
-                    Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
-                        ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
-                    }
-                    Text(L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(notchProviders, id: \.id) { entry in
-                        Toggle(entry.name, isOn: Binding(
-                            get: { notch.providers.contains(entry.id) },
-                            set: { notch.setProvider(entry.id, visible: $0) }
-                        ))
-                        .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
-                    }
-                }
-            case .reminders:
-                TaskReminderSettings()
-            case .data:
-                Section(L10n.text("数据")) {
-                    Button(L10n.text("在 Finder 中打开本地数据目录")) {
-                        let path = NSHomeDirectory() + "/.tokentracker"
-                        try? FileManager.default.createDirectory(atPath: path,
-                                                                 withIntermediateDirectories: true)
-                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                    }
-                    Text(L10n.text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Section(L10n.text("价格估算")) {
-                    Toggle(L10n.text("自动同步官方价格"), isOn: binding("price_sync_enabled"))
-                    Text(L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        Text(priceSyncStatusText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(L10n.text("立即同步")) { state.syncPricesNow() }
-                            .disabled(state.priceSyncRunning)
-                        if state.priceSyncRunning { ProgressView().controlSize(.small) }
-                    }
-                    if state.priceSyncLastSuccessAtMs > 0 {
-                        let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
-                        Text(L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(L10n.text("上次成功同步：从未"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !state.priceSyncMessage.isEmpty {
-                        Text(state.priceSyncMessage)
-                            .font(.caption)
-                            .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
-                            .lineLimit(3)
-                    }
-                }
-                publishSection
-            }
+            .id(tab)   // 换分类时回到顶部
         }
-        // .grouped 自带内边距，外面不再叠 .padding()（此前是双份）
-        .formStyle(.grouped)
+        .pageChrome(title: L10n.text("设置"))
+        .tint(.blue)
+        .sheet(isPresented: $state.showingPublishHistory) {
+            PublishHistoryView(state: state).appLanguage()
+                .frame(width: 660, height: 460)
+        }
         .onAppear {
             loadPublishDrafts()
             state.refreshPublishInfo()
@@ -225,6 +144,329 @@ struct SettingsPanelView: View {
             Button(L10n.text("取消"), role: .cancel) {}
         } message: {
             Text(L10n.text("这会绕过内容去重、15 分钟间隔和失败退避，但仍会校验服务地址、用户名与 Token。"))
+        }
+    }
+
+    /// 左侧分类：图标方块 + 名称，选中为浮起中性卡片胶囊，弹簧滑动切换。
+    private var categoryList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(SettingsTab.allCases) { item in
+                    let selected = tab == item
+                    let pressed = pressedTab == item
+                    Button { tab = item } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.symbol)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .background(item.tint.gradient,
+                                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            Text(item.title)
+                                .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.82))
+                                .fontWeight(selected ? .medium : .regular)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .scaleEffect(pressed ? 0.98 : 1.0)
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .animation(reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.82),
+                                   value: pressed)
+                    }
+                    .buttonStyle(SettingsCategoryPressStyle(isPressed: Binding(
+                        get: { pressedTab == item },
+                        set: { active in
+                            if active {
+                                pressedTab = item
+                            } else if pressedTab == item {
+                                pressedTab = nil
+                            }
+                        }
+                    )))
+                    .anchorPreference(key: SettingsCategoryBoundsKey.self, value: .bounds) { [item: $0] }
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredTab = item
+                        } else if hoveredTab == item {
+                            hoveredTab = nil
+                        }
+                    }
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .backgroundPreferenceValue(SettingsCategoryBoundsKey.self) { anchors in
+                GeometryReader { proxy in
+                    ZStack(alignment: .topLeading) {
+                        ZStack(alignment: .topLeading) {
+                            if let hoveredTab, hoveredTab != tab, let anchor = anchors[hoveredTab] {
+                                let rect = proxy[anchor]
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05))
+                                    .frame(width: rect.width, height: rect.height)
+                                    .offset(x: rect.minX, y: rect.minY)
+                                    .id(hoveredTab)
+                                    .transition(.opacity)
+                            }
+                        }
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredTab)
+
+                        if let anchor = anchors[tab] {
+                            let rect = proxy[anchor]
+                            let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            shape
+                                .fill(PageControl.pillSurface)
+                                .overlay(shape.strokeBorder(PageControl.pillBorder, lineWidth: 0.5))
+                                .shadow(color: PageControl.pillShadow, radius: 2, x: 0, y: 1)
+                                .frame(width: rect.width, height: rect.height)
+                                .scaleEffect(pressedTab == tab ? 0.98 : 1.0)
+                                .offset(x: rect.minX, y: rect.minY)
+                                .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.84),
+                                           value: tab)
+                                .animation(reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.82),
+                                           value: pressedTab == tab)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .padding(12)
+        }
+        .frame(width: 200)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch tab {
+        case .general: general
+        case .menubar:
+            menubar
+            MenuBarPortsSection(state: state, model: state.ports)
+        case .notch: notchSettings
+        case .navigation: SidebarSettingsSection()
+        case .reminders: TaskReminderSettings()
+        case .data: dataSettings
+        case .publish: publishSettings
+        case .about: about
+        }
+    }
+
+    // ------------------------------------------------------------ 通用 ----
+
+    private var languageTitle: String {
+        switch language.selection {
+        case .system: L10n.text("跟随系统")
+        case .simplifiedChinese: "简体中文"
+        case .english: "English"
+        }
+    }
+
+    private var terminalTitle: String {
+        switch state.prefs.terminalApp {
+        case "terminal": "Terminal"
+        case "iterm": "iTerm2"
+        case "wezterm": "WezTerm"
+        case "ghostty": "Ghostty"
+        default: L10n.text("自动检测")
+        }
+    }
+
+    private var general: some View {
+        SettingsSection {
+            SettingsRow(L10n.text("语言 / Language")) {
+                SettingsMenuPicker(title: languageTitle) {
+                    Picker(L10n.text("语言 / Language"), selection: $language.selection) {
+                        Text(L10n.text("跟随系统")).tag(AppLanguage.system)
+                        Text("简体中文").tag(AppLanguage.simplifiedChinese)
+                        Text("English").tag(AppLanguage.english)
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+            SettingsDivider()
+            SettingsToggle(L10n.text("开机自动启动"), isOn: Binding(
+                get: { state.prefs.launchAtLogin },
+                set: { on in
+                    state.updateSetting(key: "launch_at_login", value: on)
+                    applyLoginItem(on)
+                }
+            ))
+            SettingsDivider()
+            SettingsRow(L10n.text("终端 App"), detail: L10n.text("从会话详情继续会话时打开的终端。")) {
+                SettingsMenuPicker(title: terminalTitle) {
+                    Picker(L10n.text("终端 App"), selection: Binding(
+                        get: { state.prefs.terminalApp },
+                        set: { state.updateSetting(key: "terminal_app", value: $0) }
+                    )) {
+                        Text(L10n.text("自动检测")).tag("auto")
+                        Text("Terminal").tag("terminal")
+                        Text("iTerm2").tag("iterm")
+                        Text("WezTerm").tag("wezterm")
+                        Text("Ghostty").tag("ghostty")
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------- 状态栏 ----
+
+    private var menubarProviderTitle: String {
+        if provider == "off" { return L10n.text("仅今日用量") }
+        if provider == "tokens" { return L10n.text("仅显示 Token 数字") }
+        if let entry = state.quotaEntries.first(where: { $0.id == provider }) {
+            return L10n.text("今日用量 + \(entry.name)")
+        }
+        return L10n.text("仅今日用量")
+    }
+
+    private var menubar: some View {
+        SettingsSection(L10n.text("状态栏标题")) {
+            SettingsRow(L10n.text("标题显示")) {
+                SettingsMenuPicker(title: menubarProviderTitle) {
+                    Picker(L10n.text("标题显示"), selection: Binding(
+                        get: { provider },
+                        set: { state.updateSetting(key: "menubar_provider", value: $0) }
+                    )) {
+                        ForEach(state.quotaEntries, id: \.id) { entry in
+                            LocalizedText("今日用量 + \(entry.name)").tag(entry.id)
+                        }
+                        Text(L10n.text("仅今日用量")).tag("off")
+                        Text(L10n.text("仅显示 Token 数字")).tag("tokens")
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+            SettingsDivider()
+            SettingsToggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
+                .disabled(provider == "tokens")
+            SettingsDivider()
+            SettingsToggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
+            SettingsDivider()
+            SettingsToggle(L10n.text("大数以「亿」显示"),
+                           detail: L10n.text("中文使用万／亿；英文使用 K/M/B。"),
+                           isOn: binding("unit_yi"))
+                .disabled(L10n.isEnglish)
+        }
+    }
+
+    // -------------------------------------------------------- 刘海圆环 ----
+
+    @ViewBuilder
+    private var notchSettings: some View {
+        SettingsSection(footer: L10n.text("固定显示在内置屏幕刘海左侧；全屏时隐藏。长菜单可能与圆环重叠，可从状态栏菜单快速隐藏。")) {
+            SettingsToggle(L10n.text("显示刘海圆环"), isOn: $notch.enabled)
+            SettingsDivider()
+            SettingsRow(L10n.text("额度显示")) {
+                SettingsMenuPicker(title: notch.quotaDisplay.label) {
+                    Picker(L10n.text("额度显示"), selection: $notch.quotaDisplay) {
+                        ForEach(NotchHUDQuotaDisplay.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+            .disabled(!notch.enabled)
+        }
+        SettingsSection(L10n.text("显示的账号"),
+                        footer: L10n.text("仅显示当前登录账号的官方配额；本地 Token 不用于推算订阅额度。")) {
+            ForEach(Array(notchProviders.enumerated()), id: \.element.id) { index, entry in
+                if index > 0 { SettingsDivider() }
+                SettingsToggle(entry.name, isOn: Binding(
+                    get: { notch.providers.contains(entry.id) },
+                    set: { notch.setProvider(entry.id, visible: $0) }
+                ))
+                .disabled(!notch.enabled || (notch.providers.count == 1 && notch.providers.contains(entry.id)))
+            }
+        }
+    }
+
+    // ------------------------------------------------------- 价格与数据 ----
+
+    @ViewBuilder
+    private var dataSettings: some View {
+        SettingsSection(L10n.text("价格估算")) {
+            SettingsToggle(L10n.text("自动同步官方价格"),
+                           detail: L10n.text("每天从模型供应商的公开页面更新 API 费率。关闭后仍用本机已保存的费率估算；Token 统计和来源费用不受影响。"),
+                           isOn: binding("price_sync_enabled"))
+            SettingsDivider()
+            SettingsRow(priceSyncStatusText, detail: priceSyncDetail) {
+                HStack(spacing: 8) {
+                    if state.priceSyncRunning { ProgressView().controlSize(.small) }
+                    Button(L10n.text("立即同步")) { state.syncPricesNow() }
+                        .disabled(state.priceSyncRunning)
+                }
+            }
+            if !state.priceSyncMessage.isEmpty {
+                Text(state.priceSyncMessage)
+                    .font(.caption)
+                    .foregroundStyle(state.priceSyncState == "failed" ? .red : .secondary)
+                    .lineLimit(3)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
+        }
+        SettingsSection(L10n.text("本地数据"),
+                        footer: L10n.text("原始用量日志始终只在本机读取和保存。设置保存在 ~/.tokentracker/settings.json。")) {
+            SettingsRow(L10n.text("数据目录"), detail: "~/.tokentracker") {
+                Button(L10n.text("在 Finder 中打开")) {
+                    let path = NSHomeDirectory() + "/.tokentracker"
+                    try? FileManager.default.createDirectory(atPath: path,
+                                                             withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                }
+            }
+        }
+        AntigravityWorkspaceHookSection(state: state)
+    }
+
+    private var priceSyncDetail: String {
+        guard state.priceSyncLastSuccessAtMs > 0 else { return L10n.text("上次成功同步：从未") }
+        let date = Date(timeIntervalSince1970: Double(state.priceSyncLastSuccessAtMs) / 1000)
+        return L10n.text("上次成功同步：\(date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))")
+    }
+
+    // ------------------------------------------------------- 关于与更新 ----
+
+    @ViewBuilder
+    private var about: some View {
+        SettingsSection {
+            HStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 52, height: 52)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("TokenTracker").font(.title3.weight(.semibold))
+                    Text("v\(TokenTrackerCore.version)")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Link(L10n.text("作者主页"), destination: URL(string: "https://sakuramu.edu.kg/")!)
+            }
+            .padding(16)
+        }
+        SettingsSection(L10n.text("更新")) {
+            SettingsToggle(L10n.text("接收测试版更新"),
+                           detail: L10n.text("开启后会收到尚未正式发布的开发版本，可能不稳定；关闭后只接收正式版，已装的测试版不会自动回退。"),
+                           isOn: Binding(
+                get: { state.prefs.updateBeta },
+                set: { on in
+                    state.updateSetting(key: "update_beta", value: on)
+                    // 换通道后旧的检查结果不再适用，马上按新通道查一次
+                    state.updateInfo = nil
+                    updater.check(applyTo: state)
+                }
+            ))
+            SettingsDivider()
+            updateRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
         }
     }
 
@@ -249,32 +491,57 @@ struct SettingsPanelView: View {
     // -------------------------------------------------------- 公开统计 ----
 
     @ViewBuilder
-    private var publishSection: some View {
-        Section(L10n.text("公开统计")) {
-            Toggle(L10n.text("扫描后自动上传"), isOn: Binding(
+    private var publishSettings: some View {
+        SettingsSection(footer: publishPrivacyText) {
+            SettingsToggle(L10n.text("扫描后自动上传"), isOn: Binding(
                 get: { state.prefs.publishEnabled },
                 set: { state.setPublishEnabled($0) }
             ))
-            TextField(L10n.text("HTTPS 服务地址"), text: $publishEndpoint,
-                      prompt: Text("https://tt.example.com"))
-                .textFieldStyle(.roundedBorder)
-            TextField(L10n.text("用户名"), text: $publishHandle, prompt: Text("your-handle"))
-                .textFieldStyle(.roundedBorder)
-            Picker(L10n.text("公开时间范围"), selection: $publishDays) {
-                Text(L10n.text("90 天")).tag(90)
-                Text(L10n.text("365 天")).tag(365)
-                Text(L10n.text("730 天")).tag(730)
-            }
-            HStack(spacing: 8) {
-                SecureField(L10n.text("发布 Token（留空保持现有）"), text: $publishToken)
+        }
+        SettingsSection(L10n.text("服务配置")) {
+            SettingsRow(L10n.text("HTTPS 服务地址")) {
+                TextField(L10n.text("HTTPS 服务地址"), text: $publishEndpoint,
+                          prompt: Text("https://tt.example.com"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                Label(state.publishTokenConfigured ? L10n.text("已配置") : L10n.text("未配置"),
-                      systemImage: state.publishTokenConfigured
-                        ? "checkmark.circle.fill" : "exclamationmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(state.publishTokenConfigured ? .green : .secondary)
+                    .frame(width: 260)
             }
+            SettingsDivider()
+            SettingsRow(L10n.text("用户名")) {
+                TextField(L10n.text("用户名"), text: $publishHandle, prompt: Text("your-handle"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+            }
+            SettingsDivider()
+            SettingsRow(L10n.text("公开时间范围")) {
+                SettingsMenuPicker(title: publishDaysTitle) {
+                    Picker(L10n.text("公开时间范围"), selection: $publishDays) {
+                        Text(L10n.text("90 天")).tag(90)
+                        Text(L10n.text("365 天")).tag(365)
+                        Text(L10n.text("730 天")).tag(730)
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+            SettingsDivider()
+            SettingsRow(L10n.text("发布 Token")) {
+                HStack(spacing: 8) {
+                    SettingsBadge(text: state.publishTokenConfigured ? L10n.text("已配置") : L10n.text("未配置"),
+                                tint: state.publishTokenConfigured ? .green : .secondary)
+                    SecureField(L10n.text("发布 Token（留空保持现有）"), text: $publishToken)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+            }
+            SettingsDivider()
             HStack {
+                if let url = state.publicStatsURL {
+                    Link(L10n.text("打开公开数据 →"), destination: url).font(.callout)
+                }
+                Spacer()
                 Button(L10n.text("保存配置")) {
                     state.savePublishConfiguration(endpoint: publishEndpoint,
                                                    handle: publishHandle,
@@ -283,54 +550,62 @@ struct SettingsPanelView: View {
                     publishToken = ""
                     loadPublishDrafts()
                 }
-                Spacer()
-                if let url = state.publicStatsURL {
-                    Link(L10n.text("打开公开数据 →"), destination: url).font(.caption)
-                }
+                .buttonStyle(SettingsPrimaryButtonStyle())
             }
-
-            Divider()
-
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        SettingsSection(L10n.text("上传")) {
+            publishStatus
+            SettingsDivider()
             HStack(spacing: 10) {
                 Button(L10n.text("按规则上传")) { state.performPublish(trigger: .manual) }
                     .disabled(!state.publishConfigurationReady || state.publishBusy)
                 Button(L10n.text("强制上传…")) { showForceConfirmation = true }
                     .disabled(!state.publishConfigurationReady || state.publishBusy)
+                if state.publishBusy { ProgressView().controlSize(.small) }
                 Spacer()
                 Button(L10n.text("查看上传记录…")) { state.showPublishHistory() }
             }
-            if state.publishBusy {
-                ProgressView().controlSize(.small)
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             if let message = state.publishMessage, !message.isEmpty {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(state.publishFailed ? .red : .secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
-            publishStatus
-            Text(publishPrivacyText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
     private var publishStatus: some View {
         let snapshot = state.publishState
-        VStack(alignment: .leading, spacing: 3) {
-            if snapshot.lastSuccessAt > 0 {
-                Text(L10n.text("上次成功：\(Date(timeIntervalSince1970: snapshot.lastSuccessAt).formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))
-            } else {
-                Text(L10n.text("上次成功：从未"))
-            }
-            if !snapshot.lastError.isEmpty {
-                Text(L10n.text("上次错误：\(snapshot.lastError)")).foregroundStyle(.red)
-                    .lineLimit(2).help(snapshot.lastError)
-            }
-            Text(L10n.text("本机上传记录：\(state.publishHistory.count) 条"))
+        SettingsRow(L10n.text("上次成功")) {
+            Text(snapshot.lastSuccessAt > 0
+                 ? Date(timeIntervalSince1970: snapshot.lastSuccessAt)
+                    .formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale))
+                 : L10n.text("从未"))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+        SettingsDivider()
+        SettingsRow(L10n.text("本机上传记录")) {
+            Text(L10n.text("\(state.publishHistory.count) 条"))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        if !snapshot.lastError.isEmpty {
+            SettingsDivider()
+            Text(L10n.text("上次错误：\(snapshot.lastError)"))
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+                .help(snapshot.lastError)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+        }
     }
 
     private var publishPrivacyText: String {
@@ -338,6 +613,14 @@ struct SettingsPanelView: View {
         return enabled
             ? L10n.text("自动上传已开启。只发送聚合数字；项目路径、会话、提示词、模型名和账号信息不会上传。")
             : L10n.text("自动上传已关闭。手动上传仍可使用；原始日志和敏感信息不会离开本机。")
+    }
+
+    private var publishDaysTitle: String {
+        switch publishDays {
+        case 90: L10n.text("90 天")
+        case 730: L10n.text("730 天")
+        default: L10n.text("365 天")
+        }
     }
 
     private func loadPublishDrafts() {
@@ -352,12 +635,12 @@ struct SettingsPanelView: View {
     private var updateRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
+                statusText
+                Spacer()
                 Button(updater.stage == .checking ? L10n.text("检查中…") : L10n.text("检查更新")) {
                     updater.check(applyTo: state)
                 }
                 .disabled(updater.busy)
-                Spacer()
-                statusText
             }
             switch updater.stage {
             case .available(let release):
@@ -401,6 +684,8 @@ struct SettingsPanelView: View {
                UpdateChecker.updateAvailable(update, current: TokenTrackerCore.version) {
                 Link(L10n.text("发现新版本 \(update.latest) →"), destination: URL(string: update.url)!)
                     .font(.caption)
+            } else {
+                Text(L10n.text("软件更新"))
             }
         }
     }
@@ -462,23 +747,32 @@ struct MenuBarPortsSection: View {
     private var all: [Int] { Set(model.ports.map(\.port)).union(pinned).sorted() }
 
     var body: some View {
-        Section(L10n.text("状态栏显示的端口")) {
-            Text(L10n.text("勾选的端口只有正在运行时才出现在状态栏面板里。"))
-                .font(.caption).foregroundStyle(.secondary)
+        SettingsSection(L10n.text("状态栏显示的端口"),
+                        footer: L10n.text("勾选的端口只有正在运行时才出现在状态栏面板里。")) {
             if all.isEmpty {
                 Text(model.loaded ? L10n.text("没有正在监听的端口") : L10n.text("正在扫描端口…"))
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                SettingsDivider()
             }
             ForEach(all, id: \.self) { number in
-                Toggle(isOn: Binding(get: { pinned.contains(number) },
-                                     set: { set(number, $0) })) {
-                    HStack(spacing: 8) {
-                        Text(verbatim: ":\(number)").font(.body.monospaced())
-                        Text(owner(number)).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 10) {
+                    Toggle(isOn: Binding(get: { pinned.contains(number) },
+                                         set: { set(number, $0) })) {
+                        HStack(spacing: 8) {
+                            Text(verbatim: ":\(number)").font(.body.monospacedDigit()).frame(minWidth: 64, alignment: .leading)
+                            Text(owner(number)).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
+                    .toggleStyle(SettingsCheckboxStyle())
+                    Spacer()
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                SettingsDivider()
             }
-            HStack {
+            HStack(spacing: 8) {
                 TextField("", text: $draft, prompt: Text(L10n.text("添加端口号，例如 8080")))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
@@ -487,7 +781,10 @@ struct MenuBarPortsSection: View {
                 Button(L10n.text("添加"), action: add)
                     .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 if let hint { Text(hint).font(.caption).foregroundStyle(.secondary) }
+                Spacer()
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
         .onAppear { model.beginWatching() }
         .onDisappear { model.endWatching() }
@@ -520,5 +817,128 @@ struct MenuBarPortsSection: View {
         }
         draft = ""
         set(number, true)
+    }
+}
+
+/// 可选的 Antigravity 全局 hooks.json 工作区映射配置（在「价格与数据」中展示）。
+struct AntigravityWorkspaceHookSection: View {
+    @ObservedObject private var language = LanguageManager.shared
+    @ObservedObject var state: AppState
+    @State private var installed = false
+    @State private var mappedCount = 0
+    @State private var preview: AntigravityHookConfiguration?
+    @State private var installing = true
+    @State private var notice: String?
+
+    private var hookPath: String { AntigravityHookConfiguration.defaultPath }
+    private var channel: String { TaskReminderModel.channel }
+
+    var body: some View {
+        SettingsSection(
+            L10n.text("Antigravity 工作区映射"),
+            footer: L10n.text("可选。仅靠本地日志即可统计 Antigravity 的 Token 与会话；接入全局 hooks.json 后仅额外记录会话与工作区目录的对应关系，用于项目归属，不保存提示词或内容。")
+        ) {
+            SettingsRow(L10n.text("全局 Hooks 配置"), detail: "~/.gemini/config/hooks.json") {
+                HStack(spacing: 8) {
+                    SettingsBadge(text: L10n.text(installed ? "已配置" : "未配置"),
+                                  tint: installed ? .green : .secondary)
+                    Menu {
+                        Button(L10n.text("移除接入…")) { prepare(installing: false) }
+                            .disabled(!installed)
+                    } label: {
+                        Label(L10n.text("更多"), systemImage: "ellipsis.circle")
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.pageIcon)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    Button(L10n.text("配置接入…")) { prepare(installing: true) }
+                }
+            }
+            SettingsDivider()
+            SettingsRow(L10n.text("已记录会话目录")) {
+                Text(L10n.text("\(mappedCount) 个会话"))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if let notice {
+                SettingsDivider()
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+            }
+        }
+        .onAppear(perform: reload)
+        .onChange(of: state.updatedAt) { _, _ in reload() }
+        .sheet(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
+            if let preview {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(L10n.text("检查 Hooks 配置变更")).font(.headline)
+                    Text(preview.path).font(.caption).textSelection(.enabled)
+                    Text(L10n.text("保留其他配置；备份原文件后仅合并 TokenTracker 的 Hooks。"))
+                    HStack(alignment: .top) {
+                        configView(L10n.text("修改前"), data: preview.original)
+                        configView(L10n.text("修改后"), data: preview.proposed)
+                    }
+                    HStack {
+                        Button(L10n.text("取消")) { self.preview = nil }
+                        Spacer()
+                        Button(L10n.text("应用变更")) { apply(preview) }
+                    }
+                }
+                .padding(20)
+                .frame(width: 760, height: 540)
+            }
+        }
+    }
+
+    private func reload() {
+        installed = AntigravityHookConfiguration.isInstalled(path: hookPath, channel: channel)
+        mappedCount = AntigravityWorkspaceMap.load(path: state.scanRoots.antigravityWorkspaceMap).count
+    }
+
+    private func configView(_ title: String, data: Data?) -> some View {
+        let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return VStack(alignment: .leading) {
+            Text(title).font(.headline)
+            ScrollView([.vertical, .horizontal]) {
+                Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func prepare(installing: Bool) {
+        self.installing = installing
+        do {
+            preview = try AntigravityHookConfiguration.preview(
+                path: hookPath,
+                helper: TaskReminderModel.helperURL.path,
+                channel: channel,
+                installing: installing)
+        } catch {
+            notice = L10n.text("无法读取 Hooks 配置；未修改原文件")
+        }
+    }
+
+    private func apply(_ preview: AntigravityHookConfiguration) {
+        do {
+            if installing {
+                try TaskReminderModel.installHelper()
+            }
+            try preview.apply()
+            reload()
+            notice = L10n.text(installing
+                ? "已配置 Antigravity 工作区映射；新会话或下轮对话结束后生效。"
+                : "已移除 Antigravity 工作区映射；其他 Hooks 配置已保留。")
+            self.preview = nil
+            state.requestScan()
+        } catch TaskBridgeError.unavailable {
+            notice = L10n.text("未找到内置 Helper；请以打包后的 .app 运行后再配置。")
+        } catch {
+            notice = L10n.text("配置已变化或写入失败；未覆盖配置，请重新预览")
+        }
     }
 }

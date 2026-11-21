@@ -20,7 +20,7 @@ public enum MenuBarFmt {
     public static let toolHex = [
         "claude": "#d97757", "codex": "#5b8def", "opencode": "#34b3a0",
         "dsh": "#b98ae0", "hermes": "#e0a13e", "kimi": "#e06a9a",
-        "pi": "#7fb069", "go": "#8b7bd8",
+        "pi": "#7fb069", "go": "#8b7bd8", "antigravity": "#2da8e8",
     ]
 
     // 动画参数

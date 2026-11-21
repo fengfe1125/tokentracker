@@ -38,6 +38,8 @@ public struct ScanRoots: Sendable {
     public var kimiCodeHome: String
     public var kimiCLI: String
     public var piRoots: [String]
+    public var antigravityRoots: [String]
+    public var antigravityWorkspaceMap: String
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let home = NSHomeDirectory()
@@ -50,6 +52,19 @@ public struct ScanRoots: Sendable {
         kimiCodeHome = environment["KIMI_CODE_HOME"] ?? "\(home)/.kimi-code/server/events"
         kimiCLI = "\(home)/.kimi/sessions"
         piRoots = [environment["PI_HOME"] ?? "\(home)/.pi/agent/sessions", "\(home)/.omp"]
+        if let custom = environment["ANTIGRAVITY_BRAIN_DIR"], !custom.isEmpty {
+            antigravityRoots = [custom]
+        } else if let customHome = environment["ANTIGRAVITY_HOME"], !customHome.isEmpty {
+            antigravityRoots = ["\(customHome)/brain"]
+        } else {
+            antigravityRoots = [
+                "\(home)/.gemini/antigravity/brain",
+                "\(home)/.gemini/antigravity-cli/brain",
+                "\(home)/.gemini/antigravity-ide/brain",
+            ]
+        }
+        antigravityWorkspaceMap = environment["TOKENTRACKER_ANTIGRAVITY_WORKSPACES"]
+            ?? AntigravityWorkspaceMap.defaultPath
     }
 }
 
@@ -63,7 +78,7 @@ public struct DetectInfo: Equatable, Sendable {
 }
 
 public enum ScannerRegistry {
-    public static let all = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi"]
+    public static let all = ["claude", "codex", "opencode", "dsh", "hermes", "kimi", "pi", "antigravity"]
 
     public static func make(_ name: String, roots: ScanRoots) -> ScannerAdapter? {
         switch name {
@@ -74,6 +89,9 @@ public enum ScannerRegistry {
         case "hermes": return HermesScanner(home: roots.hermesHome)
         case "kimi": return KimiScanner(journalDir: roots.kimiCodeHome, cliDir: roots.kimiCLI)
         case "pi": return PiScanner(roots: roots.piRoots)
+        case "antigravity":
+            return AntigravityScanner(roots: roots.antigravityRoots,
+                                      workspaceMapPath: roots.antigravityWorkspaceMap)
         default: return nil
         }
     }

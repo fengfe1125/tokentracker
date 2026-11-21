@@ -2,7 +2,7 @@
 //  ScopeToolbar.swift
 //  TokenTrackerApp
 //
-//  全局范围栏：时间范围 + Agent，放在内容区顶部。概览、用量、活动三页共用同一份
+//  全局范围：时间范围 + Agent，放在页面栏（RootView）里。概览、用量、活动三页共用同一份
 //  AppState.range / agentFilter，切页不用重选。前面可以放页面自己的分段控件。
 //
 
@@ -25,38 +25,41 @@ struct ScopeBar<Leading: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             leading()
-            Picker(L10n.text("时间范围"), selection: $state.range) {
-                ForEach(Self.ranges, id: \.key) { item in
-                    Text(L10n.text(item.title)).tag(item.key)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    FilterChip(selected: state.agentFilter == nil) {
-                        state.agentFilter = nil
-                    } label: {
-                        Text(L10n.text("全部 Agent"))
-                    }
-                    ForEach(agents, id: \.self) { agent in
-                        FilterChip(selected: state.agentFilter == agent) {
-                            state.agentFilter = state.agentFilter == agent ? nil : agent
-                        } label: {
-                            Circle().fill(toolColor(agent)).frame(width: 7, height: 7)
-                            Text(toolDisplayName(agent))
-                        }
-                        .help(L10n.text("只看某个 Agent 的用量"))
-                    }
-                }
-                .padding(.vertical, 1)
-            }
+            SegmentedPillPicker(
+                accessibilityTitle: L10n.text("时间范围"),
+                selection: $state.range,
+                options: Self.ranges.map { SegmentedOption(value: $0.key, title: L10n.text($0.title)) }
+            )
+            agentMenu
         }
-        .padding(.horizontal, Metrics.pagePadding)
-        .padding(.vertical, 8)
+    }
+
+    /// Agent 筛选：胶囊下拉菜单，选中特定 Agent 时带对应色点与柔和色调。
+    private var agentMenu: some View {
+        PageMenuPill(activeTint: state.agentFilter.map(toolColor)) {
+            if let agent = state.agentFilter {
+                Circle().fill(toolColor(agent)).frame(width: 7, height: 7)
+                Text(toolDisplayName(agent))
+            } else {
+                Image(systemName: "person.2")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(L10n.text("全部 Agent"))
+            }
+        } content: {
+            Picker("Agent", selection: $state.agentFilter) {
+                Text(L10n.text("全部 Agent")).tag(String?.none)
+                Divider()
+                ForEach(agents, id: \.self) { agent in
+                    Text(toolDisplayName(agent)).tag(Optional(agent))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+        .help(L10n.text("只看某个 Agent 的用量"))
     }
 }
 

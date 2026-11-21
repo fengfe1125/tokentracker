@@ -80,6 +80,57 @@ enum UIFormat {
         return fmt.string(from: Date())
     }
 
+    /// 固定紧凑的本地日期时间 "yyyy-MM-dd HH:mm"（会话记录与详情统一使用）
+    static func sessionDateTime(ms: Int64?, timeZone: TimeZone = .current) -> String {
+        guard let ms, ms > 0 else { return "—" }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = timeZone
+        fmt.dateFormat = "yyyy-MM-dd HH:mm"
+        return fmt.string(from: Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
+    }
+
+    /// 会话时间范围：同分钟只显示单时间点；同日省略结束日期；跨日完整展示起止。
+    static func sessionTimeRange(firstMs: Int64?, lastMs: Int64?,
+                                 fallbackLastSeen: String? = nil,
+                                 timeZone: TimeZone = .current) -> String {
+        let validFirst = firstMs.flatMap { $0 > 0 ? $0 : nil }
+        let validLast = lastMs.flatMap { $0 > 0 ? $0 : nil }
+        if let first = validFirst, let last = validLast {
+            let start = sessionDateTime(ms: first, timeZone: timeZone)
+            let end = sessionDateTime(ms: last, timeZone: timeZone)
+            if start == end { return end }
+            if start.prefix(10) == end.prefix(10) {
+                return "\(start) → \(end.suffix(5))"
+            }
+            return "\(start) → \(end)"
+        }
+        if let single = validLast ?? validFirst {
+            return sessionDateTime(ms: single, timeZone: timeZone)
+        }
+        if let fallbackLastSeen, !fallbackLastSeen.isEmpty {
+            return fallbackLastSeen.count >= 16 ? String(fallbackLastSeen.prefix(16)) : fallbackLastSeen
+        }
+        return "—"
+    }
+
+    /// 会话成本分解行：输入 / 输出 / 缓存 / 写入
+    static func sessionTokenBreakdown(_ stats: UsageStore.ToolStats, yi: Bool) -> String {
+        L10n.text("输入 \(tokens(stats.input, yi: yi)) · 输出 \(tokens(stats.output, yi: yi)) · 缓存 \(tokens(stats.cacheRead, yi: yi)) · 写入 \(tokens(stats.cacheWrite, yi: yi))")
+    }
+
+    /// 会话费用：无事件显示 “—”，全部未计价显示「未计价」，否则两位小数。
+    static func sessionCost(_ stats: UsageStore.ToolStats) -> String {
+        if stats.events == 0 { return "—" }
+        if stats.unpriced == stats.events { return L10n.text("未计价") }
+        return cost(stats.cost)
+    }
+
+    static func sessionPartialUnpricedNote(_ stats: UsageStore.ToolStats) -> String? {
+        guard stats.unpriced > 0, stats.unpriced < stats.events else { return nil }
+        return L10n.text("含 \(stats.unpriced) 条未计价")
+    }
+
     /// 汇总费用：无记录显示 “—”，全部未计价显示「未计价」，否则两位小数。
     static func costLabel(_ totals: UsageTotals) -> String {
         if totals.records == 0 { return "—" }

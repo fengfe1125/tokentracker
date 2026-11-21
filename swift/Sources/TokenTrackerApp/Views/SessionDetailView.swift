@@ -42,31 +42,33 @@ struct SessionDetailView: View {
                                        description: Text(L10n.text("在会话记录里点一行")))
             }
         }
-        .navigationTitle(session?.title ?? L10n.text("会话详情"))
-        .navigationSubtitle(session.map { toolDisplayName($0.tool) + " · " + $0.projectShort } ?? "")
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker(L10n.text("详情"), selection: $tab) {
-                    Text(L10n.text("概览")).tag("overview")
-                    Text(L10n.text("执行时间线")).tag("timeline")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
+        .pageChrome(title: session?.title ?? L10n.text("会话详情"),
+                    subtitle: session.map { toolDisplayName($0.tool) + " · " + $0.folderShort } ?? "") {
+            HStack(spacing: 8) {
+                SegmentedPillPicker(
+                    accessibilityTitle: L10n.text("详情"),
+                    selection: $tab,
+                    options: [
+                        SegmentedOption(value: "overview", title: L10n.text("概览")),
+                        SegmentedOption(value: "timeline", title: L10n.text("执行时间线")),
+                    ]
+                )
+                PageActionDivider()
                 // 不用回到列表也能连续翻看
-                Button { state.stepSession(by: -1) } label: {
-                    Label(L10n.text("上一个会话"), systemImage: "chevron.up")
+                HStack(spacing: 2) {
+                    Button { state.stepSession(by: -1) } label: {
+                        Label(L10n.text("上一个会话"), systemImage: "chevron.up")
+                    }
+                    .disabled(!state.canStepSession(by: -1))
+                    .keyboardShortcut(.upArrow, modifiers: .command)
+                    .help(L10n.text("上一个会话"))
+                    Button { state.stepSession(by: 1) } label: {
+                        Label(L10n.text("下一个会话"), systemImage: "chevron.down")
+                    }
+                    .disabled(!state.canStepSession(by: 1))
+                    .keyboardShortcut(.downArrow, modifiers: .command)
+                    .help(L10n.text("下一个会话"))
                 }
-                .disabled(!state.canStepSession(by: -1))
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .help(L10n.text("上一个会话"))
-                Button { state.stepSession(by: 1) } label: {
-                    Label(L10n.text("下一个会话"), systemImage: "chevron.down")
-                }
-                .disabled(!state.canStepSession(by: 1))
-                .keyboardShortcut(.downArrow, modifiers: .command)
-                .help(L10n.text("下一个会话"))
             }
         }
         .task(id: state.selectedSessionID) {
@@ -80,55 +82,46 @@ struct SessionDetailView: View {
     }
 
     private func content(_ session: SessionRowModel) -> some View {
-        ScrollView {
+        let effectiveStats = detail?.total ?? session.stats
+        let effectiveFolder = (detail?.workspacePath.isEmpty == false ? detail?.workspacePath : nil)
+            ?? session.workspacePath
+        let effectiveFolderExists = (detail?.workspacePath.isEmpty == false)
+            ? (detail?.workspaceExists ?? false) : session.workspaceExists
+        let effectiveFile = (detail?.filePath.isEmpty == false ? detail?.filePath : nil)
+            ?? session.filePath
+        let effectiveFileExists = (detail?.filePath.isEmpty == false)
+            ? (detail?.fileExists ?? false) : session.fileExists
+        let effectiveModels: [String] = {
+            if let loaded = detail?.models.map(\.model).filter({ !$0.isEmpty }), !loaded.isEmpty {
+                return loaded
+            }
+            return session.models
+        }()
+        let effectiveTime = UIFormat.sessionTimeRange(
+            firstMs: detail?.firstTs ?? session.firstTs,
+            lastMs: detail?.lastTs ?? session.row.ts,
+            fallbackLastSeen: session.row.lastSeen)
+
+        return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(session.title)
                     .font(.headline)
                     .textSelection(.enabled)
                 DetailCard(title: L10n.text("会话信息")) {
-                    LabeledLine(label: L10n.text("工具")) {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(toolColor(session.tool))
-                                .frame(width: 7, height: 7)
-                            Text(session.toolName)
-                        }
-                    }
-                    LabeledLine(label: L10n.text("时间")) {
-                        Text([session.dateText, session.timeText]
-                            .compactMap { $0 }.joined(separator: " "))
-                            .monospacedDigit()
-                    }
-                    LabeledLine(label: L10n.text("会话 ID")) {
-                        Text(session.sessionID)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                    }
-                    LabeledLine(label: L10n.text("模型")) {
-                        Text(session.model.isEmpty ? "—" : session.model)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                    }
-                    if !session.project.isEmpty {
-                        LabeledLine(label: L10n.text("项目")) {
-                            Text(session.project)
-                                .lineLimit(2)
-                                .truncationMode(.head)
-                                .textSelection(.enabled)
-                        }
-                        // claude 的 project 是 slug 不是路径，点了不会有反应，
-                        // 与其留个死按钮不如不显示（真实目录在「继续会话」的命令里）
-                        if FileManager.default.fileExists(atPath: session.project) {
-                            Button {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: session.project))
-                            } label: {
-                                Label(L10n.text("在 Finder 中打开"), systemImage: "folder")
-                                    .font(.callout)
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
+                    SessionMetadataRows(
+                        tool: session.tool,
+                        timeText: effectiveTime,
+                        folderPath: effectiveFolder,
+                        folderExists: effectiveFolderExists,
+                        fallbackProject: session.project,
+                        sessionID: session.sessionID,
+                        models: effectiveModels,
+                        stats: effectiveStats,
+                        filePath: effectiveFile,
+                        fileExists: effectiveFileExists,
+                        yi: yi,
+                        showTool: true,
+                        compact: false)
                 }
                 ResumeSection(session: session, state: state)
                 if let detail {
@@ -170,11 +163,9 @@ struct SessionDetailView: View {
                                     Text(UIFormat.tokens(model.stats.tokens, yi: yi))
                                         .font(.callout.monospacedDigit())
                                 }
-                                Text(L10n.text("输入 \(UIFormat.tokens(model.stats.input, yi: yi)) · ")
-                                     + L10n.text("输出 \(UIFormat.tokens(model.stats.output, yi: yi)) · ")
-                                     + L10n.text("缓存 \(UIFormat.tokens(model.stats.cacheRead + model.stats.cacheWrite, yi: yi)) · ")
-                                     + UIFormat.cost(model.stats.cost))
-                                    .font(.caption2)
+                                Text(UIFormat.sessionTokenBreakdown(model.stats, yi: yi)
+                                     + " · " + UIFormat.sessionCost(model.stats))
+                                    .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 2)
@@ -249,24 +240,6 @@ private struct DetailCard<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: 12)
-    }
-}
-
-/// 详情里的「标签 : 值」一行
-private struct LabeledLine<Content: View>: View {
-    let label: String
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 48, alignment: .leading)
-            content()
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 }
 

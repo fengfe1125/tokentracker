@@ -58,15 +58,23 @@ final class InsightsModel: NSObject, ObservableObject {
         notificationsEnabled=ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] != "1" && UserDefaults.standard.bool(forKey:"tt.notifications.enabled")
         NotificationRouter.shared.onRisk = { [weak self] route in self?.navigateNotification(route) }
     }
-    func refresh(afterScan: Bool = false, more: Bool = false) {
+    func refresh(afterScan: Bool = false, more: Bool = false, overviewOnly: Bool = false) {
         generation += 1
         analysisCancellation.cancel();analysisCancellation=ExportCancellation()
         let cancellation=analysisCancellation
         let version=generation,path=path,query=query,search=search,offset=more ? projects.count : 0
-        busy=true;analyticsLoading=true
+        let needExplanation = afterScan || explanation == nil || query.projectID != nil
+        let needHealth = afterScan || !overviewOnly || health.isEmpty
+        if !overviewOnly { busy=true }
+        analyticsLoading=true
         let scope="\(query.projectID ?? "")|\(query.tool ?? "")|\(query.model ?? "")|\(query.start ?? 0)|\(query.timeZoneID)"
         if scope != analyticsScope {
-            explanation=nil;daily=[];agents=[];sessions=[];breakdown=[];costSources=[];analyticsScope=scope
+            // 仅在切换具体项目时清空项目详情缓存；概览切换时间范围时保留旧的 explanation / costSources，
+            // 避免底部「数据与风险」卡片塌陷再弹回造成页面跳动。
+            if query.projectID != nil {
+                explanation=nil;daily=[];agents=[];sessions=[];breakdown=[]
+            }
+            analyticsScope=scope
         }
         if afterScan {
             startBackfill()
@@ -83,41 +91,65 @@ final class InsightsModel: NSObject, ObservableObject {
             do {
                 try cancellation.check()
                 let store=try UsageStore(path:path)
-                let registry=try store.projectRegistry()
-                var results=try store.projectSummaries(query,search:search,offset:offset)
-                if results.isEmpty,let id=query.projectID,let project=registry.first(where:{$0.id==id}) { results=[ProjectSummary(id:project.id,name:project.name,totals:UsageTotals(),lastActivity:nil)] }
-                let projects=results
-                let totals=try store.usageTotals(query),health=try store.health(now:store.nowMs())
+                let totals=try store.usageTotals(query)
+                let health=needHealth ? try store.health(now:store.nowMs()) : nil
+                let registry: [ProjectIdentity]?
+                let projects: [ProjectSummary]?
+                if overviewOnly {
+                    registry=nil; projects=nil
+                } else {
+                    let loadedRegistry=try store.projectRegistry()
+                    var results=try store.projectSummaries(query,search:search,offset:offset)
+                    if results.isEmpty,let id=query.projectID,let project=loadedRegistry.first(where:{$0.id==id}) {
+                        results=[ProjectSummary(id:project.id,name:project.name,totals:UsageTotals(),lastActivity:nil)]
+                    }
+                    registry=loadedRegistry; projects=results
+                }
                 DispatchQueue.main.async {
                     guard let self,version==self.generation else { return }
-                    self.registry=registry;self.projects=more ? self.projects+projects : projects
-                    self.totals=totals;self.health=health;self.busy=false;self.errorNotice=nil
-                    self.loadAnalytics(query:query,version:version,cancellation:cancellation)
+                    if let registry { self.registry=registry }
+                    if let projects { self.projects=more ? self.projects+projects : projects }
+                    if self.totals != totals { self.totals=totals }
+                    if let health { self.health=health }
+                    if self.busy { self.busy=false }
+                    if self.errorNotice != nil { self.errorNotice=nil }
+                    self.loadAnalytics(query:query,version:version,cancellation:cancellation,
+                                       overviewOnly:overviewOnly,needExplanation:needExplanation)
                 }
             } catch is CancellationError { }
             catch { DispatchQueue.main.async { guard let self,version==self.generation else { return };self.busy=false;self.errorNotice=L10n.message("分析数据读取失败，请重试") } }
         }
     }
-    private func loadAnalytics(query:UsageQuery,version:Int,cancellation:ExportCancellation) {
+    private func loadAnalytics(query:UsageQuery,version:Int,cancellation:ExportCancellation,
+                               overviewOnly:Bool = false,needExplanation:Bool = true) {
         let path=path, account=codexAccountID
         analysisQueue.async { [weak self] in
             do {
                 try cancellation.check()
                 let store=try UsageStore(path:path)
                 let costSources=try store.breakdown(query,dimension:"cost_source")
-                let reports=try store.weeklyReports(),budgets=try store.budgets()
                 let risks=try store.budgetRisks()+store.quotaRisks(now:store.nowMs(),codexAccountID:account)
                 try cancellation.check()
-                let explanation=try store.consumptionExplanation(projectID:query.projectID,cancellation:cancellation)
-                let breakdown=try store.breakdown(query,dimension:"model")
-                let daily=query.projectID == nil ? [] : try store.dailyBreakdown(query,cancellation:cancellation)
-                let agents=query.projectID == nil ? [] : try store.breakdown(query,dimension:"tool")
-                let sessions=query.projectID == nil ? [] : try store.projectSessions(query)
+                let explanation=needExplanation
+                    ? try store.consumptionExplanation(projectID:query.projectID,cancellation:cancellation)
+                    : nil
+                let reports=overviewOnly ? nil : try store.weeklyReports()
+                let budgets=overviewOnly ? nil : try store.budgets()
+                let breakdown=overviewOnly ? nil : try store.breakdown(query,dimension:"model")
+                let daily=(overviewOnly || query.projectID == nil) ? nil : try store.dailyBreakdown(query,cancellation:cancellation)
+                let agents=(overviewOnly || query.projectID == nil) ? nil : try store.breakdown(query,dimension:"tool")
+                let sessions=(overviewOnly || query.projectID == nil) ? nil : try store.projectSessions(query)
                 DispatchQueue.main.async {
                     guard let self,version==self.generation else { return }
-                    self.costSources=costSources;self.reports=reports;self.budgets=budgets
-                    self.risks=risks;self.explanation=explanation;self.breakdown=breakdown
-                    self.daily=daily;self.agents=agents;self.sessions=sessions
+                    if self.costSources != costSources { self.costSources=costSources }
+                    if let reports { self.reports=reports }
+                    if let budgets { self.budgets=budgets }
+                    if self.risks != risks { self.risks=risks }
+                    if let explanation { self.explanation=explanation }
+                    if let breakdown { self.breakdown=breakdown }
+                    if let daily { self.daily=daily }
+                    if let agents { self.agents=agents }
+                    if let sessions { self.sessions=sessions }
                     self.analyticsLoading=false
                     self.deliver(risks)
                 }

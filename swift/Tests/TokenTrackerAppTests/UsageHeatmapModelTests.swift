@@ -75,4 +75,58 @@ final class UsageHeatmapModelTests: XCTestCase {
         await refresh()
         XCTAssertEqual(model.chart?.totalTokens, 30)
     }
+
+    func testWeekLoadPrewarmsDaySwitchAndInvalidatesBothAfterDatabaseWrite() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("usage.db").path
+        let writer = try UsageStore(path: path)
+        let now = Date()
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
+        try writer.putEvent(tool: "codex", srcKey: "today", ts: Int64(now.timeIntervalSince1970 * 1000), input: 10)
+        try writer.putEvent(tool: "dsh", srcKey: "yesterday", ts: Int64(yesterday.timeIntervalSince1970 * 1000), input: 20)
+
+        let model = UsageHeatmapModel(path: path)
+        func refresh() async {
+            let done = expectation(description: "heatmap loaded")
+            let sub = model.$loading.dropFirst().filter { !$0 }.prefix(1).sink { _ in done.fulfill() }
+            model.refresh()
+            await fulfillment(of: [done], timeout: 5)
+            sub.cancel()
+        }
+
+        // 默认「近 7 天」连续刷新两次（模拟启动 + onAppear），「今天」仍应留在主线程缓存中。
+        model.request = HeatmapRequest(range: "week")
+        model.refresh()
+        await refresh()
+        XCTAssertEqual(model.chart?.totalTokens, 30)
+        let weekID = try XCTUnwrap(model.chart?.id)
+
+        XCTAssertTrue(model.applyCachedIfAvailable(for: HeatmapRequest(range: "day")))
+        XCTAssertEqual(model.loadedRequest?.range, "day")
+        XCTAssertEqual(model.chart?.totalTokens, 10)
+        let dayID = try XCTUnwrap(model.chart?.id)
+
+        model.request = HeatmapRequest(range: "day")
+        await refresh()
+        XCTAssertEqual(model.chart?.id, dayID, "Warm day switch must reuse the prewarmed chart when DB is unchanged")
+
+        // 切回「近 7 天」也直接复用缓存实例。
+        XCTAssertTrue(model.applyCachedIfAvailable(for: HeatmapRequest(range: "week")))
+        XCTAssertEqual(model.chart?.id, weekID)
+        model.request = HeatmapRequest(range: "week")
+        await refresh()
+        XCTAssertEqual(model.chart?.id, weekID)
+
+        // 数据库有新写入后，两个范围都必须重新计算而不是停留旧快照。
+        try writer.putEvent(tool: "claude", srcKey: "today-2", ts: Int64(now.timeIntervalSince1970 * 1000), input: 5)
+        await refresh()
+        XCTAssertEqual(model.chart?.totalTokens, 35)
+        XCTAssertNotEqual(model.chart?.id, weekID)
+
+        model.request = HeatmapRequest(range: "day")
+        await refresh()
+        XCTAssertEqual(model.chart?.totalTokens, 15)
+        XCTAssertNotEqual(model.chart?.id, dayID)
+    }
 }

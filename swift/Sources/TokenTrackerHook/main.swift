@@ -66,23 +66,37 @@ func sourceApplication() -> String? {
     }
     return nil
 }
-// A hook is never a reason to launch the App or interrupt the original tool.
-func run() {
-    var output = Data("{}".utf8)
-    defer { FileHandle.standardOutput.write(output) }
-    let args = CommandLine.arguments
-    guard args.count >= 3, let provider = TaskProvider(rawValue: args[1]) else { return }
-    let channel = args[2]
-    guard let fd = try? TaskSocket.connect(path: TaskSocket.path(channel: channel)) else { return }
-    defer { Darwin.close(fd) }
+func readBoundedStdin() -> Data? {
     var input = Data()
     // Bound stdin as well as the transport; never read a prompt/transcript from disk.
     while true {
         let part = FileHandle.standardInput.readData(ofLength: min(65_536, TaskSocket.maximumFrame + 1 - input.count))
         if part.isEmpty { break }
         input.append(part)
-        if input.count > TaskSocket.maximumFrame { return }
+        if input.count > TaskSocket.maximumFrame { return nil }
     }
+    return input
+}
+
+// A hook is never a reason to launch the App or interrupt the original tool.
+func run() {
+    var output = Data("{}".utf8)
+    defer { FileHandle.standardOutput.write(output) }
+    let args = CommandLine.arguments
+    if args.count >= 2 && args[1] == "antigravity-workspace" {
+        guard let input = readBoundedStdin() else { return }
+        let env = ProcessInfo.processInfo.environment
+        let mapPath = (args.count >= 3 && !args[2].isEmpty)
+            ? args[2]
+            : (env["TOKENTRACKER_ANTIGRAVITY_WORKSPACES"] ?? AntigravityWorkspaceMap.defaultPath)
+        _ = AntigravityWorkspaceMap.recordHookPayload(input, path: mapPath)
+        return
+    }
+    guard args.count >= 3, let provider = TaskProvider(rawValue: args[1]) else { return }
+    let channel = args[2]
+    guard let fd = try? TaskSocket.connect(path: TaskSocket.path(channel: channel)) else { return }
+    defer { Darwin.close(fd) }
+    guard var input = readBoundedStdin() else { return }
     let env = ProcessInfo.processInfo.environment
     let terminal = ["Apple_Terminal": "com.apple.Terminal", "iTerm.app": "com.googlecode.iterm2",
                     "WezTerm": "com.github.wez.wezterm", "ghostty": "com.mitchellh.ghostty"]

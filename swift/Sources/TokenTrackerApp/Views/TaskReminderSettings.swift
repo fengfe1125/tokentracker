@@ -10,34 +10,61 @@ struct TaskReminderSettings: View {
     @State private var installing = true
     @State private var notice: String?
     var body: some View {
-        Section(L10n.text("任务提醒与审批")) {
-            Toggle(L10n.text("启用任务提醒"), isOn: $preferences.enabled)
-            Toggle(L10n.text("本轮结束提醒"), isOn: $preferences.completion)
-            Toggle(L10n.text("等待审批提醒"), isOn: $preferences.approval)
-            Toggle(L10n.text("系统通知"), isOn: Binding(get: { preferences.system }, set: {
-                if $0 { preferences.authorizeSystem() } else { preferences.system = false }
-            }))
-            Toggle(L10n.text("通知声音"), isOn: $preferences.sound).disabled(!preferences.system)
-            Button(L10n.text("任务提醒")) { model.onShowList?() }
-            if preferences.notificationDenied {
-                Text(L10n.text("系统通知未获授权；应用内提醒仍可使用"))
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 22) {
+            if let notice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.sunkSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            SettingsSection(footer: preferences.notificationDenied
+                            ? L10n.text("系统通知未获授权；应用内提醒仍可使用") : nil) {
+                SettingsToggle(L10n.text("启用任务提醒"), isOn: $preferences.enabled)
+                SettingsDivider()
+                Group {
+                    SettingsToggle(L10n.text("本轮结束提醒"), isOn: $preferences.completion)
+                    SettingsDivider()
+                    SettingsToggle(L10n.text("等待审批提醒"), isOn: $preferences.approval)
+                    SettingsDivider()
+                    SettingsToggle(L10n.text("系统通知"), isOn: Binding(get: { preferences.system }, set: {
+                        if $0 { preferences.authorizeSystem() } else { preferences.system = false }
+                    }))
+                    SettingsDivider()
+                    SettingsToggle(L10n.text("通知声音"), isOn: $preferences.sound)
+                        .disabled(!preferences.system)
+                }
+                .disabled(!preferences.enabled)
+                SettingsDivider()
+                SettingsRow(L10n.text("提醒列表")) {
+                    Button(L10n.text("打开…")) { model.onShowList?() }
+                }
             }
             ForEach(TaskProvider.allCases, id: \.self) { provider in
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(provider.name, isOn: providerBinding(provider))
+                SettingsSection(provider.name) {
+                    SettingsToggle(L10n.text("接入 \(provider.name)"), isOn: providerBinding(provider))
                     ForEach(TaskClient.allCases.filter { $0.provider == provider }, id: \.self) { client in
+                        SettingsDivider()
                         clientRow(client, provider: provider)
                     }
                 }
             }
-            Text(L10n.text("桌面仅接入本地任务；云端编排、Cloud、SSH、普通聊天和 Cowork 不支持。隔离环境无法访问本机 Helper 时，请回原任务审批。"))
-                .font(.caption).foregroundStyle(.secondary)
-            Text(L10n.text("同一配置目录由桌面和 CLI 共用，只安装一份；移除接入会同时影响读取该目录的客户端。上游信任和受管理策略仍可能限制 Hooks。"))
-                .font(.caption).foregroundStyle(.secondary)
-            Text(L10n.text("命令和参数仅在本机内存中展示；不支持的审批请回原任务处理。"))
-                .font(.caption).foregroundStyle(.secondary)
-            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach([
+                    L10n.text("桌面仅接入本地任务；云端编排、Cloud、SSH、普通聊天和 Cowork 不支持。隔离环境无法访问本机 Helper 时，请回原任务审批。"),
+                    L10n.text("同一配置目录由桌面和 CLI 共用，只安装一份；移除接入会同时影响读取该目录的客户端。上游信任和受管理策略仍可能限制 Hooks。"),
+                    L10n.text("命令和参数仅在本机内存中展示；不支持的审批请回原任务处理。"),
+                    L10n.text("验收记录仅对应列出的版本，不代表当前会话已连接或其他版本已验收。"),
+                ], id: \.self) { line in
+                    Label { Text(line) } icon: { Image(systemName: "circle.fill").font(.system(size: 4)) }
+                        .labelStyle(.titleAndIcon)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
         }
         .sheet(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
             if let preview {
@@ -70,31 +97,59 @@ struct TaskReminderSettings: View {
         let path = directory?.configurationPath(provider: provider)
         let configured = path.map { TaskHookConfiguration.isInstalled(path: $0, channel: TaskReminderModel.channel) } ?? false
         let issue = directory.flatMap { TaskHookConfiguration.blockingReason(provider: provider, root: $0.path) }
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        let received = model.observedClients[client] != nil
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 Text(L10n.label(client.name)).fontWeight(.medium)
+                SettingsBadge(text: L10n.text(configured ? "已配置" : "未配置"), tint: configured ? .green : .secondary)
+                if received { SettingsBadge(text: L10n.text("已收到事件"), tint: .blue) }
                 Spacer()
-                Text(L10n.text(configured ? "已配置" : "未配置")).foregroundStyle(.secondary)
+                Menu {
+                    Button(L10n.text("选择配置目录…")) { selectDirectory(client) }
+                    Button(L10n.text("移除接入…")) { prepare(client, installing: false) }
+                        .disabled(directory?.confirmed != true || !configured)
+                } label: {
+                    Label(L10n.text("更多"), systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.pageIcon)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                if directory?.confirmed == true {
+                    Button(L10n.text("配置接入…")) { prepare(client, installing: true) }
+                        .disabled(issue != nil)
+                } else {
+                    // 路径还没确认时，下一步就是选目录
+                    Button(L10n.text("选择配置目录…")) { selectDirectory(client) }
+                }
             }
-            Text(L10n.text(model.observedClients[client] == nil ? "尚未收到该客户端事件" : "已收到该客户端本地事件"))
+            HStack(spacing: 6) {
+                Image(systemName: "folder").foregroundStyle(.tertiary)
+                Text(directory?.path ?? L10n.text("路径待确认；请选择实际配置目录后再应用"))
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if let directory, !directory.confirmed {
+                Text(L10n.text("路径待确认；请选择实际配置目录后再应用"))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let issue {
+                Text(L10n.label(issue)).font(.caption).foregroundStyle(.orange)
+            }
             Text(L10n.label(client == .codexCLI ? "验收记录：Codex CLI 0.162.1"
                 : client == .claudeCLI ? "验收记录：Claude Code CLI 2.1.300"
                 : client == .codexDesktop ? "验收记录：Codex 桌面 26.1007.71326 / 引擎 0.162.0-alpha.17.2"
                 : "验收记录：Claude 桌面 2.37337.1 / 引擎 2.1.295"))
-            Text(L10n.text("验收记录仅对应列出的版本，不代表当前会话已连接或其他版本已验收。"))
-            if let directory {
-                Text(directory.path).textSelection(.enabled).lineLimit(2)
-                if !directory.confirmed { Text(L10n.text("路径待确认；请选择实际配置目录后再应用")) }
-            } else { Text(L10n.text("路径待确认；请选择实际配置目录后再应用")) }
-            if let issue { Text(L10n.label(issue)).foregroundStyle(.orange) }
-            HStack {
-                Button(L10n.text("选择配置目录…")) { selectDirectory(client) }
-                Button(L10n.text("配置接入…")) { prepare(client, installing: true) }
-                    .disabled(directory?.confirmed != true || issue != nil)
-                Button(L10n.text("移除接入…")) { prepare(client, installing: false) }
-                    .disabled(directory?.confirmed != true || !configured)
-            }
-        }.font(.caption).padding(.vertical, 5)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .help(L10n.text(received ? "已收到该客户端本地事件" : "尚未收到该客户端事件"))
     }
     private func selectDirectory(_ client: TaskClient) {
         let panel = NSOpenPanel()

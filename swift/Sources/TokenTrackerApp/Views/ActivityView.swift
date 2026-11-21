@@ -56,8 +56,7 @@ struct ActivityView: View, @MainActor Equatable {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
-        .pageChrome(title: L10n.text("Agent 活动"),
-                    subtitle: L10n.text("工具与 Skill 使用 · 仅保存活动元数据")) { filters }
+        .pageChrome(title: L10n.text("Agent 活动")) { filters }
         .onChange(of: state.range) { _, _ in refresh() }
         .onChange(of: state.agent) { _, _ in refresh() }
         .onChange(of: state.confidence) { _, _ in refresh() }
@@ -92,16 +91,34 @@ struct ActivityView: View, @MainActor Equatable {
                 }
     }
 
+    private var confidenceMeta: (icon: String, label: String, tint: Color?) {
+        switch state.confidence {
+        case "exact":
+            return ("checkmark.shield", L10n.text("只看已确认"), .green)
+        case "derived":
+            return ("shield.lefthalf.filled", L10n.text("只看推断"), .orange)
+        default:
+            return ("shield.lefthalf.filled", L10n.text("包含推断"), nil)
+        }
+    }
+
     private var filters: some View {
-        HStack(spacing: 8) {
+        let meta = confidenceMeta
+        return PageMenuPill(activeTint: meta.tint) {
+            Image(systemName: meta.icon)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(meta.tint ?? Color.secondary)
+            Text(meta.label)
+        } content: {
             Picker(L10n.text("证据"), selection: $state.confidence) {
                 Text(L10n.text("包含推断")).tag("all")
                 Text(L10n.text("只看已确认")).tag("exact")
                 Text(L10n.text("只看推断")).tag("derived")
             }
+            .pickerStyle(.inline)
             .labelsHidden()
-            .frame(width: 118)
         }
+        .help(L10n.text("筛选活动证据级别"))
     }
 
     private var evidenceNotice: some View {
@@ -123,10 +140,8 @@ struct ActivityView: View, @MainActor Equatable {
         }
         .font(.caption)
         .foregroundStyle(derivedCalls > 0 ? Color.orange : Color.secondary)
-        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background((derivedCalls > 0 ? Color.orange : Color.secondary).opacity(0.09),
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .card(padding: 12)
     }
 
     private var metrics: some View {

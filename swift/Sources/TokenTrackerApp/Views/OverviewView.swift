@@ -13,6 +13,14 @@ import TokenTrackerCore
 struct OverviewView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
+    @ObservedObject private var heatmap: UsageHeatmapModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var slowLoading = false
+
+    init(state: AppState) {
+        self.state = state
+        self._heatmap = ObservedObject(wrappedValue: state.heatmap)
+    }
 
     private var yi: Bool { state.prefs.unitYi }
 
@@ -33,7 +41,7 @@ struct OverviewView: View {
                         quotaCard
                     }
                 }
-                UsageHeatmapView(model: state.heatmap, yi: yi)
+                UsageHeatmapView(model: heatmap, yi: yi)
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: Metrics.gridSpacing) {
                         compositionCard.frame(minWidth: 250)
@@ -48,28 +56,53 @@ struct OverviewView: View {
                 }
                 InsightsOverview(model: state.insights, rescan: { state.requestScan() })
             }
-            .padding(Metrics.pagePadding)
+            .padding(.horizontal, Metrics.pagePadding)
+            .padding(.bottom, Metrics.pagePadding)
+            .padding(.top, 10)
+            // 热力图从「今天（1 行）」切到「近 7 天（7 行）」时带动下方卡片一起平滑滑动，
+            // 避免子视图单独动画造成卡片间距撕裂或短暂重叠；TrendChart 与 HeatmapCanvas 已各自禁帧内插值。
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: heatmap.chart?.id)
+        }
+        // 切换范围时旧数据留在原处，不再整页盖遮罩（那会让窗口闪一下）；
+        // 读得慢（超过 0.4 秒）才在顶部浮一个小提示，读失败才盖住内容
+        .overlay(alignment: .top) {
+            if slowLoading && state.loadedRange != state.range {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.text("正在读取用量…")).font(.callout)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.top, 10)
+                .transition(.opacity)
+            }
         }
         .overlay {
-            if state.loadedRange != state.range && (state.dataLoading || state.dataError != nil) {
+            if state.loadedRange != state.range && !state.dataLoading && state.dataError != nil {
                 ZStack {
                     Rectangle().fill(.regularMaterial)
-                    if state.dataLoading {
-                        ProgressView(L10n.text("正在读取用量…"))
-                    } else {
-                        ContentUnavailableView(L10n.text("用量读取失败，请重新扫描后重试"),
-                                               systemImage: "exclamationmark.triangle")
-                    }
+                    ContentUnavailableView(L10n.text("用量读取失败，请重新扫描后重试"),
+                                           systemImage: "exclamationmark.triangle")
                 }
             }
         }
-        .navigationTitle(L10n.text("用量概览"))
+        .animation(.easeOut(duration: 0.15), value: slowLoading)
+        .task(id: state.dataLoading) {
+            guard state.dataLoading else { slowLoading = false; return }
+            try? await Task.sleep(for: .milliseconds(400))
+            if !Task.isCancelled { slowLoading = true }
+        }
+        .pageChrome(title: L10n.text("用量概览"))
     }
 
 
 
+    /// 实际展示数据的范围（与 dailyRows / statTotal 同步更新，避免切换瞬间标签和柱图 x 轴错位）
+    private var displayedRange: String { state.loadedRange ?? state.range }
+
     private var rangeLabel: String {
-        ["day": L10n.text("今天"), "week": L10n.text("近 7 天"), "month": L10n.text("本月"), "all": L10n.text("全部")][state.range] ?? state.range
+        ["day": L10n.text("今天"), "week": L10n.text("近 7 天"), "month": L10n.text("本月"), "all": L10n.text("全部")][displayedRange] ?? displayedRange
     }
 
     // -------------------------------------------------------- 配额条 ----
@@ -160,6 +193,7 @@ struct OverviewView: View {
                     .minimumScaleFactor(0.6)
                     .help(total.tokens.formatted(.number))
             }
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: total.tokens)
             HStack(alignment: .top, spacing: 26) {
                 kpi(L10n.text("费用合计"), unpriced ? L10n.text("未计价") : UIFormat.cost(total.cost),
                     help: L10n.text("含估算，非订阅账单"))
@@ -169,17 +203,18 @@ struct OverviewView: View {
                 Spacer(minLength: 0)
                 trendLegend
             }
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: total.tokens)
             if points.isEmpty {
                 ContentUnavailableView(L10n.text("暂无数据"), systemImage: "chart.bar.xaxis",
                                        description: Text(L10n.text("点右上角「扫描」")))
-                    .frame(height: 200)
+                    .frame(height: 220)
             } else {
-                TrendChart(points: points, isHourly: state.range == "day", yi: yi)
+                TrendChart(points: points, isHourly: displayedRange == "day", yi: yi)
+                    .equatable()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
-        .animation(.snappy(duration: 0.35), value: total.tokens)
     }
 
     private func kpi(_ title: String, _ value: String, help: String? = nil) -> some View {
@@ -233,6 +268,7 @@ struct OverviewView: View {
                 .clipShape(Capsule())
             }
             .frame(height: 10)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: sum)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading,
                       spacing: Metrics.gridSpacing) {
                 ForEach(TokenKind.allCases) { kind in
@@ -245,14 +281,17 @@ struct OverviewView: View {
                         Text(UIFormat.compact(value, yi: yi))
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                             .monospacedDigit()
+                            .contentTransition(.numericText())
                         Text(UIFormat.share(value, of: sum))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.tertiary)
+                            .contentTransition(.numericText())
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(value.formatted(.number))
                 }
             }
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: sum)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()

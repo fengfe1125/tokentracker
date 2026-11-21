@@ -885,3 +885,50 @@
 "匹配到项目 {0}：这是 Agent 进程，停止项目时不会结束它" = "Matched to project {0}: this is an agent process and stopping the project will not end it";
 "另有 {0} 个 Agent 端口" = "{0} more agent ports";
 "Agent 自己占用的端口，停止项目时不受影响" = "Ports held by the agent itself. Stopping the project leaves them running";
+
+/* Settings redesign */
+"{0} 条" = "{0} entries";
+"上传" = "Upload";
+"上次成功" = "Last success";
+"从会话详情继续会话时打开的终端。" = "The terminal opened when you continue a session from its details.";
+"从未" = "Never";
+"价格与数据" = "Pricing & Data";
+"关于与更新" = "About & Updates";
+"发布 Token" = "Publish token";
+"已收到事件" = "Events received";
+"打开…" = "Open…";
+"接入 {0}" = "Connect {0}";
+"提醒列表" = "Reminder list";
+"数据目录" = "Data folder";
+"显示的账号" = "Accounts shown";
+"更新" = "Updates";
+"服务配置" = "Service";
+"本地数据" = "Local data";
+"本机上传记录" = "Local upload log";
+"状态栏标题" = "Menu bar title";
+"终端 App" = "Terminal app";
+"软件更新" = "Software update";
+"清除搜索" = "Clear search";
+"筛选活动证据级别" = "Filter by evidence level";
+
+/* Antigravity workspace mapping */
+"Antigravity 工作区映射" = "Antigravity Workspace Mapping";
+"可选。仅靠本地日志即可统计 Antigravity 的 Token 与会话；接入全局 hooks.json 后仅额外记录会话与工作区目录的对应关系，用于项目归属，不保存提示词或内容。" = "Optional. Local logs already track Antigravity tokens and sessions. Connecting global hooks.json additionally records conversation-to-workspace paths for project attribution without storing prompts or content.";
+"全局 Hooks 配置" = "Global Hooks config";
+"已记录会话目录" = "Mapped workspaces";
+"已配置 Antigravity 工作区映射；新会话或下轮对话结束后生效。" = "Antigravity workspace mapping saved; takes effect on new sessions or after the next turn.";
+"已移除 Antigravity 工作区映射；其他 Hooks 配置已保留。" = "Removed Antigravity workspace mapping; other hooks were preserved.";
+"未找到内置 Helper；请以打包后的 .app 运行后再配置。" = "Bundled helper not found; run the packaged .app to configure hooks.";
+
+/* Session metadata & file reveal */
+"关闭预览" = "Close preview";
+"原记录文件已不存在" = "Session log file no longer exists";
+"含 {0} 条未计价" = "{0} unpriced";
+"在 Finder 中打开文件夹" = "Open Folder in Finder";
+"在 Finder 中显示" = "Reveal in Finder";
+"在 Finder 中显示记录文件" = "Reveal Session File in Finder";
+"复制文件路径" = "Copy File Path";
+"已复制" = "Copied";
+"文件夹" = "Folder";
+"未找到原记录文件" = "Session log file not found";
+"输入 {0} · 输出 {1} · 缓存 {2} · 写入 {3}" = "Input {0} · Output {1} · Cache {2} · Write {3}";

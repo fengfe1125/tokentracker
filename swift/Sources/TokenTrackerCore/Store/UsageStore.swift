@@ -334,6 +334,7 @@ public final class UsageStore {
         if provider.isEmpty {
             provider = ["claude": "anthropic", "codex": "openai", "kimi": "moonshot"][tool] ?? ""
             if tool == "dsh" && model.lowercased().hasPrefix("deepseek-") { provider = "deepseek" }
+            if tool == "antigravity" { provider = AntigravityScanner.inferredProvider(for: model) }
         }
         let verb = replace ? "INSERT OR REPLACE" : "INSERT OR IGNORE"
         let changed = try conn.execute(
@@ -343,7 +344,7 @@ public final class UsageStore {
             [tool, srcKey, sessionID, project, ts, model, input, output, cacheRead, cacheWrite,
              cost as Any, quality, intervalStart as Any, costSource, sourceKind, sourceScope,
              provider, priceVersionID as Any])
-        if ["codex", "pi", "dsh", "kimi"].contains(tool), project.hasPrefix("/"), !srcKey.hasPrefix("cli|") {
+        if ["codex", "pi", "dsh", "kimi", "antigravity"].contains(tool), project.hasPrefix("/"), !srcKey.hasPrefix("cli|") {
             try recordProjectPath(tool: tool, srcKey: srcKey, path: project)
         }
         return changed
@@ -861,23 +862,32 @@ public final class UsageStore {
     /// Reuses the same containment rule as daily(): never spread observed intervals.
     /// Each row's `day` is the hour's start in epoch milliseconds.
     public func heatmapHours(from start: Date, to end: Date, calendar: Calendar = .current) throws -> [DailyRow] {
-        var hour = calendar.dateInterval(of: .hour, for: start)!.start
-        var result: [DailyRow] = []
-        while hour < end {
-            let next = calendar.date(byAdding: .hour, value: 1, to: hour)!
-            let lo = Int64(hour.timeIntervalSince1970 * 1000)
-            let hi = Int64(next.timeIntervalSince1970 * 1000)
-            let (sql, args) = countable(lo, hi)
-            result += try conn.query(
-                "SELECT tool,\(Self.aggSelect) FROM usage_events WHERE \(sql) GROUP BY tool", args
-            ).map { row in
-                var stats = ToolStats(row: row)
-                stats.tool = row.string("tool")
-                return DailyRow(tool: stats.tool, day: String(lo), stats: stats)
-            }
-            hour = next
+        let firstHour = calendar.dateInterval(of: .hour, for: start)!.start
+        guard firstHour < end else { return [] }
+        var lastEnd = firstHour
+        while lastEnd < end {
+            lastEnd = calendar.date(byAdding: .hour, value: 1, to: lastEnd)!
         }
-        return result
+        let originMs = Int64(firstHour.timeIntervalSince1970 * 1000)
+        let endMs = Int64(lastEnd.timeIntervalSince1970 * 1000)
+        let hourMs: Int64 = 3_600_000
+        let bucket = "((ts - ?) / \(hourMs))"
+        let startBucket = "((interval_start - ?) / \(hourMs))"
+        let sql = """
+            SELECT tool, \(bucket) AS b, \(Self.aggSelect)
+            FROM usage_events
+            WHERE ts >= ? AND ts < ?
+              AND (time_quality='exact'
+                   OR (time_quality='observed' AND interval_start >= ? AND \(startBucket) = \(bucket)))
+            GROUP BY b, tool
+            ORDER BY b
+            """
+        return try conn.query(sql, [originMs, originMs, endMs, originMs, originMs, originMs]).map { row in
+            var stats = ToolStats(row: row)
+            stats.tool = row.string("tool")
+            let lo = originMs + row.int("b") * hourMs
+            return DailyRow(tool: stats.tool, day: String(lo), stats: stats)
+        }
     }
 
     public struct ModelRow: Equatable, Sendable, Identifiable {
@@ -1152,6 +1162,10 @@ public final class UsageStore {
 
     public struct SessionDetail: Equatable, Sendable {
         public var project: String = ""
+        public var workspacePath: String = ""
+        public var workspaceExists: Bool = false
+        public var filePath: String = ""
+        public var fileExists: Bool = false
         public var total = ToolStats()
         public var firstTs: Int64?
         public var lastTs: Int64?
@@ -1161,16 +1175,26 @@ public final class UsageStore {
         public var activitySummary: [ActivitySummaryRow] = []
     }
 
-    public func sessionDetail(tool: String, sessionID: String) throws -> SessionDetail {
+    public func sessionDetail(tool: String, sessionID: String,
+                              roots: ScanRoots? = nil) throws -> SessionDetail {
         let args: [Any?] = [tool, sessionID]
         let times = "MIN(CASE WHEN time_quality!='unallocated' THEN COALESCE(interval_start,ts) END) AS first_ts,"
             + "MAX(CASE WHEN time_quality!='unallocated' THEN ts END) AS last_ts"
         let modelRows = try conn.query(
             "SELECT model,\(UsageStore.aggSelect),\(times) FROM usage_events WHERE tool=? AND session_id=? GROUP BY model ORDER BY tokens DESC",
             args).map { ModelRow(tool: tool, model: $0.string("model"), stats: ToolStats(row: $0)) }
-        let totalRow = try conn.queryOne(
-            "SELECT COALESCE(MAX(NULLIF(project,'')),'') AS project,\(UsageStore.aggSelect),\(times) FROM usage_events WHERE tool=? AND session_id=?",
-            args)
+        let totalRow = try conn.queryOne("""
+            SELECT COALESCE(MAX(NULLIF(project,'')),'') AS project,
+                   COALESCE((SELECT ps.path FROM usage_events u2
+                             JOIN project_sources ps ON ps.tool=u2.tool AND ps.src_key=u2.src_key
+                             WHERE u2.tool=? AND u2.session_id=? AND ps.path!='' LIMIT 1), '') AS workspace_path,
+                   COALESCE(MAX(CASE WHEN source_scope LIKE '/%' THEN source_scope ELSE '' END), '') AS source_scope_path,
+                   COALESCE(MAX(CASE WHEN src_key LIKE 'legacy|%' OR src_key LIKE 'cli|%' THEN src_key ELSE '' END), '') AS path_src_key,
+                   COALESCE(MAX(CASE WHEN src_key LIKE '%.jsonl|%' THEN src_key ELSE '' END), '') AS file_src_key,
+                   COALESCE(MAX(CASE WHEN source_kind='codex_sqlite' OR src_key LIKE 'logs2|%' THEN 1 ELSE 0 END), 0) AS has_codex_sqlite,
+                   \(UsageStore.aggSelect),\(times)
+            FROM usage_events WHERE tool=? AND session_id=?
+            """, [tool, sessionID, tool, sessionID])
         let intervals = try conn.query(
             "SELECT interval_start,ts,\(UsageStore.tokensExpr) AS tokens FROM usage_events WHERE tool=? AND session_id=? AND time_quality='observed' ORDER BY ts",
             args)
@@ -1186,6 +1210,31 @@ public final class UsageStore {
         }
         detail.activity = try activityTimeline(agent: tool, sessionID: sessionID, limit: 500)
         detail.activitySummary = try activitySummary(agent: tool, group: "tool", sessionID: sessionID)
+        let activityPath: String = {
+            guard tool == "pi",
+                  let srcKey = detail.activity.first(where: { $0.srcKey.hasPrefix("/") })?.srcKey,
+                  let range = srcKey.range(of: "|tool|") else { return "" }
+            return String(srcKey[..<range.lowerBound])
+        }()
+        let hints = SessionSourceResolver.SessionHints(
+            tool: tool,
+            sessionID: sessionID,
+            project: detail.project,
+            workspacePath: totalRow?.string("workspace_path") ?? "",
+            sourceScopePath: totalRow?.string("source_scope_path") ?? "",
+            pathSrcKey: totalRow?.string("path_src_key") ?? "",
+            fileSrcKey: totalRow?.string("file_src_key") ?? "",
+            hasCodexSQLite: (totalRow?.int("has_codex_sqlite") ?? 0) != 0,
+            activitySrcKeyPath: activityPath)
+        let cursor = SessionSourceResolver.CursorIndex.load(from: self, tools: [tool], roots: roots)
+        let filePath = SessionSourceResolver.resolveFilePath(
+            hints: hints, cursor: cursor, roots: roots, allowDiskWalk: true)
+        detail.filePath = filePath
+        detail.fileExists = SessionSourceResolver.fileExists(filePath)
+        let workspacePath = SessionSourceResolver.resolveWorkspacePath(
+            hints: hints, filePath: filePath, cursor: cursor, roots: roots)
+        detail.workspacePath = workspacePath
+        detail.workspaceExists = SessionSourceResolver.isExistingDirectory(workspacePath)
         return detail
     }
 
@@ -1193,9 +1242,15 @@ public final class UsageStore {
         public var tool: String
         public var sessionID: String
         public var project: String
+        public var workspacePath: String = ""
+        public var workspaceExists: Bool = false
+        public var filePath: String = ""
+        public var fileExists: Bool = false
         public var lastSeen: String?
+        public var firstTs: Int64? = nil
         public var ts: Int64?
         public var model: String
+        public var models: [String] = []
         public var title: String?
         public var stats: ToolStats
         public var activityExact: Int64 = 0
@@ -1204,28 +1259,98 @@ public final class UsageStore {
     }
 
     public func sessions(rangeKey: String = "all", tool: String? = nil,
-                         limit: Int = 300, query: String? = nil) throws -> [SessionRow] {
+                         limit: Int = 300, query: String? = nil,
+                         roots: ScanRoots? = nil,
+                         includeMetadata: Bool = true) throws -> [SessionRow] {
         let (whereSQL, filterArgs) = filter(rangeKey, tool: tool)
         let base = """
             SELECT tool,session_id,MAX(project) AS project,
+            COALESCE((SELECT ps.path FROM usage_events u2
+                      JOIN project_sources ps ON ps.tool=u2.tool AND ps.src_key=u2.src_key
+                      WHERE u2.tool=usage_events.tool AND u2.session_id=usage_events.session_id
+                        AND ps.path!='' LIMIT 1), '') AS workspace_path,
+            COALESCE(MAX(CASE WHEN source_scope LIKE '/%' THEN source_scope ELSE '' END), '') AS source_scope_path,
+            COALESCE(MAX(CASE WHEN src_key LIKE 'legacy|%' OR src_key LIKE 'cli|%' THEN src_key ELSE '' END), '') AS path_src_key,
+            COALESCE(MAX(CASE WHEN src_key LIKE '%.jsonl|%' THEN src_key ELSE '' END), '') AS file_src_key,
+            COALESCE(MAX(CASE WHEN source_kind='codex_sqlite' OR src_key LIKE 'logs2|%' THEN 1 ELSE 0 END), 0) AS has_codex_sqlite,
+            GROUP_CONCAT(DISTINCT NULLIF(model,'')) AS all_models,
             datetime(MAX(CASE WHEN time_quality!='unallocated' THEN ts END)/1000,'unixepoch','localtime') AS last_seen,
+            MIN(CASE WHEN time_quality!='unallocated' THEN COALESCE(interval_start,ts) END) AS first_ts,
             MAX(CASE WHEN time_quality!='unallocated' THEN ts END) AS ts,MAX(model) AS model,\(UsageStore.aggSelect)
             FROM usage_events WHERE \(whereSQL) GROUP BY tool,session_id ORDER BY ts DESC
             """
         var sql = "SELECT s.*, m.title FROM (\(base)) s LEFT JOIN session_meta m ON m.tool=s.tool AND m.session_id=s.session_id"
         var args = filterArgs
         if let query, !query.isEmpty {
-            sql += " WHERE (m.title LIKE ? OR s.project LIKE ? OR s.session_id LIKE ? OR s.model LIKE ?)"
-            args.append(contentsOf: Array(repeating: "%\(query)%" as Any?, count: 4))
+            sql += " WHERE (m.title LIKE ? OR s.project LIKE ? OR s.workspace_path LIKE ? OR s.session_id LIKE ? OR COALESCE(s.all_models,s.model) LIKE ?)"
+            args.append(contentsOf: Array(repeating: "%\(query)%" as Any?, count: 5))
         }
         sql += " ORDER BY s.ts DESC LIMIT ?"
         args.append(limit)
-        var rows = try conn.query(sql, args).map { row in
-            SessionRow(tool: row.string("tool"), sessionID: row.string("session_id"),
-                       project: row.string("project"), lastSeen: row.stringOrNil("last_seen"),
-                       ts: row.intOrNil("ts"), model: row.string("model"),
-                       title: row.stringOrNil("title"), stats: ToolStats(row: row))
+        let rawRows = try conn.query(sql, args)
+        var rows: [SessionRow] = []
+        var hintsByIndex: [SessionSourceResolver.SessionHints] = []
+        rows.reserveCapacity(rawRows.count)
+        hintsByIndex.reserveCapacity(rawRows.count)
+        for row in rawRows {
+            let item = SessionRow(
+                tool: row.string("tool"),
+                sessionID: row.string("session_id"),
+                project: row.string("project"),
+                workspacePath: row.string("workspace_path"),
+                lastSeen: row.stringOrNil("last_seen"),
+                firstTs: row.intOrNil("first_ts"),
+                ts: row.intOrNil("ts"),
+                model: row.string("model"),
+                title: row.stringOrNil("title"),
+                stats: ToolStats(row: row))
+            rows.append(item)
+            if includeMetadata {
+                hintsByIndex.append(SessionSourceResolver.SessionHints(
+                    tool: item.tool,
+                    sessionID: item.sessionID,
+                    project: item.project,
+                    workspacePath: item.workspacePath,
+                    sourceScopePath: row.string("source_scope_path"),
+                    pathSrcKey: row.string("path_src_key"),
+                    fileSrcKey: row.string("file_src_key"),
+                    hasCodexSQLite: row.int("has_codex_sqlite") != 0))
+            }
         }
+
+        guard includeMetadata, !rows.isEmpty else { return rows }
+
+        let modelRows = try conn.query("""
+            SELECT tool,session_id,model,COALESCE(SUM(\(UsageStore.tokensExpr)),0) AS tokens
+            FROM usage_events WHERE \(whereSQL) AND model!=''
+            GROUP BY tool,session_id,model
+            ORDER BY tokens DESC,model ASC
+            """, filterArgs)
+        var modelsByKey: [String: [String]] = [:]
+        for mRow in modelRows {
+            let key = "\(mRow.string("tool"))\u{0}\(mRow.string("session_id"))"
+            modelsByKey[key, default: []].append(mRow.string("model"))
+        }
+        let cursor = SessionSourceResolver.CursorIndex.load(
+            from: self, tools: Set(rows.map(\.tool)), roots: roots)
+        for index in rows.indices {
+            let key = "\(rows[index].tool)\u{0}\(rows[index].sessionID)"
+            if let ranked = modelsByKey[key], !ranked.isEmpty {
+                rows[index].models = ranked
+                rows[index].model = ranked[0]
+            } else if !rows[index].model.isEmpty {
+                rows[index].models = [rows[index].model]
+            }
+            let filePath = SessionSourceResolver.resolveFilePath(
+                hints: hintsByIndex[index], cursor: cursor, roots: roots, allowDiskWalk: false)
+            rows[index].filePath = filePath
+            rows[index].fileExists = SessionSourceResolver.fileExists(filePath)
+            let workspacePath = SessionSourceResolver.resolveWorkspacePath(
+                hints: hintsByIndex[index], filePath: filePath, cursor: cursor, roots: roots)
+            rows[index].workspacePath = workspacePath
+            rows[index].workspaceExists = SessionSourceResolver.isExistingDirectory(workspacePath)
+        }
+
         let bounds = rangeBounds(rangeKey)
         let rangeClause = rangeKey == "all" ? "1=1" :
             "COALESCE(started_at,ended_at,0)>=\(bounds.0) AND COALESCE(started_at,ended_at,0)<\(bounds.1)"

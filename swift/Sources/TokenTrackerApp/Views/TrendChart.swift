@@ -69,12 +69,16 @@ enum TrendScale {
     }
 }
 
-struct TrendChart: View {
+struct TrendChart: View, Equatable {
     @ObservedObject private var language = LanguageManager.shared
     let points: [TrendPoint]
     /// 小时粒度（今天）x 标签保留 "HH:00"；天粒度裁成 "MM-dd"
     let isHourly: Bool
     let yi: Bool
+
+    nonisolated static func == (lhs: TrendChart, rhs: TrendChart) -> Bool {
+        lhs.points == rhs.points && lhs.isHourly == rhs.isHourly && lhs.yi == rhs.yi
+    }
 
     @State private var hoverID: String?
     @State private var hoverLocation: CGPoint = .zero
@@ -190,6 +194,8 @@ struct TrendChart: View {
             }
         }
         .frame(height: 220)
+        // 桶是离散的小时 / 天：禁止隐式柱形/轴插值，切换「今天 ↔ 近 7 天」单帧直出不卡顿。
+        .transaction { $0.animation = nil }
         .onChange(of: points) { _, _ in hoverID = nil }
     }
 

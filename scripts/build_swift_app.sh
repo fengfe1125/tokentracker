@@ -30,8 +30,17 @@ VERSION="$(sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' \
 [ -n "$VERSION" ] || { echo "!! 解析不到 TokenTrackerCore.version" >&2; exit 1; }
 echo "==> 版本 $VERSION"
 
-echo "==> swift build -c release"
-swift build -c release --package-path "$PKG"
+SDK_VER="$(xcrun --show-sdk-version 2>/dev/null || true)"
+LINKER_ARGS=()
+if [ -n "$SDK_VER" ]; then
+  # SwiftPM 默认把 LC_BUILD_VERSION 的 sdk 压成 deployment target（14.0），
+  # 在 macOS 26+ 会回退到旧窗口外观；显式写入当前 SDK 版本以启用原生液态玻璃红绿灯与圆角，
+  # 同时保留 14.0 最低系统兼容。
+  LINKER_ARGS=(-Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$SDK_VER")
+fi
+
+echo "==> swift build -c release (sdk ${SDK_VER:-default})"
+swift build -c release --package-path "$PKG" ${LINKER_ARGS[@]+"${LINKER_ARGS[@]}"}
 BIN="$PKG/.build/release/TokenTrackerApp"
 
 echo "==> 组装 $APP"

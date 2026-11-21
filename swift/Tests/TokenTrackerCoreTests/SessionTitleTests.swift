@@ -81,4 +81,23 @@ final class SessionTitleTests: XCTestCase {
         XCTAssertEqual(try store.repairSessionTitles(), 0)
         XCTAssertEqual(try store.conn.queryOne("SELECT COUNT(*) n FROM session_meta")?.int("n"), 3)
     }
+
+    func testAntigravityUserRequestWrapperAndMetadataStripping() {
+        let wrapped = """
+        <USER_REQUEST>
+        可以添加一个 token 记录读取 Antigravity 吗
+        </USER_REQUEST>
+        <ADDITIONAL_METADATA>
+        The current local time is: 2026-11-21T12:28:16+07:00.
+        </ADDITIONAL_METADATA>
+        <USER_SETTINGS_CHANGE>
+        Model changed
+        </USER_SETTINGS_CHANGE>
+        """
+        XCTAssertEqual(sessionTitle(fromUserText: wrapped), "可以添加一个 token 记录读取 Antigravity 吗")
+        XCTAssertEqual(userText(["type": "USER_INPUT", "content": wrapped]),
+                       "可以添加一个 token 记录读取 Antigravity 吗")
+        XCTAssertNil(sessionTitle(fromUserText: "<SYSTEM_MESSAGE>background task finished</SYSTEM_MESSAGE>"))
+        XCTAssertNil(sessionTitle(fromUserText: "<USER_SETTINGS_CHANGE>Model changed</USER_SETTINGS_CHANGE>"))
+    }
 }

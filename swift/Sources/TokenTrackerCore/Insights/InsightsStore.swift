@@ -51,7 +51,7 @@ public struct ProjectSummary: Identifiable, Sendable, Codable {
     public var lastActivity: Int64?
     public init(id:String,name:String,totals:UsageTotals,lastActivity:Int64?) { self.id=id;self.name=name;self.totals=totals;self.lastActivity=lastActivity }
 }
-public struct UsageBreakdown: Identifiable, Sendable, Codable {
+public struct UsageBreakdown: Identifiable, Sendable, Codable, Equatable {
     public var id: String
     public var totals: UsageTotals
 }

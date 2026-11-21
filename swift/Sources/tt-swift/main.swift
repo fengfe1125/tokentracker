@@ -45,7 +45,7 @@ case "detect":
     let store = try openStore()
     let runner = ScanRunner(store: store, prices: prices(), roots: ScanRoots())
     for (name, info) in runner.detectAll().sorted(by: { $0.key < $1.key }) {
-        print("\(info.installed ? "✅" : "—") \(name.padding(toLength: 10, withPad: " ", startingAt: 0)) \(info.detail)")
+        print("\(info.installed ? "✅" : "—") \(name.padding(toLength: 12, withPad: " ", startingAt: 0)) \(info.detail)")
     }
 
 case "scan":
@@ -57,11 +57,11 @@ case "scan":
     for tool in ScannerRegistry.all {
         guard let r = results[tool] else { continue }
         if let error = r.error {
-            print("✗ \(tool.padding(toLength: 10, withPad: " ", startingAt: 0)) 出错: \(error)")
+            print("✗ \(tool.padding(toLength: 12, withPad: " ", startingAt: 0)) 出错: \(error)")
         } else if let skipped = r.skipped {
-            print("— \(tool.padding(toLength: 10, withPad: " ", startingAt: 0)) \(skipped)")
+            print("— \(tool.padding(toLength: 12, withPad: " ", startingAt: 0)) \(skipped)")
         } else {
-            print("✓ \(tool.padding(toLength: 10, withPad: " ", startingAt: 0)) 新增 \(r.added) 条 / 更新 \(r.updated) 条 / 文件 \(r.files) 个")
+            print("✓ \(tool.padding(toLength: 12, withPad: " ", startingAt: 0)) 新增 \(r.added) 条 / 更新 \(r.updated) 条 / 文件 \(r.files) 个")
             if r.activityAdded > 0 || r.activityUpdated > 0 {
                 print("  活动: 新增 \(r.activityAdded) 条 / 补全 \(r.activityUpdated) 条")
             }
@@ -81,15 +81,73 @@ case "stats":
         ? args.dropFirst(2).first ?? "all" : "all"
     let (rows, total, summary) = try store.stats(rangeKey: range)
     print("范围: \(range)")
-    print("工具        会话    tokens          成本")
+    print("工具          会话    tokens          成本")
     for row in rows {
-        print("\(row.tool.padding(toLength: 11, withPad: " ", startingAt: 0)) "
-              + "\(row.sessions)\t\(fmt(row.tokens))\t\(fmtCost(row.cost))")
+        let costText = row.events > 0 && row.unpriced == row.events ? "未计价" : fmtCost(row.cost)
+        print("\(row.tool.padding(toLength: 12, withPad: " ", startingAt: 0))  "
+              + "\(row.sessions)\t\(fmt(row.tokens))\t\(costText)")
     }
-    print("合计        \(total.sessions)\t\(fmt(total.tokens))\t\(fmtCost(total.cost))")
+    let totalCostText = total.events > 0 && total.unpriced == total.events ? "未计价" : fmtCost(total.cost)
+    print("合计          \(total.sessions)\t\(fmt(total.tokens))\t\(totalCostText)")
     if summary.unallocatedTokens > 0 {
         print("（另有未分配时间的历史: \(fmt(summary.unallocatedTokens)) tokens，"
               + "估算: \(fmt(summary.estimatedTokens))）")
+    }
+
+case "sessions":
+    let store = try openStore()
+    func option(_ name: String) -> String? {
+        guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else { return nil }
+        return args[index + 1]
+    }
+    let range = option("--range") ?? "all"
+    let tool = option("--tool")
+    let limit = option("--limit").flatMap(Int.init) ?? 30
+    let query = option("--query")
+    let rows = try store.sessions(rangeKey: range, tool: tool, limit: max(1, min(limit, 300)), query: query)
+    print("范围: \(range)" + (tool.map { "  工具: \($0)" } ?? "") + "  共 \(rows.count) 个会话")
+    for row in rows {
+        let when = row.lastSeen ?? "—"
+        let title = (row.title?.isEmpty == false ? row.title! : (row.project.isEmpty ? row.sessionID : row.project))
+        let cost = row.stats.events > 0 && row.stats.unpriced == row.stats.events ? "未计价" : fmtCost(row.stats.cost)
+        let proj = row.project.isEmpty ? "—" : (row.project.hasPrefix("/") ? (row.project as NSString).lastPathComponent : row.project)
+        print("\(when)  \(row.tool.padding(toLength: 12, withPad: " ", startingAt: 0)) \(fmt(row.stats.tokens))\t\(cost)\t[\(proj)]  \(title)")
+    }
+
+case "antigravity-hook":
+    func option(_ name: String) -> String? {
+        guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else { return nil }
+        return args[index + 1]
+    }
+    let hookPath = option("--path") ?? AntigravityHookConfiguration.defaultPath
+    let channel = option("--channel") ?? "production"
+    let defaultHelper = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(channel == "development" ? "TokenTracker Dev" : "TokenTracker")
+        .appendingPathComponent("Hooks/TokenTrackerHook").path
+    let helper = option("--helper") ?? defaultHelper
+    let mapPath = env["TOKENTRACKER_ANTIGRAVITY_WORKSPACES"] ?? AntigravityWorkspaceMap.defaultPath
+    if args.contains("--install") {
+        let preview = try AntigravityHookConfiguration.preview(path: hookPath, helper: helper, channel: channel, installing: true)
+        if args.contains("--dry-run") {
+            print(preview.text)
+        } else {
+            try preview.apply()
+            print("✓ 已写入 Antigravity 工作区映射 Hook：\(preview.path)")
+        }
+    } else if args.contains("--remove") {
+        let preview = try AntigravityHookConfiguration.preview(path: hookPath, helper: helper, channel: channel, installing: false)
+        if args.contains("--dry-run") {
+            print(preview.text)
+        } else {
+            try preview.apply()
+            print("✓ 已移除 Antigravity 工作区映射 Hook：\(preview.path)")
+        }
+    } else {
+        let installed = AntigravityHookConfiguration.isInstalled(path: hookPath, channel: channel)
+        let mapped = AntigravityWorkspaceMap.load(path: mapPath).count
+        print("配置文件  \(hookPath)")
+        print("状态      \(installed ? "已配置" : "未配置")（channel=\(channel)）")
+        print("工作区映射 \(mapped) 个会话（\(mapPath)）")
     }
 
 case "activity":
@@ -305,6 +363,8 @@ default:
       tt-swift detect            查看各工具数据源是否被识别
       tt-swift scan [--full]     扫描日志入库（增量，可重复执行）
       tt-swift stats [--range day|week|month|all]
+      tt-swift sessions [--range day|week|month|all] [--tool NAME] [--limit 30] [--query TEXT]
+      tt-swift antigravity-hook [--status|--install|--remove] [--dry-run] [--path PATH]
       tt-swift activity [--range day|week|month|all] [--group agent|tool|skill]
                         [--agent NAME] [--confidence exact|derived|all] [--json]
       tt-swift quotas            终端查看全部配额窗口

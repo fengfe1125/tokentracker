@@ -83,7 +83,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak bar] in bar?.showPanel() }
         }
         if ProcessInfo.processInfo.environment["TT_UI_TEST_SHOW_MAIN"] == "1" {
-            appState.selection = .activity
+            // 验收截图：TT_UI_TEST_PAGE 指定页面（导航项 rawValue 或 settings），
+            // TT_UI_TEST_SETTINGS_TAB 指定设置分类
+            let env = ProcessInfo.processInfo.environment
+            if env["TT_UI_TEST_PAGE"] == "settings" {
+                appState.selection = .settings
+            } else {
+                appState.selection = env["TT_UI_TEST_PAGE"].flatMap(SidebarNavigationItem.init(rawValue:))?.selection
+                    ?? .activity
+            }
+            if let tab = env["TT_UI_TEST_SETTINGS_TAB"].flatMap(SettingsTab.init(rawValue:)) {
+                UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey)
+            }
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
         }
         appState.insights.onInspect = { [weak self] in self?.appState.selection = .usage; self?.appState.usageTab = .projects; self?.showMainPanel() }
