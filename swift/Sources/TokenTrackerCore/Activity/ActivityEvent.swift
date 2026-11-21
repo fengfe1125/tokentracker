@@ -42,7 +42,7 @@ public struct ActivityEvent: Equatable, Sendable {
 }
 
 public enum ActivityNormalizer {
-    public static let parserVersion = 2
+    public static let parserVersion = 3
 
     public static func eventKind(for rawName: String) -> ActivityKind {
         ["skill", "skill_view"].contains(rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
@@ -55,9 +55,11 @@ public enum ActivityNormalizer {
             "bash": "shell", "shell": "shell", "execute_command": "shell", "exec_command": "shell",
             "run_command": "shell",
             "read": "file.read", "read_file": "file.read", "view_file": "file.read",
-            "write": "file.write", "write_file": "file.write",
+            "write": "file.write", "write_file": "file.write", "write_to_file": "file.write",
             "edit": "file.edit", "edit_file": "file.edit", "apply_patch": "file.edit",
-            "glob": "file.search", "grep": "file.search",
+            "replace_file_content": "file.edit", "multi_replace_file_content": "file.edit",
+            "glob": "file.search", "grep": "file.search", "grep_search": "file.search",
+            "find_by_name": "file.search", "list_dir": "file.search", "listfiles": "file.search",
             "search": "web.search", "web_search": "web.search", "search_web": "web.search",
             "skill": "skill.activate", "skill_view": "skill.activate",
         ]

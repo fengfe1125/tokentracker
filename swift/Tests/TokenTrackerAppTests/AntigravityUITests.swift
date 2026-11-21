@@ -108,10 +108,10 @@ final class AntigravityUITests: XCTestCase {
         window.orderFrontRegardless()
         pump(0.4)
 
-        // 1. Settings -> 价格与数据（Antigravity 工作区映射区块）
-        UserDefaults.standard.set(SettingsTab.data.rawValue, forKey: SettingsTab.storageKey)
+        // 1. Settings -> 提醒与集成（Antigravity 工作区映射区块）
+        UserDefaults.standard.set(SettingsTab.integrations.rawValue, forKey: SettingsTab.storageKey)
         state.selection = .settings
-        try snap("ag_settings_data")
+        try snap("ag_settings_integrations")
 
         // 2. 用量 -> 会话记录（显示 Antigravity 会话、项目目录、未计价、记录文件按钮）
         state.selection = .usage

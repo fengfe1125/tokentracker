@@ -198,7 +198,9 @@ final class OverviewRefreshTests: XCTestCase {
         state.selection = .reports
         XCTAssertNil(state.detail)
         state.showActivityDetail()
-        XCTAssertEqual(state.detail, .activity)
+        XCTAssertEqual(state.detail, .activity())
+        state.showActivityDetail(kind: .tool, query: "shell")
+        XCTAssertEqual(state.detail, .activity(kind: .tool, query: "shell"))
         state.closeDetail()
         XCTAssertNil(state.detail)
     }

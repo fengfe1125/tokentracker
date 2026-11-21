@@ -16,6 +16,7 @@ struct MenuBarPanelActions {
     var openSession: (_ tool: String, _ sessionID: String) -> Void = { _, _ in }
     var openAccounts: () -> Void = {}
     var openSettings: () -> Void = {}
+    var openPorts: () -> Void = {}
     var openPort: (_ port: Int) -> Void = { _ in }
     var openTasks: () -> Void = {}
     var quit: () -> Void = {}
@@ -340,7 +341,7 @@ private struct PanelPorts: View {
     var body: some View {
         let running = model.ports.filter { pinned.contains($0.port) }
         if running.isEmpty {
-            Button(action: actions.openSettings) {
+            Button(action: actions.openPorts) {
                 HStack(spacing: 4) {
                     Text(model.loaded ? L10n.text("所选端口现在都没有运行") : L10n.text("正在扫描端口…"))
                     Image(systemName: "chevron.right").font(.caption2)
@@ -352,25 +353,39 @@ private struct PanelPorts: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(running) { port in
-                    Button { actions.openPort(port.port) } label: {
-                        HStack(spacing: 8) {
-                            Text(verbatim: ":\(port.port)")
-                                .font(.caption.monospaced().weight(.medium))
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .foregroundStyle(tint(port))
-                                .background(tint(port).opacity(0.14),
-                                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            Text(port.process).font(.callout).lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 8)
-                            Text(port.projectName ?? (model.isSystem(port) ? L10n.text("系统进程") : L10n.text("未匹配")))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Button { actions.openPort(port.port) } label: {
+                            HStack(spacing: 8) {
+                                Text(verbatim: ":\(port.port)")
+                                    .font(.caption.monospaced().weight(.medium))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .foregroundStyle(tint(port))
+                                    .background(tint(port).opacity(0.14),
+                                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                Text(port.displayName).font(.callout).lineLimit(1).truncationMode(.middle)
+                                Spacer(minLength: 6)
+                                Text(port.projectName ?? (model.isSystem(port) ? L10n.text("系统进程")
+                                                          : model.isAgent(port) ? L10n.text("Agent 进程")
+                                                          : L10n.text("未匹配")))
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 6)
+                            .hoverHighlight()
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 6)
-                        .hoverHighlight()
-                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .buttonStyle(.plain)
+                        Button { model.openInBrowser(port.port) } label: {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, height: 22)
+                                .hoverHighlight()
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text("打开") + " localhost:\(port.port)")
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, -6)

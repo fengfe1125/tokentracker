@@ -222,4 +222,57 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(rows[0].string("event_layer"), "request_fallback")
         XCTAssertEqual(rows[1].string("event_kind"), "skill")
     }
+
+    func testDshAndPiRealToolResultFormatsCompleteActivityStatus() throws {
+        let temp = try TempDir()
+        let store = try temp.store()
+
+        // Pi: role == "toolResult" 直接在 message 顶层携带 toolCallId / isError
+        let piDir = temp.path("pi")
+        try FileManager.default.createDirectory(atPath: piDir, withIntermediateDirectories: true)
+        writeJSONL(temp.path("pi", "s1.jsonl"), [
+            ["type": "session", "id": "pi-s1", "cwd": "/repo"],
+            ["type": "message", "id": "m1", "timestamp": 1_787_619_600_000,
+             "message": ["role": "assistant", "content": [
+                ["type": "toolCall", "id": "pi-ok", "name": "bash"],
+                ["type": "toolCall", "id": "pi-err", "name": "read"],
+             ]]],
+            ["type": "message", "id": "m2", "timestamp": 1_787_619_601_500,
+             "message": ["role": "toolResult", "toolCallId": "pi-ok", "isError": false]],
+            ["type": "message", "id": "m3", "timestamp": 1_787_619_602_000,
+             "message": ["role": "toolResult", "toolCallId": "pi-err", "isError": true]],
+        ])
+        _ = try PiScanner(roots: [piDir]).scan(store, .default, full: false)
+        let piEvents = try store.activityTimeline(agent: "pi", confidence: "exact", limit: 10)
+        XCTAssertEqual(piEvents.first { $0.callID == "pi-ok" }?.status, "success")
+        XCTAssertEqual(piEvents.first { $0.callID == "pi-ok" }?.durationMs, 1500)
+        XCTAssertEqual(piEvents.first { $0.callID == "pi-err" }?.status, "error")
+
+        // DSH: tool/result 把 toolCallId / isError 放在 data.message.content[].tool-result
+        let dshDir = temp.path("dsh", "ws", "sess1")
+        try FileManager.default.createDirectory(atPath: dshDir, withIntermediateDirectories: true)
+        let dshFile = temp.path("dsh", "ws", "sess1", "session.jsonl.zstd")
+        FileManager.default.createFile(atPath: dshFile, contents: Data())
+        var dsh = DshScanner(root: temp.path("dsh"))
+        dsh.reader = { _ in
+            [
+                (1, ["type": "session", "id": "dsh-s1", "cwd": "/repo"]),
+                (2, ["type": "tool/call", "time": 1_787_619_600_000,
+                     "data": ["callId": "dsh-ok", "name": "bash"]]),
+                (3, ["type": "tool/call", "time": 1_787_619_600_100,
+                     "data": ["callId": "dsh-err", "name": "read"]]),
+                (4, ["type": "tool/result", "time": 1_787_619_600_400,
+                     "data": ["message": ["source": ["kind": "tool", "callId": "dsh-ok"],
+                                          "content": [["type": "tool-result", "toolCallId": "dsh-ok", "isError": false]]]]]),
+                (5, ["type": "tool/result", "time": 1_787_619_600_600,
+                     "data": ["message": ["source": ["kind": "tool", "callId": "dsh-err"],
+                                          "content": [["type": "tool-result", "toolCallId": "dsh-err", "isError": true]]]]]),
+            ]
+        }
+        _ = try dsh.scan(store, .default, full: false)
+        let dshEvents = try store.activityTimeline(agent: "dsh", confidence: "exact", limit: 10)
+        XCTAssertEqual(dshEvents.first { $0.callID == "dsh-ok" }?.status, "success")
+        XCTAssertEqual(dshEvents.first { $0.callID == "dsh-ok" }?.durationMs, 400)
+        XCTAssertEqual(dshEvents.first { $0.callID == "dsh-err" }?.status, "error")
+    }
 }

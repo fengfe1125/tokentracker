@@ -541,6 +541,7 @@ public struct CodexScanner: ScannerAdapter {
         var turns: [Int: String] = [:]
         var turn = ""
         var completedIDs = Set<String>()
+        var toolOutputs: [String: (status: String, endedAt: Int64?)] = [:]
         for (lineno, obj) in entries {
             let payload = obj["payload"] as? [String: Any] ?? [:]
             let kind = obj["type"] as? String ?? ""
@@ -555,6 +556,15 @@ public struct CodexScanner: ScannerAdapter {
                 if let id = item["id"] as? String, !id.isEmpty { completedIDs.insert(id) }
                 for key in ["call_id", "callId"] {
                     if let id = item[key] as? String, !id.isEmpty { completedIDs.insert(id) }
+                }
+            } else if kind == "response_item",
+                      let itemType = payload["type"] as? String,
+                      CodexScanner.toolOutputTypes.contains(itemType) {
+                let callID = jsonOrString(payload["call_id"], payload["callId"], payload["id"])
+                if !callID.isEmpty {
+                    let tsValue = timestamp(obj["timestamp"])
+                    let ended: Int64? = tsValue == 0 ? nil : tsValue
+                    toolOutputs[callID] = (responseOutputStatus(payload), ended)
                 }
             }
         }
@@ -592,6 +602,7 @@ public struct CodexScanner: ScannerAdapter {
             }
         }
 
+        var pairedCallIDs = Set<String>()
         for (lineno, obj) in entries {
             let payload = obj["payload"] as? [String: Any] ?? [:]
             guard obj["type"] as? String == "response_item" else { continue }
@@ -610,26 +621,59 @@ public struct CodexScanner: ScannerAdapter {
                 }
                 guard !rawName.isEmpty else { continue }
                 let isSkill = ["skill", "skill_view"].contains(rawName.lowercased())
+                let matchedOutput = !callID.isEmpty ? toolOutputs[callID] : nil
+                if matchedOutput != nil { pairedCallIDs.insert(callID) }
+                let confirmed = isSkill || matchedOutput != nil
+                let duration: Int64? = {
+                    guard let started = ts, let ended = matchedOutput?.endedAt else { return nil }
+                    return max(0, ended - started)
+                }()
                 let change = try store.recordActivity(
                     agent: name, srcKey: "\(realPath(path))|request|\(responseID)",
                     rawName: rawName, sessionID: sid, turnID: turns[lineno] ?? "",
-                    callID: callID, startedAt: ts, sourceKind: "codex_request_fallback",
-                    confidence: isSkill ? "exact" : "derived",
+                    callID: callID, startedAt: ts, endedAt: matchedOutput?.endedAt,
+                    durationMs: duration,
+                    status: matchedOutput?.status ?? "unknown",
+                    sourceKind: confirmed ? (isSkill ? "codex_response_skill" : "codex_tool_call")
+                        : "codex_request_fallback",
+                    confidence: confirmed ? "exact" : "derived",
+                    arguments: isSkill ? jsonOrAny(payload["arguments"], payload["input"]) : nil,
                     eventKind: isSkill ? .skill : .tool,
-                    eventLayer: isSkill ? .execution : .requestFallback)
+                    eventLayer: confirmed ? .execution : .requestFallback)
                 added += change.added; updated += change.updated
             } else if CodexScanner.toolOutputTypes.contains(itemType) {
-                var status = ActivityNormalizer.status(payload["status"])
-                if status == "unknown", let output = payload["output"] as? [String: Any] {
-                    status = ((output["is_error"] as? Bool) == true || output["error"] != nil)
-                        ? "error" : "success"
-                }
-                if status == "unknown" { status = "success" }
+                guard !callID.isEmpty, !pairedCallIDs.contains(callID) else { continue }
                 updated += try store.completeActivity(agent: name, callID: callID,
-                                                       status: status, endedAt: ts)
+                                                       status: responseOutputStatus(payload),
+                                                       endedAt: ts)
             }
         }
         return (added, updated)
+    }
+
+    private func responseOutputStatus(_ payload: [String: Any]) -> String {
+        var status = ActivityNormalizer.status(payload["status"])
+        if status == "unknown", let output = payload["output"] as? [String: Any] {
+            if (output["is_error"] as? Bool) == true || output["error"] != nil {
+                status = "error"
+            } else if let exitCode = output["exit_code"] as? NSNumber {
+                status = exitCode.intValue == 0 ? "success" : "error"
+            } else {
+                status = "success"
+            }
+        }
+        if status == "unknown", let text = payload["output"] as? String,
+           let data = text.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if (parsed["is_error"] as? Bool) == true || parsed["error"] != nil {
+                status = "error"
+            } else if let exitCode = parsed["exit_code"] as? NSNumber {
+                status = exitCode.intValue == 0 ? "success" : "error"
+            } else {
+                status = ActivityNormalizer.status(parsed["status"])
+            }
+        }
+        return status == "unknown" ? "success" : status
     }
 
     private func scanLegacy(_ store: UsageStore, _ prices: PriceTable,

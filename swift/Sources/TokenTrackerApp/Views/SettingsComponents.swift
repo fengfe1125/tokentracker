@@ -402,3 +402,29 @@ struct SettingsBadge: View {
             .background(tint.opacity(0.12), in: Capsule())
     }
 }
+
+/// 卡片内可折叠标题行：左对齐与其他 SettingsRow 完全一致，右侧带旋转箭头。
+struct SettingsDisclosureRow<LabelContent: View>: View {
+    @Binding var isExpanded: Bool
+    @ViewBuilder var label: () -> LabelContent
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+        } label: {
+            HStack(spacing: 12) {
+                label()
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}

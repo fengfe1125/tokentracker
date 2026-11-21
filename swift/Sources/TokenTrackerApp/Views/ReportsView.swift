@@ -18,6 +18,7 @@ struct ReportsView: View {
     @State private var showGenerate = false
     @State private var reportExportQuery: UsageQuery?
     @State private var showExport = false
+    @State private var pendingDelete: WeeklyReport?
 
     private var report: WeeklyReport? {
         model.reports.first { $0.id == selectedID } ?? model.reports.first
@@ -47,22 +48,55 @@ struct ReportsView: View {
         }
         .onAppear { model.refresh() }
         .sheet(isPresented: $showExport) { ExportSheet(model: model, queryOverride: reportExportQuery) }
+        .alert(L10n.text("删除这份周报？"),
+               isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { target in
+            Button(L10n.text("删除"), role: .destructive) {
+                if selectedID == target.id { selectedID = nil }
+                model.deleteWeeklyReport(id: target.id)
+                pendingDelete = nil
+            }
+            Button(L10n.text("取消"), role: .cancel) { pendingDelete = nil }
+        } message: { target in
+            Text(L10n.text("将移除「\(L10n.Template(verbatim: weekLabel(target)))」周报快照；不会删除原始用量数据，随时可重新生成。"))
+        }
     }
 
-    private func generate(for date: Date) {
-        selectedID = nil
-        model.mutate { try $0.generateWeeklyReport(now: date, regenerate: true) }
+    private func generate(for date: Date, timeZone: TimeZone = .current) {
+        model.generateWeeklyReport(now: date, timeZone: timeZone, regenerate: true) { generated in
+            selectedID = generated.id
+        }
+    }
+
+    private var previewWeekText: String {
+        let interval = WeeklyReport.previousCompletedWeekInterval(before: week, in: .current)
+        let lastDay = interval.end.addingTimeInterval(-1)
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        formatter.timeZone = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        let yearValue = calendar.component(.year, from: interval.start)
+        let weekNum = calendar.component(.weekOfYear, from: interval.start)
+        let rangeText = "\(formatter.string(from: interval.start)) – \(formatter.string(from: lastDay))"
+        return "\(yearValue) · W\(weekNum) · \(rangeText)"
     }
 
     private var generatePopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L10n.text("生成周报")).font(.headline)
-            Text(L10n.text("选择任意一天，生成它之前最近的一个完整自然周。"))
+            Text(L10n.text("选择任意一天，生成它之前最近的一个完整自然周。已有同一自然周快照时会原地刷新。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             DatePicker(L10n.text("周次参考日期"), selection: $week, in: ...Date(),
                        displayedComponents: .date)
+            Text(L10n.text("将生成：\(L10n.Template(verbatim: previewWeekText))"))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(Color.brand)
             HStack {
                 Spacer()
                 Button(L10n.text("取消")) { showGenerate = false }
@@ -74,7 +108,7 @@ struct ReportsView: View {
             }
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: 310)
     }
 
     // ------------------------------------------------------------ 周列表 ----
@@ -137,10 +171,18 @@ struct ReportsView: View {
         let selected = item.id == report?.id
         return Button { selectedID = item.id } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(weekLabel(item))
-                    .font(.callout.weight(selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Color.brand : Color.primary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(weekLabel(item))
+                        .font(.callout.weight(selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Color.brand : Color.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let num = item.isoWeekNumber {
+                        Text(verbatim: "W\(num)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
                 Text(year(item) + " · " + UIFormat.compact(item.totals.tokens, yi: yi)
                      + " · " + UIFormat.costLabel(item.totals))
                     .font(.caption.monospacedDigit())
@@ -159,16 +201,26 @@ struct ReportsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button(L10n.text("重新生成")) {
+                let zone = TimeZone(identifier: item.query.timeZoneID) ?? .current
+                generate(for: item.regenerationReferenceDate, timeZone: zone)
+            }
+            Button(L10n.text("导出 Markdown")) { model.exportReport(item) }
+            Divider()
+            Button(L10n.text("删除周报…"), role: .destructive) { pendingDelete = item }
+        }
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // -------------------------------------------------------------- 详情 ----
 
     private func detail(_ report: WeeklyReport) -> some View {
-        VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
+        let weekBadge = report.isoWeekNumber.map { " · W\($0)" } ?? ""
+        return VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(weekLabel(report) + " · " + year(report))
+                    Text(weekLabel(report) + " · " + year(report) + weekBadge)
                         .font(.title3.weight(.semibold))
                     Text(L10n.text("自然周：周一至周日 · 本地规则 · 快照不会随补扫静默变化"))
                         .font(.caption)
@@ -176,9 +228,8 @@ struct ReportsView: View {
                 }
                 Spacer(minLength: 8)
                 Button {
-                    let now = Date(timeIntervalSince1970: Double(report.query.end ?? 0) / 1000 + 3600)
                     let zone = TimeZone(identifier: report.query.timeZoneID) ?? .current
-                    model.mutate { try $0.generateWeeklyReport(now: now, timeZone: zone, regenerate: true) }
+                    generate(for: report.regenerationReferenceDate, timeZone: zone)
                 } label: {
                     Label(L10n.text("重新生成"), systemImage: "arrow.clockwise")
                 }
@@ -190,6 +241,8 @@ struct ReportsView: View {
                         reportExportQuery = report.query
                         showExport = true
                     }
+                    Divider()
+                    Button(L10n.text("删除周报…"), role: .destructive) { pendingDelete = report }
                 } label: {
                     Label(L10n.text("导出"), systemImage: "square.and.arrow.up")
                 }
@@ -197,7 +250,7 @@ struct ReportsView: View {
                 .buttonStyle(.pageIcon)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help(L10n.text("导出"))
+                .help(L10n.text("导出与管理"))
             }
             TotalsView(totals: report.totals)
             changeCard(report)

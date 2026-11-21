@@ -105,14 +105,34 @@ public struct DshScanner: ScannerAdapter {
                     }
                 } else if type == "tool/result" {
                     let data = obj["data"] as? [String: Any] ?? [:]
-                    let callID = jsonOrString(data["callId"], data["id"])
-                    var status = ActivityNormalizer.status(jsonOrAny(data["status"], data["error"]))
-                    if status == "unknown" { status = data["error"] == nil ? "success" : "error" }
                     let ended = jsonOrInt(obj["time"], data["time"])
-                    outcome.activityUpdated += try store.completeActivity(
-                        agent: name, callID: callID, status: status,
-                        endedAt: ended == 0 ? nil : ended,
-                        durationMs: (data["durationMs"] as? NSNumber)?.int64Value)
+                    let durationMs = (data["durationMs"] as? NSNumber)?.int64Value
+                    let message = data["message"] as? [String: Any]
+                    let source = message?["source"] as? [String: Any]
+                    let contentParts = (message?["content"] as? [[String: Any]]) ?? []
+                    let resultParts = contentParts.filter {
+                        let kind = ($0["type"] as? String)?.lowercased() ?? ""
+                        return kind == "tool-result" || kind == "tool_result"
+                    }
+                    if !resultParts.isEmpty {
+                        for part in resultParts {
+                            let callID = jsonOrString(part["toolCallId"], part["callId"], source?["callId"])
+                            var status = ActivityNormalizer.status(jsonOrAny(part["status"], data["status"], data["error"]))
+                            if status == "unknown" {
+                                status = ((part["isError"] as? Bool) == true || data["error"] != nil) ? "error" : "success"
+                            }
+                            outcome.activityUpdated += try store.completeActivity(
+                                agent: name, callID: callID, status: status,
+                                endedAt: ended == 0 ? nil : ended, durationMs: durationMs)
+                        }
+                    } else {
+                        let callID = jsonOrString(data["callId"], data["id"], source?["callId"])
+                        var status = ActivityNormalizer.status(jsonOrAny(data["status"], data["error"]))
+                        if status == "unknown" { status = data["error"] == nil ? "success" : "error" }
+                        outcome.activityUpdated += try store.completeActivity(
+                            agent: name, callID: callID, status: status,
+                            endedAt: ended == 0 ? nil : ended, durationMs: durationMs)
+                    }
                 } else if type == "assistant/chunk" || type == "assistant/message" {
                     let data = obj["data"] as? [String: Any] ?? [:]
                     let chunk = data["chunk"] as? [String: Any] ?? [:]

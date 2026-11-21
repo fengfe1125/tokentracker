@@ -136,18 +136,46 @@ public struct AntigravityScanner: ScannerAdapter {
             eventLayer: .execution))
     }
 
+    private func resultStatus(_ obj: [String: Any]) -> String {
+        let raw = (obj["status"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch raw {
+        case "DONE", "SUCCESS", "COMPLETED", "OK": return "success"
+        case "ERROR", "INVALID", "FAILED", "FAILURE": return "error"
+        case "DENIED", "REJECTED", "BLOCKED": return "denied"
+        default: return "unknown"
+        }
+    }
+
     private func scanLine(_ obj: [String: Any], fallbackKey: String, sessionID: String,
                           workspace: String, mtimeMs: Int64, prices: PriceTable,
-                          store: UsageStore) throws -> (Int, Int, Int, Int, String?) {
+                          store: UsageStore,
+                          pendingCalls: inout [(srcKey: String, startedAt: Int64)]) throws -> (Int, Int, Int, Int, String?) {
         let kind = obj["type"] as? String ?? ""
         if kind == "USER_INPUT" {
+            pendingCalls.removeAll()
             let title = userText(obj)
             return (0, 0, 0, 0, title.isEmpty ? nil : title)
+        }
+        if kind == "GENERIC", (obj["source"] as? String) != "USER_EXPLICIT", !pendingCalls.isEmpty {
+            let current = pendingCalls.removeFirst()
+            let status = resultStatus(obj)
+            guard status != "unknown" else {
+                // 仍在 RUNNING：放回队首等待后续增量扫描拿到终态
+                pendingCalls.insert(current, at: 0)
+                return (0, 0, 0, 0, nil)
+            }
+            let endedAt = ms(from: obj, fallback: mtimeMs)
+            let duration: Int64? = endedAt >= current.startedAt ? endedAt - current.startedAt : nil
+            let updated = try store.completeActivityBySrcKey(
+                agent: name, srcKey: current.srcKey, status: status,
+                endedAt: endedAt, durationMs: duration)
+            return (0, 0, 0, updated, nil)
         }
         guard kind == "PLANNER_RESPONSE" else {
             return (0, 0, 0, 0, nil)
         }
 
+        pendingCalls.removeAll()
         let ts = ms(from: obj, fallback: mtimeMs)
         let stepID = jsonIdentifier(obj["step_index"])
         let stepTag = stepID.isEmpty ? fallbackKey : "step_\(stepID)"
@@ -177,6 +205,7 @@ public struct AntigravityScanner: ScannerAdapter {
                 eventLayer: isAgent ? .lifecycle : .execution)
             activityAdded += change.added
             activityUpdated += change.updated
+            pendingCalls.append((srcKey: key, startedAt: ts))
 
             let derived = try recordDerivedSkill(store, sessionID: sessionID, stepTag: stepTag,
                                                  toolIndex: index, startedAt: ts,
@@ -301,29 +330,41 @@ public struct AntigravityScanner: ScannerAdapter {
                 }
             }
 
+            var pendingCalls: [(srcKey: String, startedAt: Int64)] = []
             if delta == nil {
                 for (lineno, obj) in iterJSONL(path) {
                     let (a, u, aa, au, t) = try scanLine(
                         obj, fallbackKey: String(lineno), sessionID: sessionID,
-                        workspace: workspace, mtimeMs: mtimeMs, prices: prices, store: store)
+                        workspace: workspace, mtimeMs: mtimeMs, prices: prices, store: store,
+                        pendingCalls: &pendingCalls)
                     outcome.added += a; outcome.updated += u
                     outcome.activityAdded += aa; outcome.activityUpdated += au
                     if let t, title == nil { title = t }
                 }
                 newOffset = statKey.s
             } else if let delta {
+                if let saved = (cursor[path] as? [String: Any])?["pending"] as? [[String: Any]] {
+                    pendingCalls = saved.compactMap { item in
+                        guard let key = item["k"] as? String, !key.isEmpty else { return nil }
+                        return (srcKey: key, startedAt: jsonInt(item["t"]))
+                    }
+                }
                 for (lineOffset, obj) in delta {
                     let (a, u, aa, au, t) = try scanLine(
                         obj, fallbackKey: "b\(lineOffset)", sessionID: sessionID,
-                        workspace: workspace, mtimeMs: mtimeMs, prices: prices, store: store)
+                        workspace: workspace, mtimeMs: mtimeMs, prices: prices, store: store,
+                        pendingCalls: &pendingCalls)
                     outcome.added += a; outcome.updated += u
                     outcome.activityAdded += aa; outcome.activityUpdated += au
                     if let t, title == nil { title = t }
                 }
             }
 
-            var snapshot = statKey.asDict
+            var snapshot: [String: Any] = statKey.asDict
             snapshot["o"] = newOffset
+            if !pendingCalls.isEmpty {
+                snapshot["pending"] = pendingCalls.map { ["k": $0.srcKey, "t": $0.startedAt] }
+            }
             cursor[path] = snapshot
             if let title {
                 try store.setSessionTitle(tool: name, sessionID: sessionID, title: title,

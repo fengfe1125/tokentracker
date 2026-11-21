@@ -189,6 +189,59 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(backups.count, 1)
     }
 
+    /// v7→v8：把同一自然周在不同时区生成的重复周报合并为规范键 `week:yyyy-MM-dd`，保留最新快照。
+    func testV8DeduplicatesTimezoneWeeklyReports() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("usage.db")
+        do {
+            let store = try UsageStore(path: path)
+            func insertLegacy(id: String, generatedAt: Int64, startMs: Int64, endMs: Int64,
+                              tz: String, tokens: Int64) throws {
+                var totals = UsageTotals()
+                totals.input = tokens
+                let report = WeeklyReport(
+                    id: id, generatedAt: generatedAt,
+                    query: UsageQuery(start: startMs, end: endMs, timeZoneID: tz),
+                    totals: totals, previous: UsageTotals(), projects: [],
+                    models: [], costSources: [], budgets: [], health: [], activityCount: 0)
+                let payload = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+                _ = try store.conn.execute("INSERT INTO weekly_reports VALUES (?,?,?)",
+                                           [id, generatedAt, payload])
+            }
+            // 2026-11-09 ~ 2026-11-15 在 4 个时区的重复周报
+            try insertLegacy(id: "Asia/Shanghai:1794153600000", generatedAt: 1000,
+                             startMs: 1_794_153_600_000, endMs: 1_794_758_400_000,
+                             tz: "Asia/Shanghai", tokens: 100)
+            try insertLegacy(id: "Asia/Taipei:1794153600000", generatedAt: 2000,
+                             startMs: 1_794_153_600_000, endMs: 1_794_758_400_000,
+                             tz: "Asia/Taipei", tokens: 200)
+            try insertLegacy(id: "America/Los_Angeles:1794211200000", generatedAt: 3000,
+                             startMs: 1_794_211_200_000, endMs: 1_794_816_000_000,
+                             tz: "America/Los_Angeles", tokens: 300)
+            try insertLegacy(id: "Asia/Ho_Chi_Minh:1794157200000", generatedAt: 4000,
+                             startMs: 1_794_157_200_000, endMs: 1_794_762_000_000,
+                             tz: "Asia/Ho_Chi_Minh", tokens: 400)
+            // 上一周（2026-11-02 ~ 2026-11-08）
+            try insertLegacy(id: "Asia/Shanghai:1793548800000", generatedAt: 500,
+                             startMs: 1_793_548_800_000, endMs: 1_794_153_600_000,
+                             tz: "Asia/Shanghai", tokens: 50)
+            _ = try store.conn.execute("PRAGMA user_version=7")
+            try store.conn.commit()
+        }
+        let store = try UsageStore(path: path)
+        XCTAssertEqual(try store.conn.scalarInt("PRAGMA user_version"), Int64(UsageStore.schemaVersion))
+        let reports = try store.weeklyReports()
+        XCTAssertEqual(reports.map(\.id), ["week:2026-11-09", "week:2026-11-02"])
+        XCTAssertEqual(reports[0].totals.tokens, 400)
+        XCTAssertEqual(reports[1].totals.tokens, 50)
+        let history = try XCTUnwrap(store.conn.queryOne(
+            "SELECT original_json FROM migration_history WHERE version=8"))
+        XCTAssertTrue(history.string("original_json").contains("\"removed\":3"))
+        let backups = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+            .filter { $0.hasPrefix("usage.db.v7.backup-") }
+        XCTAssertEqual(backups.count, 1)
+    }
+
     /// 对齐 test_failed_upgrade_rolls_back_schema_and_values。
     func testFailedUpgradeRollsBack() throws {
         let tmp = try TempDir()

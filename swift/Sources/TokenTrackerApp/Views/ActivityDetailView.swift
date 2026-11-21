@@ -21,14 +21,15 @@ struct ActivityDetailView: View {
     @State private var nextBeforeID: Int64?
     @State private var loading = false
 
-    init(state: AppState) {
+    init(state: AppState, initialKind: ActivityKind? = nil, initialQuery: String? = nil) {
         self.state = state
         let filter = state.activityPage.filter
         _range = State(initialValue: filter.range)
         _agent = State(initialValue: filter.agent)
         _confidence = State(initialValue: filter.confidence)
         _status = State(initialValue: "all")
-        _kind = State(initialValue: nil)
+        _kind = State(initialValue: initialKind)
+        _query = State(initialValue: initialQuery ?? "")
     }
 
     private var reloadKey: String {
@@ -92,8 +93,8 @@ struct ActivityDetailView: View {
             }
             .labelsHidden().frame(width: 100)
             Picker(L10n.text("证据"), selection: $confidence) {
-                Text(L10n.text("包含推断")).tag("all")
                 Text(L10n.text("已确认")).tag("exact")
+                Text(L10n.text("包含推断")).tag("all")
                 Text(L10n.text("只看推断")).tag("derived")
             }
             .labelsHidden().frame(width: 98)
@@ -214,7 +215,7 @@ struct ActivityDetailView: View {
             status: status == "all" ? nil : status,
             limit: 100, before: nil, beforeID: nil, kind: kind, query: clean(query))
         async let loadedCoverage = state.activitySkillCoverage(range: range, agent: agent)
-        async let loadedSkills = state.activitySkillSummary(range: range, agent: agent, confidence: "all")
+        async let loadedSkills = state.activitySkillSummary(range: range, agent: agent, confidence: confidence)
         let result = await (page, loadedCoverage, loadedSkills)
         guard !Task.isCancelled else { return }
         if let page = result.0 {
@@ -274,14 +275,18 @@ private struct ActivityDetailRow: View {
                     Text("Agent: \(toolDisplayName(event.agent))")
                     if !event.sessionID.isEmpty { Text("Session: \(event.sessionID)") }
                     if !event.parentCallID.isEmpty { Text(L10n.text("父调用: \(event.parentCallID)")) }
-                    Text(activityStatusLabel(event.status))
-                    if let duration = event.durationMs { Text("\(duration)ms") }
+                    HStack(spacing: 3) {
+                        Circle().fill(activityStatusColor(event.status)).frame(width: 5, height: 5)
+                        Text(activityStatusLabel(event.status))
+                    }
+                    if let duration = event.durationMs { Text(activityDurationText(duration)) }
                 }
-                .font(.caption2).foregroundStyle(.tertiary)
+                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            EvidencePill(exact: event.confidence == "exact" ? 1 : 0,
-                         derived: event.confidence == "derived" ? 1 : 0)
+            if event.confidence == "derived" {
+                EvidencePill(exact: 0, derived: 1)
+            }
         }
         .padding(.vertical, 8)
     }

@@ -138,6 +138,31 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(try store.generateWeeklyReport(now:now,timeZone:TimeZone(secondsFromGMT:0)!).totals.tokens,0)
         XCTAssertEqual(try store.generateWeeklyReport(now:now,timeZone:TimeZone(secondsFromGMT:0)!,regenerate:true).totals.tokens,100)
     }
+    func testWeeklyReportsDeduplicateAcrossTimezonesSortByWeekAndDelete() throws {
+        let store = try UsageStore(path: ":memory:")
+        let iso = ISO8601DateFormatter()
+        let nov17 = iso.date(from: "2026-11-17T10:00:00Z")! // 上一完整周 2026-11-09 ~ 11-15
+        let nov10 = iso.date(from: "2026-11-10T10:00:00Z")! // 上一完整周 2026-11-02 ~ 11-08
+
+        let shanghai = try store.generateWeeklyReport(now: nov17, timeZone: TimeZone(identifier: "Asia/Shanghai")!)
+        let taipei = try store.generateWeeklyReport(now: nov17, timeZone: TimeZone(identifier: "Asia/Taipei")!)
+        let la = try store.generateWeeklyReport(now: nov17, timeZone: TimeZone(identifier: "America/Los_Angeles")!)
+        XCTAssertEqual(shanghai.id, "week:2026-11-09")
+        XCTAssertEqual(taipei.id, shanghai.id)
+        XCTAssertEqual(la.id, shanghai.id)
+        XCTAssertEqual(try store.weeklyReports().count, 1)
+
+        // 生成更早一周后重新生成该旧周，列表顺序仍应按自然周倒序（新周在前）
+        let older = try store.generateWeeklyReport(now: nov10, timeZone: TimeZone(identifier: "Asia/Shanghai")!)
+        XCTAssertEqual(older.id, "week:2026-11-02")
+        _ = try store.generateWeeklyReport(now: older.regenerationReferenceDate,
+                                           timeZone: TimeZone(identifier: "Asia/Ho_Chi_Minh")!,
+                                           regenerate: true)
+        XCTAssertEqual(try store.weeklyReports().map(\.id), ["week:2026-11-09", "week:2026-11-02"])
+
+        XCTAssertEqual(try store.deleteWeeklyReport(id: "week:2026-11-02"), 1)
+        XCTAssertEqual(try store.weeklyReports().map(\.id), ["week:2026-11-09"])
+    }
     func testExportPaginationPrivacyAndCancellation() throws {
         let temp=try TempDir(),store=try UsageStore(path:":memory:")
         try store.conn.beginImmediate()

@@ -22,7 +22,7 @@ public struct PortControl: Sendable {
         self.ownPID = ownPID
     }
 
-    static let systemPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/"]
+    static let systemPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"]
 
     /// 系统自带的常驻进程（隔空播放接收器等）：只显示，不提供关闭。
     public static func isSystem(_ port: ListeningPort) -> Bool {
@@ -30,8 +30,12 @@ public struct PortControl: Sendable {
         return systemPrefixes.contains { executable.hasPrefix($0) }
     }
 
-    /// 各 Agent 的命令行名字。它们常驻在项目目录里并监听本地端口，但不是项目的开发服务器。
+    /// 各 Agent 的命令行与常驻服务名字。它们常驻在项目目录里并监听本地端口，但不是项目的开发服务器。
     static let agentNames: Set<String> = Set(Resume.resumePrefix.values.compactMap(\.first))
+        .union(["antigravity", "antigravity helper", "language_server",
+                "language_server_macos_arm", "language_server_macos",
+                "codex-app-server", "codex helper", "claude-code", "claude helper",
+                "dsh", "deepseek harness"])
 
     /// 占用端口的是不是某个 Agent 自己（进程名或可执行路径里有它的名字）。
     /// 这类端口仍归到项目下显示，但「停止项目」不会结束它们。
@@ -39,10 +43,13 @@ public struct PortControl: Sendable {
         func matches(_ component: Substring) -> Bool {
             var name = component.lowercased()
             if name.hasSuffix(".app") { name.removeLast(4) }
-            return agentNames.contains(name)
+            if agentNames.contains(name) { return true }
+            return name.hasPrefix("language_server_") || name.hasPrefix("antigravity ")
         }
         if matches(Substring(port.process)) { return true }
-        return (port.executable ?? "").split(separator: "/").contains(where: matches)
+        let exec = port.executable ?? ""
+        if exec.contains("/.gemini/antigravity") { return true }
+        return exec.split(separator: "/").contains(where: matches)
     }
 
     public func canTerminate(_ port: ListeningPort) -> Bool {

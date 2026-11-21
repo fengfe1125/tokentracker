@@ -175,6 +175,52 @@ final class AntigravityScannerTests: XCTestCase {
         XCTAssertEqual(activityCapability(agent: "antigravity", category: "agents"), .exact)
     }
 
+    func testPairsGenericResultStepsForStatusAndDurationAcrossIncrementalScans() throws {
+        let tmp = try TempDir()
+        let path = transcriptPath(tmp, "brain", "conv-status")
+        writeJSONL(path, [
+            ["step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+             "created_at": "2026-08-25T01:00:00Z", "model": "gemini-4-neon-xhigh",
+             "input_tokens": 100, "output_tokens": 20,
+             "tool_calls": [
+                ["name": "run_command", "args": ["CommandLine": "ls"]],
+                ["name": "read_file", "args": ["Path": "/tmp/missing"]],
+                ["name": "grep_search", "args": ["Query": "foo"]],
+             ]],
+            ["step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+             "created_at": "2026-08-25T01:00:01Z"],
+            ["step_index": 3, "source": "MODEL", "type": "GENERIC", "status": "ERROR",
+             "created_at": "2026-08-25T01:00:03Z"],
+            ["step_index": 4, "source": "MODEL", "type": "GENERIC", "status": "RUNNING",
+             "created_at": "2026-08-25T01:00:04Z"],
+        ])
+        let store = try tmp.store()
+        let scanner = AntigravityScanner(roots: [tmp.path("brain")],
+                                         workspaceMapPath: tmp.path("workspaces.json"))
+        _ = try scanner.scan(store, .default, full: false)
+        var rows = try store.activityTimeline(agent: "antigravity", confidence: "exact", limit: 10)
+        XCTAssertEqual(rows.first { $0.rawName == "run_command" }?.status, "success")
+        XCTAssertEqual(rows.first { $0.rawName == "run_command" }?.durationMs, 1000)
+        XCTAssertEqual(rows.first { $0.rawName == "read_file" }?.status, "error")
+        XCTAssertEqual(rows.first { $0.rawName == "read_file" }?.durationMs, 3000)
+        XCTAssertEqual(rows.first { $0.rawName == "grep_search" }?.status, "unknown")
+
+        // 增量追加第三个工具完成事件
+        let doneLine: [String: Any] = [
+            "step_index": 5, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+            "created_at": "2026-08-25T01:00:06Z",
+        ]
+        let handle = try XCTUnwrap(FileHandle(forWritingAtPath: path))
+        defer { try? handle.close() }
+        handle.seekToEndOfFile()
+        handle.write(try JSONSerialization.data(withJSONObject: doneLine) + Data("\n".utf8))
+
+        _ = try scanner.scan(store, .default, full: false)
+        rows = try store.activityTimeline(agent: "antigravity", confidence: "exact", limit: 10)
+        XCTAssertEqual(rows.first { $0.rawName == "grep_search" }?.status, "success")
+        XCTAssertEqual(rows.first { $0.rawName == "grep_search" }?.durationMs, 6000)
+    }
+
     func testWorkspaceHookMappingAndBackfillForPreviouslyScannedSessions() throws {
         let tmp = try TempDir()
         let repo = tmp.path("MyWorkspace")

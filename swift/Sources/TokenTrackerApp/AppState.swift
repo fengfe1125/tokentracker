@@ -21,8 +21,8 @@ enum NavSelection: Hashable {
 enum DetailRoute: Equatable {
     /// 当前选中的会话（selectedSessionID）
     case session
-    /// Agent 活动的完整分页明细
-    case activity
+    /// Agent 活动的完整分页明细（可带预选类型与搜索词）
+    case activity(kind: ActivityKind? = nil, query: String? = nil)
 }
 
 /// 「用量」页的三个标签
@@ -167,7 +167,9 @@ final class AppState: ObservableObject {
         guard selectedSessionID != nil else { return }
         detail = .session
     }
-    func showActivityDetail() { detail = .activity }
+    func showActivityDetail(kind: ActivityKind? = nil, query: String? = nil) {
+        detail = .activity(kind: kind, query: query)
+    }
     func showPublishHistory() { showingPublishHistory = true }
     func closeDetail() { detail = nil }
 
@@ -893,6 +895,11 @@ final class AppState: ObservableObject {
                     confidence: filter.confidence)
                 let exactSkills = try store.activitySummary(
                     rangeKey: filter.range, agent: filter.agent, group: "skill", confidence: "exact")
+                let derivedSkills = try store.activitySummary(
+                    rangeKey: filter.range, agent: filter.agent, group: "skill", confidence: "derived")
+                let agentCalls = try store.activitySummary(
+                    rangeKey: filter.range, agent: filter.agent, group: "agent",
+                    confidence: filter.confidence, kind: .agent)
                 let timeline = try store.activityTimeline(
                     rangeKey: filter.range, agent: filter.agent,
                     confidence: filter.confidence, limit: 80)
@@ -911,6 +918,7 @@ final class AppState: ObservableObject {
                 let snapshot = ActivityDashboardSnapshot(
                     exactRows: exact, derivedRows: derived, toolRows: tools,
                     skillRows: skills, exactSkillRows: exactSkills,
+                    derivedSkillRows: derivedSkills, agentRows: agentCalls,
                     timelineRows: timeline, matrixRows: matrix,
                     skillCoverage: skillCoverage, lastScan: scan)
                 DispatchQueue.main.async {

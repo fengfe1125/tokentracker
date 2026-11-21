@@ -90,6 +90,52 @@ final class PortScannerTests: XCTestCase {
         XCTAssertTrue(scanner.scan().isEmpty)
         XCTAssertEqual(calls.value, 1)
     }
+
+    func testScanEnrichesAddressesMemoryCommandLineServiceAndParentCwd() {
+        let listeners = """
+        p5100
+        cnode
+        u501
+        Ltester
+        f20
+        n127.0.0.1:5173
+        f21
+        n[::1]:5173
+        p5200
+        cpython3
+        u501
+        Ltester
+        f22
+        n*:8000
+        """
+        let childCwds = "p5100\nfcwd\nn/Users/tester/code/web\np5200\nfcwd\nn/\n"
+        let parentCwds = "p5000\nfcwd\nn/Users/tester/code/api\n"
+        let details = """
+         5100   100   00:12:34  143360 /opt/homebrew/bin/node
+         5200  5000   01:00:00   65536 /usr/bin/python3
+        """
+        let args = """
+         5100 /opt/homebrew/bin/node /Users/tester/code/web/node_modules/.bin/vite --port 5173
+         5200 /usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+        """
+        let scanner = PortScanner { argv in
+            if argv.contains("-sTCP:LISTEN") { return listeners }
+            if argv.contains("cwd") { return argv.last == "5000" ? parentCwds : childCwds }
+            if argv.contains("-ww") { return args }
+            return details
+        }
+        let ports = scanner.scan()
+        XCTAssertEqual(ports.map(\.port), [5173, 8000])
+        XCTAssertTrue(ports[0].isLocalOnly)
+        XCTAssertEqual(ports[0].serviceLabel, "Vite")
+        XCTAssertEqual(ports[0].displayName, "Vite (node)")
+        XCTAssertEqual(ports[0].memoryBytes, 143360 * 1024)
+
+        XCTAssertFalse(ports[1].isLocalOnly)
+        XCTAssertEqual(ports[1].bindDisplay, "0.0.0.0")
+        XCTAssertEqual(ports[1].serviceLabel, "Uvicorn")
+        XCTAssertEqual(ports[1].parentCwd, "/Users/tester/code/api")
+    }
 }
 
 final class PortMatcherTests: XCTestCase {
@@ -136,6 +182,17 @@ final class PortMatcherTests: XCTestCase {
         let resolved = URL(fileURLWithPath: project).standardizedFileURL.resolvingSymlinksInPath().path
         XCTAssertEqual(listed.first { $0.path == resolved }?.name, "demo")
     }
+
+    func testMatchesViaParentCwdAndCommandLineFallback() {
+        let home = "/Users/tester"
+        let byParent = ListeningPort(port: 8000, pids: [1], process: "python3", uid: 501, user: "t",
+                                     cwd: "/", parentCwd: "/Users/tester/code/web")
+        XCTAssertEqual(PortMatcher.match(port: byParent, directories: directories, home: home)?.name, "web")
+
+        let byCmd = ListeningPort(port: 5173, pids: [2], process: "node", uid: 501, user: "t",
+                                  cwd: nil, commandLine: "node /Users/tester/code/web/node_modules/.bin/vite")
+        XCTAssertEqual(PortMatcher.match(port: byCmd, directories: directories, home: home)?.name, "web")
+    }
 }
 
 final class StartCommandDetectorTests: XCTestCase {
@@ -172,6 +229,14 @@ final class StartCommandDetectorTests: XCTestCase {
         XCTAssertNil(StartCommandDetector.detect(directory: dir))
         (tmp, dir) = try project(["package.json": "not json"])
         XCTAssertNil(StartCommandDetector.detect(directory: dir))
+        (tmp, dir) = try project(["Justfile": "dev:\n\techo hi\n"])
+        XCTAssertEqual(StartCommandDetector.detect(directory: dir)?.command, "just dev")
+        (tmp, dir) = try project(["deno.json": #"{"tasks":{"dev":"deno run main.ts"}}"#])
+        XCTAssertEqual(StartCommandDetector.detect(directory: dir)?.command, "deno task dev")
+        (tmp, dir) = try project(["pyproject.toml": "dependencies = [\"fastapi\"]\n", "uv.lock": ""])
+        XCTAssertEqual(StartCommandDetector.detect(directory: dir)?.command, "uv run fastapi dev")
+        (tmp, dir) = try project(["compose.yaml": "services: {}"])
+        XCTAssertEqual(StartCommandDetector.detect(directory: dir)?.command, "docker compose up")
         _ = tmp
     }
 }
@@ -207,6 +272,15 @@ final class PortControlTests: XCTestCase {
         XCTAssertFalse(PortControl.isAgent(port([1004])))
         var lookalike = port([1005], executable: "/usr/local/bin/pipenv"); lookalike.process = "pipenv"
         XCTAssertFalse(PortControl.isAgent(lookalike))
+        var ag = port([1006], executable: "/Users/t/.gemini/antigravity/bin/language_server_macos_arm")
+        ag.process = "language_server_macos_arm"
+        XCTAssertTrue(PortControl.isAgent(ag))
+        var dsh = port([1007], executable: "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness")
+        dsh.process = "DeepSeek Harness"
+        XCTAssertTrue(PortControl.isAgent(dsh))
+        var agHelper = port([1008], executable: "/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper")
+        agHelper.process = "Antigravity Helper"
+        XCTAssertTrue(PortControl.isAgent(agHelper))
     }
 
     func testTerminateSignalsEachProcessOnceAndReportsFailures() {

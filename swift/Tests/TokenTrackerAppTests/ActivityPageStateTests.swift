@@ -48,6 +48,18 @@ final class ActivityPageStateTests: XCTestCase {
         XCTAssertFalse(state.isLoading)
     }
 
+    func testDefaultConfidenceIsExactAndSettingsTabResolvesLegacyKeys() {
+        let state = ActivityPageState()
+        XCTAssertEqual(state.confidence, "exact")
+        XCTAssertEqual(SettingsTab.resolve("menubar"), .appearance)
+        XCTAssertEqual(SettingsTab.resolve("notch"), .appearance)
+        XCTAssertEqual(SettingsTab.resolve("navigation"), .appearance)
+        XCTAssertEqual(SettingsTab.resolve("reminders"), .integrations)
+        XCTAssertEqual(SettingsTab.resolve("publish"), .data)
+        XCTAssertEqual(SettingsTab.resolve("about"), .about)
+        XCTAssertEqual(SettingsTab.resolve("unknown"), .general)
+    }
+
     private func summary(_ name: String) -> UsageStore.ActivitySummaryRow {
         UsageStore.ActivitySummaryRow(name: name, calls: 1, sessions: 1,
             success: 1, errors: 0, denied: 0, unknown: 0,

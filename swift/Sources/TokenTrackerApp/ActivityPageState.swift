@@ -26,6 +26,8 @@ struct ActivityDashboardSnapshot: Equatable, Sendable {
     var toolRows: [UsageStore.ActivitySummaryRow] = []
     var skillRows: [UsageStore.ActivitySummaryRow] = []
     var exactSkillRows: [UsageStore.ActivitySummaryRow] = []
+    var derivedSkillRows: [UsageStore.ActivitySummaryRow] = []
+    var agentRows: [UsageStore.ActivitySummaryRow] = []
     var timelineRows: [ActivityEvent] = []
     var matrixRows: [String: [UsageStore.ActivitySummaryRow]] = [:]
     var skillCoverage: [String: ActivityAgentCoverage] = [:]
@@ -39,7 +41,8 @@ struct ActivityDashboardSnapshot: Equatable, Sendable {
 final class ActivityPageState: ObservableObject {
     @Published var range = "week"
     @Published var agent: String?
-    @Published var confidence = "all"
+    /// 默认仅展示已确认执行记录，避免未确认请求或路径推断喧宾夺主。
+    @Published var confidence = "exact"
     @Published private(set) var snapshot = ActivityDashboardSnapshot.empty
     private(set) var isLoading = false
 

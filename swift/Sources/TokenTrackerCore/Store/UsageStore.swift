@@ -16,7 +16,7 @@ import Darwin
 #endif
 
 public final class UsageStore {
-    public static let schemaVersion: Int32 = 7
+    public static let schemaVersion: Int32 = 8
     public static let migrationBackupsKept = 2
     /// Completion lookups otherwise scan an agent's whole history (or the whole
     /// table) for every tool result during a backfill.
@@ -198,6 +198,9 @@ public final class UsageStore {
             if legacy && version < 7 {
                 try pruneSnapshotRoundingNoise()
             }
+            if legacy && version < 8 {
+                try deduplicateWeeklyReports()
+            }
             if legacy && version < 1 {
                 for row in try conn.query(
                     "SELECT * FROM usage_events WHERE tool IN ('codex','opencode','hermes')") {
@@ -244,12 +247,79 @@ public final class UsageStore {
             let summary: [String: Any] = ["tool": row.string("tool"), "rows": row.int("n"),
                                           "cost": row.double("cost")]
             _ = try conn.execute("INSERT INTO migration_history VALUES (?,?,?,?,?)", [
-                Int64(UsageStore.schemaVersion), nowMs(), nil,
+                Int64(7), nowMs(), nil,
                 String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8) ?? "{}",
                 "Removed zero-token snapshot events caused by native cost rounding noise.",
             ])
         }
         _ = try conn.execute("DELETE FROM usage_events WHERE \(noise)")
+    }
+
+    /// v8：v7 及以前，周报主键包含时区名（`<TimeZone>:<startMs>`），系统时区切换会导致
+    /// 同一个自然周（周一至周日）写入多份重复快照。升级时按规范自然周键 `week:yyyy-MM-dd`
+    /// 去重并统一主键（保留最新生成的一份），汇总记录写入 `migration_history`。
+    private func deduplicateWeeklyReports() throws {
+        guard try conn.queryOne(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='weekly_reports'") != nil
+        else { return }
+        let rows = try conn.query(
+            "SELECT id, generated_at, payload FROM weekly_reports ORDER BY generated_at DESC, id DESC")
+        guard !rows.isEmpty else { return }
+
+        struct Entry {
+            var id: String
+            var generatedAt: Int64
+            var payload: String
+            var tokens: Int64
+        }
+        var kept: [String: Entry] = [:]
+        var unparseable: [(id: String, generatedAt: Int64, payload: String)] = []
+        var changed = false
+
+        for row in rows {
+            let oldID = row.string("id")
+            let generatedAt = row.int("generated_at")
+            let payload = row.string("payload")
+            guard var report = try? JSONDecoder().decode(WeeklyReport.self, from: Data(payload.utf8)) else {
+                unparseable.append((oldID, generatedAt, payload))
+                continue
+            }
+            let canonical = report.canonicalWeekID
+            if oldID != canonical || report.id != canonical { changed = true }
+            report.id = canonical
+            let encoded = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+            let candidate = Entry(id: canonical, generatedAt: generatedAt, payload: encoded,
+                                  tokens: report.totals.tokens)
+            if let existing = kept[canonical] {
+                changed = true
+                if candidate.generatedAt > existing.generatedAt
+                    || (candidate.generatedAt == existing.generatedAt && candidate.tokens > existing.tokens) {
+                    kept[canonical] = candidate
+                }
+            } else {
+                kept[canonical] = candidate
+            }
+        }
+        guard changed else { return }
+
+        let beforeCount = rows.count
+        let afterCount = kept.count + unparseable.count
+        let removed = max(0, beforeCount - afterCount)
+        let summary: [String: Any] = ["before": beforeCount, "after": afterCount, "removed": removed]
+        _ = try conn.execute("INSERT INTO migration_history VALUES (?,?,?,?,?)", [
+            Int64(8), nowMs(), nil,
+            String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8) ?? "{}",
+            "Consolidated duplicate weekly reports across timezones into canonical calendar week IDs.",
+        ])
+        _ = try conn.execute("DELETE FROM weekly_reports")
+        for entry in kept.values {
+            _ = try conn.execute("INSERT INTO weekly_reports VALUES (?,?,?)",
+                                 [entry.id, entry.generatedAt, entry.payload])
+        }
+        for raw in unparseable {
+            _ = try conn.execute("INSERT OR IGNORE INTO weekly_reports VALUES (?,?,?)",
+                                 [raw.id, raw.generatedAt, raw.payload])
+        }
     }
 
     /// Keep only the newest automatic backups once an upgrade has committed.
@@ -361,7 +431,7 @@ public final class UsageStore {
             throw SQLiteError(message: "Invalid activity event")
         }
         let before = try conn.queryOne(
-            "SELECT status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
+            "SELECT status,ended_at,duration_ms,event_kind,event_layer,confidence,source_kind FROM agent_activity_events WHERE agent=? AND src_key=?",
             [event.agent, event.srcKey])
         _ = try conn.execute("""
             INSERT INTO agent_activity_events (
@@ -373,10 +443,12 @@ public final class UsageStore {
               session_id=CASE WHEN excluded.session_id!='' THEN excluded.session_id ELSE session_id END,
               turn_id=CASE WHEN excluded.turn_id!='' THEN excluded.turn_id ELSE turn_id END,
               event_kind=excluded.event_kind,
-              event_layer=excluded.event_layer,
+              event_layer=CASE WHEN excluded.event_layer!='request_fallback' THEN excluded.event_layer ELSE event_layer END,
               ended_at=COALESCE(excluded.ended_at,ended_at),
               duration_ms=COALESCE(excluded.duration_ms,duration_ms),
               status=CASE WHEN excluded.status!='unknown' THEN excluded.status ELSE status END,
+              source_kind=CASE WHEN excluded.confidence='exact' AND excluded.source_kind!='' THEN excluded.source_kind ELSE source_kind END,
+              confidence=CASE WHEN excluded.confidence='exact' THEN 'exact' ELSE confidence END,
               skill_name=CASE WHEN excluded.skill_name!='' THEN excluded.skill_name ELSE skill_name END,
               skill_confidence=CASE WHEN excluded.skill_confidence!='' THEN excluded.skill_confidence ELSE skill_confidence END
             """, [event.agent, event.sessionID, event.turnID, event.rawName, event.canonicalName,
@@ -385,13 +457,15 @@ public final class UsageStore {
                    event.endedAt as Any, event.durationMs as Any, event.status, event.sourceKind,
                    event.confidence, event.skillName, event.skillConfidence, event.srcKey])
         let after = try conn.queryOne(
-            "SELECT status,ended_at,duration_ms,event_kind,event_layer FROM agent_activity_events WHERE agent=? AND src_key=?",
+            "SELECT status,ended_at,duration_ms,event_kind,event_layer,confidence,source_kind FROM agent_activity_events WHERE agent=? AND src_key=?",
             [event.agent, event.srcKey])
         let changed = before != nil && (before?.string("status") != after?.string("status")
             || before?.intOrNil("ended_at") != after?.intOrNil("ended_at")
             || before?.intOrNil("duration_ms") != after?.intOrNil("duration_ms")
             || before?.string("event_kind") != after?.string("event_kind")
-            || before?.string("event_layer") != after?.string("event_layer"))
+            || before?.string("event_layer") != after?.string("event_layer")
+            || before?.string("confidence") != after?.string("confidence")
+            || before?.string("source_kind") != after?.string("source_kind"))
         return (before == nil ? 1 : 0, changed ? 1 : 0)
     }
 
@@ -409,6 +483,21 @@ public final class UsageStore {
               let row = try conn.queryOne(
                 "SELECT id,started_at,status,ended_at,duration_ms FROM agent_activity_events "
                     + "WHERE agent=? AND call_id=? ORDER BY id DESC LIMIT 1", [agent, callID]) else { return 0 }
+        return try applyActivityCompletion(row: row, status: status, endedAt: endedAt, inputDuration: inputDuration)
+    }
+
+    @discardableResult
+    public func completeActivityBySrcKey(agent: String, srcKey: String, status: String = "success",
+                                         endedAt: Int64? = nil, durationMs inputDuration: Int64? = nil) throws -> Int {
+        guard !srcKey.isEmpty, ["success", "error", "denied", "unknown"].contains(status),
+              let row = try conn.queryOne(
+                "SELECT id,started_at,status,ended_at,duration_ms FROM agent_activity_events "
+                    + "WHERE agent=? AND src_key=? LIMIT 1", [agent, srcKey]) else { return 0 }
+        return try applyActivityCompletion(row: row, status: status, endedAt: endedAt, inputDuration: inputDuration)
+    }
+
+    private func applyActivityCompletion(row: Row, status: String, endedAt: Int64?,
+                                         inputDuration: Int64?) throws -> Int {
         var duration = inputDuration
         if duration == nil, let endedAt, let started = row.intOrNil("started_at") {
             duration = max(0, endedAt - started)

@@ -478,10 +478,10 @@
       "ended_at": 1787619600000,
       "duration_ms": 0,
       "status": "success",
-      "source_kind": "codex_request_fallback",
-      "confidence": "derived",
+      "source_kind": "codex_tool_call",
+      "confidence": "exact",
       "event_kind": "tool",
-      "event_layer": "request_fallback",
+      "event_layer": "execution",
       "skill_name": "",
       "skill_confidence": "",
       "src_key": "/private/tmp/tt_diff_corpus/codex/sessions/2026/08/25/rollout-1.jsonl|request|codex-tool-1"
@@ -647,7 +647,7 @@
       "updated": 0,
       "files": 3,
       "activity_added": 1,
-      "activity_updated": 1
+      "activity_updated": 0
     },
     "opencode": {
       "added": 2,

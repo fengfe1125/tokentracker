@@ -86,7 +86,7 @@ struct RootView: View {
                 PortsView(model: state.ports, state: state)
             case .activity:
                 ActivityView(state: state.activityPage, refresh: state.refreshActivity,
-                             openDetail: state.showActivityDetail)
+                             openDetail: { kind, query in state.showActivityDetail(kind: kind, query: query) })
                     .equatable()
             case .reports:
                 ReportsView(model: state.insights)
@@ -225,7 +225,8 @@ struct RootView: View {
         Group {
             switch route {
             case .session: SessionDetailView(state: state)
-            case .activity: ActivityDetailView(state: state)
+            case .activity(let kind, let query):
+                ActivityDetailView(state: state, initialKind: kind, initialQuery: query)
             }
         }
         .background {

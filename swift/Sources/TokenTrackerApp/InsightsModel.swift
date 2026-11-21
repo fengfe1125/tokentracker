@@ -186,6 +186,46 @@ final class InsightsModel: NSObject, ObservableObject {
             }
         }
     }
+    func generateWeeklyReport(now: Date = Date(), timeZone: TimeZone = .current,
+                              regenerate: Bool = true, onDone: (@MainActor (WeeklyReport) -> Void)? = nil) {
+        let path = path
+        queue.async { [weak self] in
+            do {
+                let store = try UsageStore(path: path)
+                let report = try store.generateWeeklyReport(now: now, timeZone: timeZone, regenerate: regenerate)
+                let reports = try store.weeklyReports()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reports = reports
+                    self.errorNotice = nil
+                    onDone?(report)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.errorNotice = L10n.message("周报生成失败，请重试")
+                }
+            }
+        }
+    }
+    func deleteWeeklyReport(id: String) {
+        let path = path
+        queue.async { [weak self] in
+            do {
+                let store = try UsageStore(path: path)
+                _ = try store.deleteWeeklyReport(id: id)
+                let reports = try store.weeklyReports()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reports = reports
+                    self.errorNotice = nil
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.errorNotice = L10n.message("删除失败，请重试")
+                }
+            }
+        }
+    }
     func createProject(name:String) {
         let id=UUID().uuidString,path=path
         queue.async { [weak self] in

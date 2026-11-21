@@ -130,6 +130,52 @@ final class CodexScannerPortTests: XCTestCase {
         XCTAssertEqual(agents.first?.parentCallID, "session-a")
     }
 
+    func testPairedResponseToolCallIsConfirmedAndUnmatchedRemainsFallbackUntilOutputArrives() throws {
+        let path = rollout([
+            ["type": "response_item", "timestamp": "2026-08-25T01:00:00Z",
+             "payload": ["type": "function_call", "id": "fc-paired", "call_id": "call-paired",
+                          "name": "wait", "arguments": "{}"]],
+            ["type": "response_item", "timestamp": "2026-08-25T01:00:02Z",
+             "payload": ["type": "function_call_output", "call_id": "call-paired",
+                          "output": "{\"exit_code\": 0}"]],
+            ["type": "response_item", "timestamp": "2026-08-25T01:00:03Z",
+             "payload": ["type": "function_call", "id": "fc-orphan", "call_id": "call-orphan",
+                          "name": "exec_command", "arguments": "{}"]],
+        ], sid: "session-pair")
+
+        _ = try scan()
+        var events = try store.activityTimeline(agent: "codex", confidence: "all", limit: 20)
+        let paired = try XCTUnwrap(events.first { $0.callID == "call-paired" })
+        XCTAssertEqual(paired.confidence, "exact")
+        XCTAssertEqual(paired.eventLayer, .execution)
+        XCTAssertEqual(paired.status, "success")
+        XCTAssertEqual(paired.durationMs, 2000)
+
+        let orphan = try XCTUnwrap(events.first { $0.callID == "call-orphan" })
+        XCTAssertEqual(orphan.confidence, "derived")
+        XCTAssertEqual(orphan.eventLayer, .requestFallback)
+        XCTAssertEqual(orphan.status, "unknown")
+
+        // 后续输出到达并重扫后，未确认请求升级为已确认执行
+        let outputLine: [String: Any] = [
+            "type": "response_item", "timestamp": "2026-08-25T01:00:05Z",
+            "payload": ["type": "function_call_output", "call_id": "call-orphan",
+                        "output": ["is_error": true]],
+        ]
+        let handle = try XCTUnwrap(FileHandle(forWritingAtPath: path))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: try JSONSerialization.data(withJSONObject: outputLine) + Data("\n".utf8))
+        try handle.close()
+
+        _ = try scan()
+        events = try store.activityTimeline(agent: "codex", confidence: "all", limit: 20)
+        let upgraded = try XCTUnwrap(events.first { $0.callID == "call-orphan" })
+        XCTAssertEqual(upgraded.confidence, "exact")
+        XCTAssertEqual(upgraded.eventLayer, .execution)
+        XCTAssertEqual(upgraded.status, "error")
+        XCTAssertEqual(upgraded.durationMs, 2000)
+    }
+
     func testRolloutCumulativeDeltaAndRepeatedNotifications() throws {
         rollout([tokenEvent(fixtureUsage()), tokenEvent(fixtureUsage()),
                  tokenEvent(fixtureUsage(150, 15, 30), turn: "turn-b",

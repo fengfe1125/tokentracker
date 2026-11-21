@@ -68,6 +68,15 @@ public struct PiScanner: ScannerAdapter {
                     guard type == "message",
                           let msg = obj["message"] as? [String: Any] else { continue }
                     let ts = parseTS(jsonOrAny(msg["timestamp"], obj["timestamp"]))
+                    if (msg["role"] as? String) == "toolResult" {
+                        let callID = jsonOrString(msg["toolCallId"], msg["callId"], msg["id"])
+                        var status = (msg["isError"] as? Bool) == true
+                            ? "error" : ActivityNormalizer.status(msg["status"])
+                        if status == "unknown" { status = "success" }
+                        outcome.activityUpdated += try store.completeActivity(
+                            agent: name, callID: callID, status: status,
+                            endedAt: ts == 0 ? nil : ts)
+                    }
                     for (index, value) in (msg["content"] as? [Any] ?? []).enumerated() {
                         guard let part = value as? [String: Any],
                               let partType = part["type"] as? String else { continue }

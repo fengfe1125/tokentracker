@@ -1,3 +1,7 @@
+# schema v8
+
+v8 只清理和规整 `weekly_reports` 数据，不改表结构，也不触碰 `usage_events` 与 `session_meta`。v7 及以前，周报主键由时区标识和毫秒起点拼接（`<TimeZone>:<startMs>`），系统时区切换（如跨时区差旅或自动时区变化）会导致同一自然周写入多份重复周报快照。升级时将已有周报按自然周周一日期统一为规范主键 `week:yyyy-MM-dd`，同一自然周只保留最新生成的一份，并在 `migration_history` 中记录去重前后的汇总条数。照常先做一致性备份；v7 二进制拒绝打开 v8 库。
+
 # schema v7
 
 v7 只清理数据，不改表结构。v6 及以前，OpenCode/Hermes 等累计快照的 native 成本经 JSON 往返后会差几个 ulp，每次扫描都多写一条 0 token、|成本|≤1e-9 的 `aggregate_snapshot` 事件，把会话最后时间刷成扫描时刻（会话记录里未使用的 OpenCode 会话一直排在最前）。升级时按工具在 `migration_history` 留一条汇总（行数与成本合计）后删除这些行；有 token 的差量、`native_adjustment` 对账和其它工具的事件不变，Token 与成本总量不受影响。照常先做一致性备份；v6 二进制拒绝打开 v7 库。

@@ -92,7 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appState.selection = env["TT_UI_TEST_PAGE"].flatMap(SidebarNavigationItem.init(rawValue:))?.selection
                     ?? .activity
             }
-            if let tab = env["TT_UI_TEST_SETTINGS_TAB"].flatMap(SettingsTab.init(rawValue:)) {
+            if let rawTab = env["TT_UI_TEST_SETTINGS_TAB"], !rawTab.isEmpty {
+                let tab = SettingsTab.resolve(rawTab)
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey)
             }
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
