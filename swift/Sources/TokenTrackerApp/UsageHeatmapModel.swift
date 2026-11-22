@@ -64,7 +64,7 @@ private final class HeatmapLoader: @unchecked Sendable {
         }
         try cancellation.check()
         var rows: [UsageStore.DailyRow] = []
-        if request.range != "all" {
+        if request.range == "day" || request.range == "week" {
             let (lower, upper) = UsageHeatmap.bounds(request.range, dataset: dataset!, now: now, calendar: calendar)
             var missingStart: Date?
             var date = lower
@@ -104,14 +104,18 @@ private final class HeatmapLoader: @unchecked Sendable {
                                  hours: Self.rows(rows, tool: request.tool), now: now)
         try cancellation.check()
         cachedCharts[request] = chart
-        // 默认加载「近 7 天」时今天的小时桶已在内存中，顺手预编译「今天」热力图（零额外 SQL），
-        // 首次从「近 7 天」切到「今天」即可同帧切换。
+        // 默认加载「近 7 天」时今天的小时桶和全量日桶已在内存中，顺手预编译「今天」与「本月」热力图（零额外 SQL），
+        // 首次从「近 7 天」切到「今天」或「本月」即可同帧切换。
         if request.range == "week" {
             let dayRequest = HeatmapRequest(range: "day", tool: request.tool)
             if cachedCharts[dayRequest] == nil,
                let todayHours = hourRows[calendar.startOfDay(for: now)] {
                 cachedCharts[dayRequest] = UsageHeatmap(dataset: dataset!, request: dayRequest,
                                                         hours: Self.rows(todayHours, tool: request.tool), now: now)
+            }
+            let monthRequest = HeatmapRequest(range: "month", tool: request.tool)
+            if cachedCharts[monthRequest] == nil {
+                cachedCharts[monthRequest] = UsageHeatmap(dataset: dataset!, request: monthRequest, now: now)
             }
         }
         return HeatmapLoadResult(chart: chart, version: current, zone: zoneID, hour: hour, warmed: cachedCharts)

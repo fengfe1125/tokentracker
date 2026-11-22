@@ -107,10 +107,13 @@ final class InsightsModel: NSObject, ObservableObject {
                 }
                 DispatchQueue.main.async {
                     guard let self,version==self.generation else { return }
-                    if let registry { self.registry=registry }
-                    if let projects { self.projects=more ? self.projects+projects : projects }
+                    if let registry, !Self.sameRegistry(self.registry, registry) { self.registry=registry }
+                    if let projects {
+                        let nextProjects = more ? self.projects + projects : projects
+                        if !Self.sameProjects(self.projects, nextProjects) { self.projects = nextProjects }
+                    }
                     if self.totals != totals { self.totals=totals }
-                    if let health { self.health=health }
+                    if let health, !Self.sameHealth(self.health, health) { self.health=health }
                     if self.busy { self.busy=false }
                     if self.errorNotice != nil { self.errorNotice=nil }
                     self.loadAnalytics(query:query,version:version,cancellation:cancellation,
@@ -143,14 +146,14 @@ final class InsightsModel: NSObject, ObservableObject {
                     guard let self,version==self.generation else { return }
                     if self.costSources != costSources { self.costSources=costSources }
                     if let reports { self.reports=reports }
-                    if let budgets { self.budgets=budgets }
+                    if let budgets, self.budgets != budgets { self.budgets=budgets }
                     if self.risks != risks { self.risks=risks }
                     if let explanation { self.explanation=explanation }
-                    if let breakdown { self.breakdown=breakdown }
-                    if let daily { self.daily=daily }
-                    if let agents { self.agents=agents }
+                    if let breakdown, self.breakdown != breakdown { self.breakdown=breakdown }
+                    if let daily, self.daily != daily { self.daily=daily }
+                    if let agents, self.agents != agents { self.agents=agents }
                     if let sessions { self.sessions=sessions }
-                    self.analyticsLoading=false
+                    if self.analyticsLoading { self.analyticsLoading=false }
                     self.deliver(risks)
                 }
             } catch is CancellationError { }
@@ -318,5 +321,26 @@ final class InsightsModel: NSObject, ObservableObject {
         let panel=NSSavePanel();panel.nameFieldStringValue="TokenTracker-weekly.md"
         guard panel.runModal() == .OK,let url=panel.url else { return }
         do { try report.markdown.write(to:url,atomically:true,encoding:.utf8) } catch { self.errorNotice=L10n.message("周报保存失败") }
+    }
+
+    private static func sameRegistry(_ a: [ProjectIdentity], _ b: [ProjectIdentity]) -> Bool {
+        guard a.count == b.count else { return false }
+        return zip(a, b).allSatisfy { $0.id == $1.id && $0.name == $1.name }
+    }
+
+    private static func sameProjects(_ a: [ProjectSummary], _ b: [ProjectSummary]) -> Bool {
+        guard a.count == b.count else { return false }
+        return zip(a, b).allSatisfy {
+            $0.id == $1.id && $0.name == $1.name && $0.totals == $1.totals && $0.lastActivity == $1.lastActivity
+        }
+    }
+
+    private static func sameHealth(_ a: [ScanHealth], _ b: [ScanHealth]) -> Bool {
+        guard a.count == b.count else { return false }
+        return zip(a, b).allSatisfy {
+            $0.id == $1.id && $0.state == $1.state && $0.attemptedAt == $1.attemptedAt
+                && $0.succeededAt == $1.succeededAt && $0.files == $1.files
+                && $0.added == $1.added && $0.updated == $1.updated && $0.error == $1.error
+        }
     }
 }

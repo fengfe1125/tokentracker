@@ -27,6 +27,9 @@ final class NotchHUDController {
     private var menuTracking = false
     private var anchorScreen: NSScreen?
     private var lastVisible = false
+    private let windowProbeQueue = DispatchQueue(label: "tokentracker.notch-probe", qos: .utility)
+    private var cachedFullScreen = false
+    private var fullScreenProbeRunning = false
     var onOpenMain: (() -> Void)?
     var onOpenQuota: (() -> Void)?
     var taskAnchor: CGRect? { strip?.isVisible == true ? strip?.frame : nil }
@@ -112,6 +115,10 @@ final class NotchHUDController {
     }
 
     func reconcile() {
+        reconcile(scheduleFullScreenProbe: true)
+    }
+
+    private func reconcile(scheduleFullScreenProbe: Bool) {
         guard preferences.enabled else { hide(); return }
         let candidate = NSScreen.screens.first { screen in
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
@@ -122,7 +129,24 @@ final class NotchHUDController {
                                       topInset: $0.safeAreaInsets.top, builtIn: true,
                                       count: preferences.providers.count)
         }
-        let fullScreen = candidate.map(isFullScreen) ?? false
+        let appFullScreen = NSApp.currentSystemPresentationOptions.contains(.fullScreen)
+        if let candidate, !appFullScreen, scheduleFullScreenProbe, !fullScreenProbeRunning,
+           let primary = NSScreen.screens.first {
+            let target = NotchHUDLayout.windowServerFrame(candidate.frame, primaryTop: primary.frame.maxY)
+            fullScreenProbeRunning = true
+            windowProbeQueue.async { [weak self] in
+                let covered = Self.probeFullScreenWindow(target: target)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.fullScreenProbeRunning = false
+                    if self.cachedFullScreen != covered {
+                        self.cachedFullScreen = covered
+                        self.reconcile(scheduleFullScreenProbe: false)
+                    }
+                }
+            }
+        }
+        let fullScreen = appFullScreen || (candidate != nil && cachedFullScreen)
         let visible = NotchHUDVisibility.shouldShow(enabled: preferences.enabled, hasAnchor: frame != nil,
                                                    sessionActive: sessionActive && !menuTracking,
                                                    fullScreen: fullScreen)
@@ -138,16 +162,11 @@ final class NotchHUDController {
         lastVisible = true
     }
 
-    private func isFullScreen(_ screen: NSScreen) -> Bool {
-        // The camera safe area can make a native full-screen window's bounds
-        // identical to a maximized window. AppKit reports the active app's mode.
-        if NSApp.currentSystemPresentationOptions.contains(.fullScreen) { return true }
-        guard let primary = NSScreen.screens.first,
-              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+    private nonisolated static func probeFullScreenWindow(target: CGRect) -> Bool {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                        kCGNullWindowID) as? [[String: Any]] else {
             return true // No Window Server session: do not show on login/transition screens.
         }
-        let target = NotchHUDLayout.windowServerFrame(screen.frame, primaryTop: primary.frame.maxY)
         return windows.contains { window in
             guard (window[kCGWindowLayer as String] as? Int) == 0,
                   (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,

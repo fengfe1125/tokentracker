@@ -21,7 +21,7 @@ struct SessionDetailView: View {
 
     private var session: SessionRowModel? {
         guard let id = state.selectedSessionID else { return nil }
-        return state.sessionRows.map(SessionRowModel.init).first { $0.id == id }
+        return state.sessionRows.first { "\($0.tool)|\($0.sessionID)" == id }.map(SessionRowModel.init)
     }
 
     var body: some View {

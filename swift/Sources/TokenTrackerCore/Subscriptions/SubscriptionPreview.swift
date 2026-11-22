@@ -11,9 +11,10 @@ import Foundation
 extension SubscriptionCard {
     public static func previewCards(now: Date = Date()) -> [SubscriptionCard] {
         func account(_ provider: SubscriptionProvider, _ label: String, _ tool: String, _ location: String,
-                     active: Bool = false, plan: String = "") -> SubscriptionAccount {
+                     active: Bool = false, autoDiscovered: Bool = false, plan: String = "") -> SubscriptionAccount {
             var a = SubscriptionAccount(provider: provider, label: label, planHint: plan,
-                                        source: SubscriptionSource(tool: tool, location: location), isActive: active,
+                                        source: SubscriptionSource(tool: tool, location: location),
+                                        isActive: active, isAutoDiscovered: autoDiscovered,
                                         credential: provider == .deepseek
                                             ? SubscriptionCredential(kind: .apiKey, token: "sk-preview-fixture-0042")
                                             : SubscriptionCredential(kind: .oauth, token: "preview-" + label))
@@ -36,6 +37,12 @@ extension SubscriptionCard {
                              snapshot: SubscriptionSnapshot(status: .current, windows: [
                                 window("primary_window", 18_000, 7, hours: 4), window("secondary_window", 604_800, 63, hours: 30)],
                                 plan: "Plus", sampledAt: sampled)),
+            SubscriptionCard(account: account(.antigravity, "preview.ag@example.com", "Antigravity", "钥匙串",
+                                              active: true, autoDiscovered: true),
+                             snapshot: SubscriptionSnapshot(status: .current, windows: [
+                                window("gemini", nil, 62, name: "Gemini", hours: 3),
+                                window("claude-gpt", nil, 28, name: "Claude / GPT", hours: 2)],
+                                plan: "Google AI Pro", sampledAt: sampled, privateAPI: true)),
             SubscriptionCard(account: account(.kimi, "", "Kimi Code", "~/.kimi-code", active: true),
                              snapshot: SubscriptionSnapshot(status: .stale, windows: [
                                 window("limit-0", 18_000, 91, hours: 1), window("usage", 604_800, 55, hours: 50)],

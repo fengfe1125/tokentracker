@@ -258,6 +258,7 @@ final class OverviewRefreshTests: XCTestCase {
         state.range = "day"
         XCTAssertEqual(state.loadedRange, "day")
         XCTAssertEqual(state.statTotal.tokens, 10)
+        XCTAssertEqual(state.yesterdaySameTimeTokens, 20)
         XCTAssertEqual(state.heatmap.loadedRequest?.range, "day")
         XCTAssertEqual(state.heatmap.chart?.totalTokens, 10)
         XCTAssertFalse(state.dataLoading)
@@ -271,6 +272,7 @@ final class OverviewRefreshTests: XCTestCase {
         state.range = "week"
         XCTAssertEqual(state.loadedRange, "week")
         XCTAssertEqual(state.statTotal.tokens, 30)
+        XCTAssertNil(state.yesterdaySameTimeTokens)
         XCTAssertEqual(state.heatmap.loadedRequest?.range, "week")
         XCTAssertEqual(state.heatmap.chart?.totalTokens, 30)
         XCTAssertFalse(state.dataLoading)

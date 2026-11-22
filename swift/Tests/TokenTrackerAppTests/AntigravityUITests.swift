@@ -108,19 +108,34 @@ final class AntigravityUITests: XCTestCase {
         window.orderFrontRegardless()
         pump(0.4)
 
-        // 1. Settings -> 提醒与集成（Antigravity 工作区映射区块）
+        // 1. Settings -> 提醒与集成（Antigravity 任务提醒 Hooks 与工作区映射区块）
         UserDefaults.standard.set(SettingsTab.integrations.rawValue, forKey: SettingsTab.storageKey)
         state.selection = .settings
         try snap("ag_settings_integrations")
 
-        // 2. 用量 -> 会话记录（显示 Antigravity 会话、项目目录、未计价、记录文件按钮）
+        // 2. Settings -> 外观与状态栏（状态栏与刘海圆环包含 Antigravity）
+        state.subscriptionCards = SubscriptionCard.previewCards()
+        state.quotaEntries = QuotaRefresh.menuEntries(state.subscriptionCards)
+        let prevNotchEnabled = NotchHUDPreferences.shared.enabled
+        NotchHUDPreferences.shared.enabled = true
+        defer { NotchHUDPreferences.shared.enabled = prevNotchEnabled }
+        UserDefaults.standard.set(SettingsTab.appearance.rawValue, forKey: SettingsTab.storageKey)
+        state.selection = .settings
+        try snap("ag_settings_appearance")
+
+        // 3. 账号页（Antigravity 自动读取本机登录、多池配额圆环、菜单栏绑定）
+        state.selection = .accounts
+        state.accountFocus = state.subscriptionCards.first { $0.account.provider == .antigravity }?.id
+        try snap("ag_accounts")
+
+        // 4. 用量 -> 会话记录（显示 Antigravity 会话、项目目录、未计价、记录文件按钮）
         state.selection = .usage
         state.usageTab = .sessions
         state.agentFilter = "antigravity"
         state.sessionRows = rows
         try snap("ag_sessions")
 
-        // 3. 会话详情（显示 Antigravity 详情、模型分解未计价、工具摘要）
+        // 5. 会话详情（显示 Antigravity 详情、模型分解未计价、工具摘要）
         state.selectedSessionID = rowModel.id
         state.showSessionDetail()
         try snap("ag_session_detail")

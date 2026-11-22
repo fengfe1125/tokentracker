@@ -524,22 +524,36 @@ extension StatTile where Footer == EmptyView {
     }
 }
 
-/// 细进度条（0...1）。
-struct MeterBar: View {
+/// 细进度条（0...1）：直接用 Shape 绘制填充，避免在长列表每行嵌套 GeometryReader 与隐式动画。
+private struct MeterFillShape: Shape {
+    var fraction: Double
+
+    var animatableData: Double {
+        get { fraction }
+        set { fraction = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let clamped = max(0, min(1, fraction))
+        let width = rect.width * clamped
+        guard width > 0, rect.height > 0 else { return Path() }
+        return Capsule().path(in: CGRect(x: rect.minX, y: rect.minY, width: width, height: rect.height))
+    }
+}
+
+struct MeterBar: View, Equatable {
     let fraction: Double
     var tint: Color = .green
     var height: CGFloat = 5
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(tint.opacity(0.15))
-                Capsule().fill(tint)
-                    .frame(width: geo.size.width * max(0, min(1, fraction)))
+        Capsule()
+            .fill(tint.opacity(0.15))
+            .overlay {
+                MeterFillShape(fraction: fraction)
+                    .fill(tint)
             }
-        }
-        .frame(height: height)
-        .animation(.easeOut(duration: 0.2), value: fraction)
+            .frame(height: height)
     }
 }
 
@@ -585,12 +599,26 @@ extension EnvironmentValues {
 
 private struct HoverHighlight: ViewModifier {
     @State private var hovering = false
+    @State private var tokenBox = HoverTokenBox()
 
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
             .background(hovering ? Color.primary.opacity(0.05) : .clear)
-            .onHover { hovering = $0 }
+            .onHover { active in
+                if active {
+                    guard !ScrollActivity.shared.isScrolling else { return }
+                    if !hovering { hovering = true }
+                    tokenBox.setActive(true) { hovering = false }
+                } else {
+                    tokenBox.unregister()
+                    if hovering { hovering = false }
+                }
+            }
+            .onDisappear {
+                tokenBox.unregister()
+                if hovering { hovering = false }
+            }
     }
 }
 

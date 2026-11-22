@@ -36,10 +36,10 @@ final class NotchHUDPreferences: ObservableObject {
         self.defaults = defaults
         quotaDisplay = defaults.string(forKey: Self.displayKey).flatMap(NotchHUDQuotaDisplay.init(rawValue:)) ?? .remaining
         enabled = defaults.bool(forKey: Self.enabledKey)
-        let stored = defaults.stringArray(forKey: Self.providersKey) ?? ["codex", "claude"]
+        let stored = defaults.stringArray(forKey: Self.providersKey) ?? ["codex", "claude", "antigravity"]
         var seen = Set<String>()
         providers = stored.filter { !$0.isEmpty && seen.insert($0).inserted }
-        if providers.isEmpty { providers = ["codex", "claude"] }
+        if providers.isEmpty { providers = ["codex", "claude", "antigravity"] }
     }
 
     func setProvider(_ provider: String, visible: Bool) {
@@ -109,7 +109,7 @@ struct NotchHUDQuota {
     let provider: String
     let entry: MenuBarQuotaEntry?
     var display: NotchHUDQuotaDisplay = .used
-    var name: String { entry?.name ?? ["codex": "Codex", "claude": "Claude"][provider] ?? provider }
+    var name: String { entry?.name ?? ["codex": "Codex", "claude": "Claude", "antigravity": "Antigravity"][provider] ?? provider }
     var window: MenuBarQuotaWindow? {
         guard var entry else { return nil }
         entry.windows = windows.filter { $0.pct != nil }

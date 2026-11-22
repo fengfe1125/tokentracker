@@ -78,6 +78,7 @@ public enum SubscriptionAuth {
     static let authHosts: [SubscriptionProvider: Set<String>] = [
         .claude: ["platform.claude.com", "api.anthropic.com"],
         .codex: ["auth.openai.com"],
+        .antigravity: ["oauth2.googleapis.com"],
         .kimi: ["auth.kimi.com", "auth.kimi.ai"],
         .gemini: ["oauth2.googleapis.com"],
         .copilot: ["github.com", "api.github.com"],
@@ -95,6 +96,9 @@ public enum SubscriptionAuth {
     static let geminiClientID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     /// Gemini CLI 公开发布的已安装应用密钥（非机密，见 google-gemini/gemini-cli）。
     static let geminiClientSecret = "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"
+    static let antigravityClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    /// Antigravity 桌面端已安装应用 OAuth 客户端密钥（Google 桌面应用非机密字段，只用于内存换取访问令牌，不回写原钥匙串）。
+    static let antigravityClientSecret = "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"
     static let copilotClientID = "Iv1.b507a08c87ecfe98"
     static let grokClientID = "b1a00492-073a-47ea-816f-4c329264a828"
     static let refreshMargin: TimeInterval = 5 * 60
@@ -605,6 +609,39 @@ public enum SubscriptionAuth {
             return .refreshed
         } catch {
             return .failed
+        }
+    }
+
+    /// 仅在内存中用 Antigravity 本机读取到的 Google 刷新令牌换取短期访问令牌；
+    /// Google OAuth2 刷新不轮换原 refresh_token，也不回写 Antigravity 钥匙串或文件。
+    static func refreshAntigravityLocal(
+        refreshToken: String,
+        now: Date,
+        transport: @escaping SubscriptionTransport
+    ) -> (result: RefreshResult, token: String?, expiresAt: Date?) {
+        guard !refreshToken.isEmpty else { return (.notNeeded, nil, nil) }
+        do {
+            let response = try send(
+                .antigravity,
+                "https://oauth2.googleapis.com/token",
+                headers: formHeaders,
+                body: form([
+                    ("client_id", antigravityClientID),
+                    ("client_secret", antigravityClientSecret),
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refreshToken),
+                ]),
+                transport)
+            guard response.status == 200,
+                  let access = response.json["access_token"] as? String,
+                  !access.isEmpty else {
+                let result: RefreshResult = [400, 401, 403].contains(response.status) ? .rejected : .failed
+                return (result, nil, nil)
+            }
+            let expiresAt = expiry(response.json, now: now) ?? now.addingTimeInterval(3600)
+            return (.refreshed, access, expiresAt)
+        } catch {
+            return (.failed, nil, nil)
         }
     }
 }

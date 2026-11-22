@@ -14,13 +14,14 @@ import CryptoKit
 
 /// 固定顺序（allCases 的顺序即卡片顺序）。
 public enum SubscriptionProvider: String, CaseIterable, Codable, Sendable {
-    case claude, codex, kimi, go, deepseek, copilot, gemini, minimax, grok
+    case claude, codex, antigravity, kimi, go, deepseek, copilot, gemini, minimax, grok
     case workbuddy, workbuddyAI = "workbuddy-ai", zcode, zenFree = "opencode-zen-free"
 
     public var displayName: String {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .antigravity: return "Antigravity"
         case .kimi: return "Kimi"
         case .go: return "OpenCode Go"
         case .deepseek: return "DeepSeek"
@@ -38,7 +39,7 @@ public enum SubscriptionProvider: String, CaseIterable, Codable, Sendable {
     /// 菜单栏圆环使用的 id（与 settings.menubar_provider 兼容）。
     public var menuBarID: String? {
         switch self {
-        case .claude, .codex, .kimi, .go: return rawValue
+        case .claude, .codex, .antigravity, .kimi, .go: return rawValue
         default: return nil
         }
     }
@@ -69,11 +70,13 @@ struct SubscriptionCredential: Equatable, Sendable {
     var kind: Kind
     var token: String
     var expiresAt: Date?
+    /// 只读本机登录态的刷新令牌（仅内存，不持久化、不回写原工具）。
+    var refreshToken: String? = nil
     /// 供应商专用字段（Codex 账号 ID、WorkBuddy uid/domain、ZCode 状态、MiniMax 区域…）
     var extra: [String: String] = [:]
 
     var fingerprint: String {
-        subscriptionHash(([token] + extra.keys.sorted().map { $0 + "=" + extra[$0]! }).joined(separator: "\u{0}"))
+        subscriptionHash(([token, refreshToken ?? ""] + extra.keys.sorted().map { $0 + "=" + extra[$0]! }).joined(separator: "\u{0}"))
     }
 }
 
@@ -89,6 +92,8 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
     public internal(set) var sources: [SubscriptionSource]
     /// 来自该供应商自家工具的当前登录（菜单栏只绑定这一类账号）。
     public internal(set) var isActive: Bool
+    /// 自动读取本机工具登录态得到（只读，不写入 TokenTracker 账号库）。
+    public internal(set) var isAutoDiscovered: Bool
     /// 发现阶段即知的问题（如只发现 API Key、免费模型）。
     public internal(set) var discoveryProblem: SubscriptionProblem?
 
@@ -97,7 +102,7 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
     var providerAccountID: String?
 
     init(provider: SubscriptionProvider, label: String = "", planHint: String = "",
-         source: SubscriptionSource, isActive: Bool = false,
+         source: SubscriptionSource, isActive: Bool = false, isAutoDiscovered: Bool = false,
          credential: SubscriptionCredential?, providerAccountID: String? = nil,
          discoveryProblem: SubscriptionProblem? = nil) {
         self.provider = provider
@@ -105,6 +110,7 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
         self.planHint = planHint
         self.sources = [source]
         self.isActive = isActive
+        self.isAutoDiscovered = isAutoDiscovered
         self.credential = credential
         self.providerAccountID = providerAccountID.flatMap { $0.isEmpty ? nil : $0 }
         self.discoveryProblem = discoveryProblem
@@ -141,7 +147,8 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
 
     public static func == (a: Self, b: Self) -> Bool {
         a.id == b.id && a.label == b.label && a.planHint == b.planHint && a.sources == b.sources
-            && a.isActive == b.isActive && a.discoveryProblem == b.discoveryProblem
+            && a.isActive == b.isActive && a.isAutoDiscovered == b.isAutoDiscovered
+            && a.discoveryProblem == b.discoveryProblem
             && a.credential?.fingerprint == b.credential?.fingerprint
     }
 }

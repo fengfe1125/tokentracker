@@ -2,7 +2,7 @@
 //  ProjectsView.swift
 //  TokenTrackerApp
 //
-//  项目：范围筛选 → 汇总指标 → 项目列表（按占比排的行）；
+//  项目：范围筛选 → 汇总指标 → 项目占比与 Token 构成可视化 → 项目列表（按占比排的行）→ Agent / 模型分布；
 //  点进单个项目后显示变化说明、趋势、Agent / 模型分布和主要会话。
 //  搜索、预算、导出与项目管理在页面栏。
 //
@@ -37,18 +37,15 @@ struct TotalsView: View {
                 MeterBar(fraction: (cacheHitRate ?? 0) / 100).padding(.top, 5)
             }
         }
-        .frame(minWidth: 118, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // 放得下就一行四块；窄处（如报告页右栏）退成 2×2，数字不被压缩
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: Metrics.gridSpacing) { tiles }
-                    .fixedSize(horizontal: false, vertical: true)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: Metrics.gridSpacing),
-                                    GridItem(.flexible(), spacing: Metrics.gridSpacing)],
-                          spacing: Metrics.gridSpacing) { tiles }
+            AdaptiveTileGridLayout(maxColumns: 4, fallbackColumns: 2,
+                                   minColumnWidth: 118, spacing: Metrics.gridSpacing) {
+                tiles
             }
             Text(L10n.text("非缓存输入 \(compact(totals.input)) · 输出 \(compact(totals.output)) · 缓存读 \(compact(totals.cacheRead)) · 缓存写 \(compact(totals.cacheWrite))"))
                 .font(.caption.monospacedDigit())
@@ -97,9 +94,12 @@ struct ProjectsView: View {
                 if let selected {
                     detail(selected)
                 } else {
+                    if !model.projects.isEmpty {
+                        projectShareCharts
+                    }
                     projectList
                     if !model.projects.isEmpty {
-                        projectAnalytics
+                        projectBreakdowns
                     }
                 }
             }
@@ -263,8 +263,9 @@ struct ProjectsView: View {
 
     @ViewBuilder
     private var projectList: some View {
-        let top = model.projects.map(\.totals.tokens).max() ?? 0
-        if model.projects.isEmpty {
+        let projects = model.projects
+        let top = projects.map(\.totals.tokens).max() ?? 0
+        if projects.isEmpty {
             if !model.busy {
                 ContentUnavailableView(L10n.text("此范围暂无项目"), systemImage: "folder",
                                        description: Text(L10n.text("来源没有可靠工作目录的用量会保留在未归属中。")))
@@ -272,145 +273,91 @@ struct ProjectsView: View {
                     .card()
             }
         } else {
-            VStack(spacing: 0) {
-                ForEach(Array(model.projects.enumerated()), id: \.element.id) { index, project in
-                    if index > 0 { Divider().padding(.leading, Metrics.cardPadding) }
-                    Button { open(project) } label: { projectRow(project, top: top) }
+            let hasLoadMore = projects.count >= 100
+            let risksByProject = Dictionary(
+                grouping: model.risks.filter { $0.level > 0 && $0.projectID != nil },
+                by: { $0.projectID! }
+            )
+            LazyVStack(spacing: 0) {
+                ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
+                    let isFirst = index == 0
+                    let isLast = !hasLoadMore && index == projects.count - 1
+                    VStack(spacing: 0) {
+                        if index > 0 { Divider().padding(.leading, Metrics.cardPadding) }
+                        Button { open(project) } label: {
+                            ProjectListRow(
+                                project: project,
+                                top: top,
+                                activeRisks: risksByProject[project.id] ?? [],
+                                yi: yi,
+                                locale: language.locale
+                            )
+                        }
                         .buttonStyle(.plain)
+                    }
+                    .background(CardListRowBackground(isFirst: isFirst, isLast: isLast))
+                    .modifier(CardListRowClip(isFirst: isFirst, isLast: isLast))
                 }
-                if model.projects.count >= 100 {
-                    Divider()
-                    Button(L10n.text("加载更多")) { model.refresh(more: true) }
-                        .buttonStyle(.link)
-                        .padding(10)
+                if hasLoadMore {
+                    VStack(spacing: 0) {
+                        Divider()
+                        Button(L10n.text("加载更多")) { model.refresh(more: true) }
+                            .buttonStyle(.link)
+                            .padding(10)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .background(CardListRowBackground(isFirst: false, isLast: true))
                 }
             }
             .frame(maxWidth: .infinity)
-            .card(padding: 0)
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
         }
-    }
-
-    private func projectRow(_ project: ProjectSummary, top: Int64) -> some View {
-        let totals = project.totals
-        var subtitle = L10n.text("\(totals.sessions) 个会话")
-        if let last = project.lastActivity {
-            subtitle += " · " + Date(timeIntervalSince1970: Double(last) / 1000)
-                .formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(L10n.locale))
-        }
-        return HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(projectDisplayName(project))
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(risks(for: project.id, activeOnly: true)) { risk in
-                    Label(UIFormat.riskDetail(risk), systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                MeterBar(fraction: top > 0 ? Double(totals.tokens) / Double(top) : 0,
-                         tint: .accentColor, height: 3)
-                    .padding(.top, 2)
-                Text(L10n.text("输入 \(UIFormat.compact(totals.input, yi: yi)) · 输出 \(UIFormat.compact(totals.output, yi: yi)) · 缓存读 \(UIFormat.compact(totals.cacheRead, yi: yi)) · 缓存写 \(UIFormat.compact(totals.cacheWrite, yi: yi))"))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(UIFormat.compact(totals.tokens, yi: yi))
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                Text(UIFormat.costLabel(totals))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .frame(minWidth: 76, alignment: .trailing)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, Metrics.cardPadding)
-        .padding(.vertical, 11)
-        .hoverHighlight()
-        .help(totals.tokens.formatted(.number) + " Token")
     }
 
     // -------------------------------------------------------- 项目可视化 ----
 
     @ViewBuilder
-    private var projectAnalytics: some View {
+    private var projectShareCharts: some View {
         let donutData = UsageChartBuilder.projectDonut(projects: model.projects, metric: donutMetric)
         let mixItems = UsageChartBuilder.projectMix(projects: model.projects)
+        let activeProjectCount = model.projects.filter { $0.totals.tokens > 0 }.count
         let openByID: (String) -> Void = { id in
             if let project = model.projects.first(where: { $0.id == id }) {
                 open(project)
             }
         }
+
+        AdaptiveEqualColumnsLayout(minColumnWidth: 420, spacing: Metrics.sectionSpacing, equalHeight: true) {
+            UsageDonutCard(
+                title: L10n.text("项目占比"),
+                centerSubtitle: L10n.text("\(donutData.itemCount) 个项目"),
+                data: donutData,
+                metric: $donutMetric,
+                yi: yi,
+                onSelect: openByID
+            )
+            TokenMixBarCard(
+                title: L10n.text("项目 Token 构成"),
+                items: mixItems,
+                totalCount: activeProjectCount,
+                yi: yi,
+                onSelect: openByID
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var projectBreakdowns: some View {
         let filterModel: (String) -> Void = { modelName in
             model.query.model = model.query.model == modelName ? nil : modelName
             model.refresh()
         }
 
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                UsageDonutCard(
-                    title: L10n.text("项目占比"),
-                    centerSubtitle: L10n.text("\(donutData.itemCount) 个项目"),
-                    data: donutData,
-                    metric: $donutMetric,
-                    yi: yi,
-                    onSelect: openByID
-                )
-                .frame(minWidth: 360)
-                TokenMixBarCard(
-                    title: L10n.text("项目 Token 构成"),
-                    items: mixItems,
-                    totalCount: model.projects.filter { $0.totals.tokens > 0 }.count,
-                    yi: yi,
-                    onSelect: openByID
-                )
-                .frame(minWidth: 360)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: Metrics.sectionSpacing) {
-                UsageDonutCard(
-                    title: L10n.text("项目占比"),
-                    centerSubtitle: L10n.text("\(donutData.itemCount) 个项目"),
-                    data: donutData,
-                    metric: $donutMetric,
-                    yi: yi,
-                    onSelect: openByID
-                )
-                TokenMixBarCard(
-                    title: L10n.text("项目 Token 构成"),
-                    items: mixItems,
-                    totalCount: model.projects.filter { $0.totals.tokens > 0 }.count,
-                    yi: yi,
-                    onSelect: openByID
-                )
-            }
-        }
-
         // 搜索项目名时隐藏全局 Agent / 模型卡片，避免和已筛选的项目列表口径混在一起
         if model.search.isEmpty && (!model.agents.isEmpty || !model.breakdown.isEmpty) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                    breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
-                        .frame(minWidth: 300)
-                    breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false,
-                                  onSelect: filterModel)
-                        .frame(minWidth: 300)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                VStack(spacing: Metrics.sectionSpacing) {
-                    breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
-                    breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false,
-                                  onSelect: filterModel)
-                }
+            AdaptiveEqualColumnsLayout(minColumnWidth: 300, spacing: Metrics.sectionSpacing, equalHeight: true) {
+                breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
+                breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false,
+                              onSelect: filterModel)
             }
         }
     }
@@ -448,18 +395,9 @@ struct ProjectsView: View {
             .card()
         }
         trendCard
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
-                    .frame(minWidth: 300)
-                breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false)
-                    .frame(minWidth: 300)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: Metrics.sectionSpacing) {
-                breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
-                breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false)
-            }
+        AdaptiveEqualColumnsLayout(minColumnWidth: 300, spacing: Metrics.sectionSpacing, equalHeight: true) {
+            breakdownCard(title: L10n.text("Agent 分布"), rows: model.agents, isTool: true)
+            breakdownCard(title: L10n.text("模型分布"), rows: model.breakdown, isTool: false)
         }
         sessionsCard
     }
@@ -557,15 +495,21 @@ struct ProjectsView: View {
     }
 
     private var sessionsCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let sessions = model.sessions
+        return LazyVStack(alignment: .leading, spacing: 0) {
             CardHeader(title: L10n.text("主要会话"))
                 .padding(.horizontal, Metrics.cardPadding)
                 .padding(.top, Metrics.cardPadding)
-                .padding(.bottom, 4)
-            if model.sessions.isEmpty {
-                emptyRows.padding(.bottom, Metrics.cardPadding)
+                .padding(.bottom, sessions.isEmpty ? 4 : 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(CardListRowBackground(isFirst: true, isLast: false))
+            if sessions.isEmpty {
+                emptyRows
+                    .padding(.bottom, Metrics.cardPadding)
+                    .background(CardListRowBackground(isFirst: false, isLast: true))
             } else {
-                ForEach(model.sessions) { session in
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                    let isLast = index == sessions.count - 1
                     Button { model.onSession?(session.tool, session.sessionID) } label: {
                         HStack(spacing: 8) {
                             Circle().fill(toolColor(session.tool)).frame(width: 7, height: 7)
@@ -589,13 +533,13 @@ struct ProjectsView: View {
                     }
                     .buttonStyle(.plain)
                     .help(toolDisplayName(session.tool))
+                    .padding(.bottom, isLast ? 8 : 0)
+                    .background(CardListRowBackground(isFirst: false, isLast: isLast))
+                    .modifier(CardListRowClip(isFirst: false, isLast: isLast))
                 }
-                Color.clear.frame(height: 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(padding: 0)
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
     }
 
     private var emptyRows: some View {
@@ -603,5 +547,71 @@ struct ProjectsView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 60)
+    }
+}
+
+private struct ProjectListRow: View, Equatable {
+    let project: ProjectSummary
+    let top: Int64
+    let activeRisks: [RiskNotice]
+    let yi: Bool
+    let locale: Locale
+
+    nonisolated static func == (lhs: ProjectListRow, rhs: ProjectListRow) -> Bool {
+        lhs.project.id == rhs.project.id
+            && lhs.project.name == rhs.project.name
+            && lhs.project.totals == rhs.project.totals
+            && lhs.project.lastActivity == rhs.project.lastActivity
+            && lhs.top == rhs.top
+            && lhs.activeRisks == rhs.activeRisks
+            && lhs.yi == rhs.yi
+            && lhs.locale == rhs.locale
+    }
+
+    var body: some View {
+        let totals = project.totals
+        var subtitle = L10n.text("\(totals.sessions) 个会话")
+        if let last = project.lastActivity {
+            subtitle += " · " + UIFormat.abbreviatedDate(ms: last, locale: locale)
+        }
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(projectDisplayName(project))
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(activeRisks) { risk in
+                    Label(UIFormat.riskDetail(risk), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                MeterBar(fraction: top > 0 ? Double(totals.tokens) / Double(top) : 0,
+                         tint: .accentColor, height: 3)
+                    .padding(.top, 2)
+                Text(L10n.text("输入 \(UIFormat.compact(totals.input, yi: yi)) · 输出 \(UIFormat.compact(totals.output, yi: yi)) · 缓存读 \(UIFormat.compact(totals.cacheRead, yi: yi)) · 缓存写 \(UIFormat.compact(totals.cacheWrite, yi: yi))"))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(UIFormat.compact(totals.tokens, yi: yi))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(UIFormat.costLabel(totals))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 76, alignment: .trailing)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, Metrics.cardPadding)
+        .padding(.vertical, 11)
+        .hoverHighlight()
+        .help(totals.tokens.formatted(.number) + " Token")
     }
 }

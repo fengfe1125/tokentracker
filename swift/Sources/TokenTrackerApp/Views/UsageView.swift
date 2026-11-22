@@ -101,57 +101,36 @@ struct ModelsView: View {
                 MeterBar(fraction: (hitRate ?? 0) / 100).padding(.top, 5)
             }
         }
-        .frame(minWidth: 118, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
 
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Metrics.gridSpacing) { tiles }
-                .fixedSize(horizontal: false, vertical: true)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: Metrics.gridSpacing),
-                                GridItem(.flexible(), spacing: Metrics.gridSpacing)],
-                      spacing: Metrics.gridSpacing) { tiles }
+        AdaptiveTileGridLayout(maxColumns: 4, fallbackColumns: 2,
+                               minColumnWidth: 118, spacing: Metrics.gridSpacing) {
+            tiles
         }
     }
 
     private func modelList(_ rows: [UsageStore.ModelRow], top: Int64) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                if index > 0 { Divider().padding(.leading, Metrics.cardPadding) }
-                Button {
-                    openModelProjects(row.model)
-                } label: {
-                    ShareRow(fraction: top > 0 ? Double(row.stats.tokens) / Double(top) : 0,
-                             tint: toolColor(row.tool),
-                             primary: UIFormat.compact(row.stats.tokens, yi: yi),
-                             secondary: UIFormat.sessionCost(row.stats)) {
-                        Circle().fill(toolColor(row.tool)).frame(width: 8, height: 8)
-                        Text(row.model.isEmpty ? L10n.text("（未知模型）") : row.model)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(toolDisplayName(row.tool))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        if let rate = row.stats.cacheHitRate {
-                            let pct = String(format: "%.0f%%", rate)
-                            Text(L10n.text("缓存 \(pct)"))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
+                let isFirst = index == 0
+                let isLast = index == rows.count - 1
+                VStack(spacing: 0) {
+                    if index > 0 { Divider().padding(.leading, Metrics.cardPadding) }
+                    Button {
+                        openModelProjects(row.model)
+                    } label: {
+                        ModelListRow(row: row, top: top, yi: yi)
                     }
-                    .padding(.horizontal, Metrics.cardPadding)
-                    .padding(.vertical, 3)
-                    .hoverHighlight()
+                    .buttonStyle(.plain)
+                    .help(L10n.text("查看用到这个模型的项目"))
                 }
-                .buttonStyle(.plain)
-                .help(L10n.text("查看用到这个模型的项目"))
+                .padding(.top, isFirst ? 6 : 0)
+                .padding(.bottom, isLast ? 6 : 0)
+                .background(CardListRowBackground(isFirst: isFirst, isLast: isLast))
+                .modifier(CardListRowClip(isFirst: isFirst, isLast: isLast))
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-        .card(padding: 0)
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -161,48 +140,59 @@ struct ModelsView: View {
         let cacheItems = UsageChartBuilder.cacheHitItems(rows: rows)
         let activeCount = rows.filter { $0.stats.tokens > 0 }.count
 
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                UsageDonutCard(
-                    title: L10n.text("模型占比"),
-                    centerSubtitle: L10n.text("\(donutData.itemCount) 个模型"),
-                    data: donutData,
-                    metric: $donutMetric,
-                    yi: yi,
-                    onSelect: openModelProjects
-                )
-                .frame(minWidth: 360)
-                TokenMixBarCard(
-                    title: L10n.text("模型 Token 构成"),
-                    items: mixItems,
-                    totalCount: activeCount,
-                    yi: yi,
-                    onSelect: openModelProjects
-                )
-                .frame(minWidth: 360)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: Metrics.sectionSpacing) {
-                UsageDonutCard(
-                    title: L10n.text("模型占比"),
-                    centerSubtitle: L10n.text("\(donutData.itemCount) 个模型"),
-                    data: donutData,
-                    metric: $donutMetric,
-                    yi: yi,
-                    onSelect: openModelProjects
-                )
-                TokenMixBarCard(
-                    title: L10n.text("模型 Token 构成"),
-                    items: mixItems,
-                    totalCount: activeCount,
-                    yi: yi,
-                    onSelect: openModelProjects
-                )
-            }
+        AdaptiveEqualColumnsLayout(minColumnWidth: 420, spacing: Metrics.sectionSpacing, equalHeight: true) {
+            UsageDonutCard(
+                title: L10n.text("模型占比"),
+                centerSubtitle: L10n.text("\(donutData.itemCount) 个模型"),
+                data: donutData,
+                metric: $donutMetric,
+                yi: yi,
+                onSelect: openModelProjects
+            )
+            TokenMixBarCard(
+                title: L10n.text("模型 Token 构成"),
+                items: mixItems,
+                totalCount: activeCount,
+                yi: yi,
+                onSelect: openModelProjects
+            )
         }
 
         if !cacheItems.isEmpty {
             CacheHitComparisonCard(items: cacheItems, yi: yi, onSelect: openModelProjects)
         }
+    }
+}
+
+private struct ModelListRow: View, Equatable {
+    let row: UsageStore.ModelRow
+    let top: Int64
+    let yi: Bool
+
+    var body: some View {
+        ShareRow(fraction: top > 0 ? Double(row.stats.tokens) / Double(top) : 0,
+                 tint: toolColor(row.tool),
+                 primary: UIFormat.compact(row.stats.tokens, yi: yi),
+                 secondary: UIFormat.sessionCost(row.stats)) {
+            Circle().fill(toolColor(row.tool)).frame(width: 8, height: 8)
+            Text(row.model.isEmpty ? L10n.text("（未知模型）") : row.model)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(toolDisplayName(row.tool))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if let rate = row.stats.cacheHitRate {
+                let pct = String(format: "%.0f%%", rate)
+                Text(L10n.text("缓存 \(pct)"))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, Metrics.cardPadding)
+        .padding(.vertical, 3)
+        .hoverHighlight()
     }
 }

@@ -22,7 +22,7 @@
 - 同一实际配置目录仅安装一份；项目 Hooks 收到事件不代表用户级配置文件已安装。已观察的配置根只保存在运行内存；用户选择保存在 App 本地偏好。Claude 显式禁用／只允许受管理 Hooks、Codex features.hooks=false 会阻止安装；上游策略、信任和沙箱限制仍由原工具执行，不写入信任记录或绕过检查。
 - Helper 先尝试连接 App；App 不在时立即返回空 JSON，不启动 App。仅读取官方 Hook stdin，不读取会话正文或 transcript 文件。
 - Helper 与 App 使用当前用户的 Unix Socket，位于每用户私有临时目录（`confstr(_CS_DARWIN_USER_TEMP_DIR)`，即 `/var/folders/…/T/tt-tasks-<uid>-dev|app`），不再放在 `/tmp`。目录权限 0700、Socket 权限 0600，两端核对 peer UID；App 启动时若已安装的 Helper 与包内版本不同则自动替换，避免升级后旧 Helper 连接旧路径；单个报文最多 1 MiB，审批最多同时等待 32 个连接。
-- 官方事件在 `TaskHookEvent` 中归一化。共同接入 SessionStart、UserPromptSubmit、PermissionRequest、PostToolUse、Stop、SessionEnd；Codex 另接 Interrupt，Claude 另接 PostToolUseFailure、PermissionDenied 和 permission_prompt 通知。
+- 官方事件在 `TaskHookEvent` 中归一化。共同接入 SessionStart、UserPromptSubmit、PermissionRequest、PostToolUse、Stop、SessionEnd；Codex 另接 Interrupt，Claude 另接 PostToolUseFailure、PermissionDenied 和 permission_prompt 通知；Antigravity 通过全局 `~/.gemini/config/hooks.json`（键 `tokentracker-tasks` / `tokentracker-tasks-dev`，保留其他 Hooks）接入 SessionStart、PreInvocation（仅每轮首步）和 Stop（`USER_CANCELED` 映射为中断，不弹出完成提醒），并在触发时同步更新工作区映射，点击「前往原任务」可切回 `com.google.antigravity`。
 - 不依据 Token 增长停顿推断完成。主会话 Stop 每轮提醒一次，文案为「本轮回复结束」。带子代理身份的 Stop 不生成主会话完成提醒；子会话结束不会取消父会话的待审批连接。
 - 只有活跃 PermissionRequest 连接可以代答，随机请求 ID 与连接绑定，单次消费。审批最多等待 120 秒，上游配置 timeout 为 130 秒，两者由 `TaskSocket.approvalTimeout`／`hookTimeout` 统一定义。过期、断连、取消、禁用功能或 App 退出均放弃代答，由原工具继续自己的审批流程。
 - 决定输出仅包含官方 PermissionRequest 的 allow／deny，不改命令、规则或审批模式。通知型请求仅提供「前往原任务」。

@@ -166,4 +166,69 @@ final class TaskHookTests: XCTestCase {
         defer { rmdir(path) }
         XCTAssertThrowsError(try TaskSocket.prepareDirectory(path))
     }
+
+    func testAntigravityHookParsingPrivacyAndConfigRoundTrip() throws {
+        let stopPayload = Data(#"{"hookEventName":"Stop","conversationId":"conv-ag-1","executionNum":2,"terminationReason":"NO_TOOL_CALL","workspacePaths":["/tmp/DemoRepo"],"lastUserInput":"PRIVATE-PROMPT","transcriptPath":"/tmp/secret.jsonl"}"#.utf8)
+        let stop = try TaskHookEvent.parse(stopPayload, provider: .antigravity, sourceApp: "com.google.antigravity")
+        XCTAssertEqual(stop.provider, .antigravity)
+        XCTAssertEqual(stop.event, "Stop")
+        XCTAssertEqual(stop.session, "conv-ag-1")
+        XCTAssertEqual(stop.turn, "exec_2")
+        XCTAssertEqual(stop.cwd, "/tmp/DemoRepo")
+        XCTAssertTrue(stop.isMain)
+        let encoded = String(data: try JSONEncoder().encode(stop), encoding: .utf8)!
+        XCTAssertFalse(encoded.contains("PRIVATE-PROMPT"))
+        XCTAssertFalse(encoded.contains("secret.jsonl"))
+
+        let preFirst = try TaskHookEvent.parse(
+            Data(#"{"hookEventName":"PreInvocation","conversationId":"conv-ag-1","invocationNum":1,"cwd":"/tmp/DemoRepo"}"#.utf8),
+            provider: .antigravity)
+        XCTAssertEqual(preFirst.event, "UserPromptSubmit")
+        XCTAssertThrowsError(try TaskHookEvent.parse(
+            Data(#"{"hookEventName":"PreInvocation","conversationId":"conv-ag-1","invocationNum":2,"cwd":"/tmp/DemoRepo"}"#.utf8),
+            provider: .antigravity), "轮内中间步骤不发送重复提示事件")
+
+        let cancelled = try TaskHookEvent.parse(
+            Data(#"{"hookEventName":"Stop","conversationId":"conv-ag-1","executionNum":3,"terminationReason":"USER_CANCELED"}"#.utf8),
+            provider: .antigravity)
+        XCTAssertEqual(cancelled.event, "Interrupt")
+
+        let source = TaskClientSource.identify(provider: .antigravity, enginePath: "/Applications/Antigravity.app/Contents/MacOS/Antigravity",
+                                               arguments: [], entrypoint: nil, host: "com.google.antigravity",
+                                               configurationRoot: "/Users/fixture/.gemini/config", home: "/Users/fixture")
+        XCTAssertEqual(source.client, .antigravity)
+        XCTAssertEqual(source.confidence, .launchContext)
+        let resolvedRoot = try XCTUnwrap(TaskHookConfigurationRoot.resolve(
+            client: .antigravity, home: "/Users/fixture", environment: [:], exists: { $0 == "/Users/fixture/.gemini" }))
+        XCTAssertEqual(resolvedRoot.path, "/Users/fixture/.gemini/config")
+        XCTAssertTrue(resolvedRoot.confirmed)
+        XCTAssertEqual(resolvedRoot.configurationPath(provider: .antigravity), "/Users/fixture/.gemini/config/hooks.json")
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tt-ag-task-hook-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("hooks.json").path
+        let existing = Data(#"{"tokentracker-workspace":{"SessionStart":[{"type":"command","command":"echo ws"}]},"custom":{"Stop":[{"type":"command","command":"echo custom"}]}}"#.utf8)
+        try existing.write(to: URL(fileURLWithPath: path))
+
+        XCTAssertFalse(TaskHookConfiguration.isInstalled(path: path, channel: "development"))
+        let install = try TaskHookConfiguration.preview(provider: .antigravity, path: path,
+                                                        helper: "/tmp/TokenTrackerHook",
+                                                        channel: "development", installing: true)
+        try install.apply()
+        XCTAssertTrue(TaskHookConfiguration.isInstalled(path: path, channel: "development"))
+        XCTAssertFalse(TaskHookConfiguration.isInstalled(path: path, channel: "production"))
+        let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: Any]
+        XCTAssertNotNil(parsed["tokentracker-workspace"], "工作区映射 Hook 不得被覆盖")
+        XCTAssertNotNil(parsed["custom"], "用户自定义 Hook 不得被覆盖")
+        XCTAssertNotNil(parsed["tokentracker-tasks-dev"])
+
+        let remove = try TaskHookConfiguration.preview(provider: .antigravity, path: path,
+                                                       helper: "/tmp/TokenTrackerHook",
+                                                       channel: "development", installing: false)
+        try remove.apply()
+        XCTAssertFalse(TaskHookConfiguration.isInstalled(path: path, channel: "development"))
+        let restored = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! NSDictionary
+        XCTAssertEqual(restored, try JSONSerialization.jsonObject(with: existing) as! NSDictionary)
+    }
 }

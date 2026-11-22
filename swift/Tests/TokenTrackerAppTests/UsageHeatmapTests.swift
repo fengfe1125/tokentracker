@@ -60,7 +60,7 @@ final class UsageHeatmapTests: XCTestCase {
             XCTAssertGreaterThan(host.fittingSize.height, 180)
         }
     }
-    func testShortRangesUseHourGridAndAllUsesTrimmedYear() {
+    func testShortRangesUseHourGridMonthUsesCalendarAndAllUsesTrimmedYear() {
         func row(_ day: String, _ tokens: Int64) -> UsageStore.DailyRow {
             var stats = UsageStore.ToolStats(); stats.tokens = tokens; stats.input = tokens
             return UsageStore.DailyRow(tool: "codex", day: day, stats: stats)
@@ -73,10 +73,11 @@ final class UsageHeatmapTests: XCTestCase {
         let now = date(2026, 10, 29) // Thursday 12:00
         let data = HeatmapDataset(rows: [row("2026-08-03", 900), row("2026-10-27", 20), row("2026-10-29", 15)], calendar: calendar)
         let hours = [hour(27, 9, 20), hour(29, 8, 6), hour(29, 11, 4)]
-        let expected: [(String, Int, Int, Int64, Int)] = [("day", 1, 13, 10, 2), ("week", 7, 6 * 24 + 13, 30, 3), ("month", 29, 28 * 24 + 13, 30, 3)]
+        let expected: [(String, Int, Int, Int64, Int)] = [("day", 1, 13, 10, 2), ("week", 7, 6 * 24 + 13, 30, 3)]
         for (range, rows, elapsed, total, active) in expected {
             let chart = UsageHeatmap(dataset: data, request: HeatmapRequest(range: range), hours: hours, now: now, calendar: calendar)
             XCTAssertEqual(chart.unit, .hour, range)
+            XCTAssertEqual(chart.style, .hourly, range)
             XCTAssertEqual(chart.rowDays.count, rows, range)
             XCTAssertEqual(chart.cells.count, rows * 24, range)
             XCTAssertEqual(chart.elapsedHours, elapsed, range)
@@ -92,8 +93,51 @@ final class UsageHeatmapTests: XCTestCase {
                 XCTAssertEqual(layout.index(at: NSPoint(x: rect.midX, y: rect.midY)), index, range)
             }
         }
+        // Oct 1, 2026 is Thursday (3 leading blanks), 31 days -> 5 rows (35 slots); Oct 30-31 are future placeholders.
+        let month = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "month"), now: now, calendar: calendar)
+        XCTAssertEqual(month.unit, .day)
+        XCTAssertEqual(month.style, .monthCalendar)
+        XCTAssertEqual(month.columns, 7)
+        XCTAssertEqual(month.monthLeadingBlanks, 3)
+        XCTAssertEqual(month.monthDaysCount, 31)
+        XCTAssertEqual(month.monthRowCount, 5)
+        XCTAssertEqual(month.cells.count, 35)
+        XCTAssertEqual(month.cells.compactMap { $0 }.count, 29, "Elapsed days Oct 1–29 are interactive; Oct 30–31 stay nil")
+        XCTAssertNil(month.monthDayNumber(at: 0))
+        XCTAssertEqual(month.monthDayNumber(at: 3), 1)
+        XCTAssertEqual(month.monthDayNumber(at: 32), 30)
+        XCTAssertEqual(month.monthDayNumber(at: 33), 31)
+        XCTAssertNil(month.cells[32])
+        XCTAssertNil(month.monthDayNumber(at: 34))
+        XCTAssertEqual(month.totalTokens, 35)
+        XCTAssertEqual(month.activeDays, 2)
+        XCTAssertEqual(month.rangeDays, 29)
+        XCTAssertEqual(month.peak?.tokens, 20)
+        XCTAssertEqual(month.hourlyExcludedTokens, 0)
+        XCTAssertEqual(month.monthWeeks.count, 5)
+        XCTAssertEqual(month.monthWeeks.last?.tokens, 35)
+        XCTAssertEqual(month.monthWeeks.last?.activeDays, 2)
+        XCTAssertEqual(month.monthWeeks.last?.elapsedDays, 4) // Mon Oct 26 – Thu Oct 29
+        let monthWide = HeatmapGridLayout(chart: month, width: 1008)
+        XCTAssertGreaterThan(monthWide.summaryWidth, 0)
+        XCTAssertEqual(monthWide.summaryRect(row: 0)?.maxX ?? 0, 1008, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(monthWide.cellHeight, 44)
+        for index in month.cells.indices {
+            let rect = monthWide.rect(index)
+            let hit = monthWide.index(at: NSPoint(x: rect.midX, y: rect.midY))
+            if month.cells[index] != nil {
+                XCTAssertEqual(hit, index)
+            } else {
+                XCTAssertNil(hit)
+            }
+        }
+        let monthNarrow = HeatmapGridLayout(chart: month, width: 560)
+        XCTAssertEqual(monthNarrow.summaryWidth, 0)
+        XCTAssertEqual(monthNarrow.rect(6).maxX, 560, accuracy: 0.5)
+
         let all = UsageHeatmap(dataset: data, request: HeatmapRequest(range: "all"), now: now, calendar: calendar)
         XCTAssertEqual(all.unit, .day)
+        XCTAssertEqual(all.style, .yearly)
         XCTAssertEqual(all.bands.map(\.year), [2026])
         XCTAssertEqual(all.cells.compactMap { $0 }.count, 302, "The year ends at today; no future placeholders")
         XCTAssertEqual(all.columns, 44)
@@ -102,6 +146,38 @@ final class UsageHeatmapTests: XCTestCase {
         XCTAssertEqual(all.cells.compactMap { $0 }.filter(all.contains).count, 88, "Days before the first usage are context only")
         let layout = HeatmapGridLayout(chart: all, width: 700)
         XCTAssertEqual(layout.rect(all.cells.count - 1).maxX, 700, accuracy: 0.5)
+    }
+
+    func testMonthCalendarHandlesSixRowDSTMonthLeapFebAndFirstDay() {
+        func row(_ day: String, _ tokens: Int64) -> UsageStore.DailyRow {
+            var stats = UsageStore.ToolStats(); stats.tokens = tokens; stats.input = tokens
+            return UsageStore.DailyRow(tool: "claude", day: day, stats: stats)
+        }
+        // Nov 2026 starts on Sunday (6 leading blanks), 30 days -> 6 week rows; includes US DST fallback on Nov 1.
+        let novData = HeatmapDataset(rows: [row("2026-11-01", 100), row("2026-11-02", 400), row("2026-11-22", 250)], calendar: calendar)
+        let nov = UsageHeatmap(dataset: novData, request: HeatmapRequest(range: "month"), now: date(2026, 11, 22), calendar: calendar)
+        XCTAssertEqual(nov.monthLeadingBlanks, 6)
+        XCTAssertEqual(nov.monthDaysCount, 30)
+        XCTAssertEqual(nov.monthRowCount, 6)
+        XCTAssertEqual(nov.cells.count, 42)
+        XCTAssertEqual(nov.cells.compactMap { $0 }.count, 22)
+        XCTAssertEqual(nov.totalTokens, 750)
+        XCTAssertEqual(nov.activeDays, 3)
+        XCTAssertEqual(nov.rangeDays, 22)
+        XCTAssertEqual(nov.monthWeeks.map(\.tokens), [100, 400, 0, 250, 0, 0])
+        XCTAssertEqual(nov.monthWeeks.map(\.elapsedDays), [1, 7, 7, 7, 0, 0])
+
+        // Day 1 of a leap February (Feb 1, 2024 is Thursday -> 3 leading blanks, 29 days -> 5 rows).
+        let febData = HeatmapDataset(rows: [row("2024-02-01", 50)], calendar: calendar)
+        let feb = UsageHeatmap(dataset: febData, request: HeatmapRequest(range: "month"), now: date(2024, 2, 1), calendar: calendar)
+        XCTAssertEqual(feb.monthLeadingBlanks, 3)
+        XCTAssertEqual(feb.monthDaysCount, 29)
+        XCTAssertEqual(feb.monthRowCount, 5)
+        XCTAssertEqual(feb.cells.compactMap { $0 }.count, 1)
+        XCTAssertEqual(feb.rangeDays, 1)
+        XCTAssertEqual(feb.totalTokens, 50)
+        XCTAssertEqual(feb.monthWeeks.first?.elapsedDays, 1)
+        XCTAssertEqual(feb.monthWeeks.dropFirst().map(\.elapsedDays), [0, 0, 0, 0])
     }
 
     func testHourBucketsPreserveDSTAndDoNotSpreadIntervals() throws {

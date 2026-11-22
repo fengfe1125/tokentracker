@@ -38,19 +38,17 @@ struct AccountsView: View {
                     .frame(maxWidth: .infinity, minHeight: 220)
                     .card()
                 } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: Metrics.gridSpacing) {
-                            accountList.frame(width: 280)
-                            detailColumn.frame(minWidth: 420)
-                        }
-                        VStack(spacing: Metrics.gridSpacing) {
-                            accountList
-                            detailColumn
-                        }
+                    AdaptiveLeadingFixedLayout(
+                        leadingWidth: 280,
+                        minTrailingWidth: 420,
+                        spacing: Metrics.gridSpacing
+                    ) {
+                        accountList
+                        detailColumn
                     }
-                } 
+                }
                 if cards.isEmpty && showsCodex { CodexAccountsCard(model: state.codex) }
-                Text(L10n.text("账号由 TokenTracker 自己登录并续期，与其他软件的登录互不影响；凭据保存在 ~/.tokentracker/subscription_accounts.json（仅本人可读）。导入只复制一次 API Key，之后不再读取其他软件的配置。"))
+                Text(L10n.text("账号由 TokenTracker 自己登录并续期，与其他软件的登录互不影响；凭据保存在 ~/.tokentracker/subscription_accounts.json（仅本人可读）。导入只复制一次 API Key；Antigravity 以只读方式自动读取本机登录态，不修改原工具凭据。"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -212,14 +210,14 @@ private struct AccountDetail: View {
     let card: SubscriptionCard
     let remove: () -> Void
 
-    private let menuBarProviders: Set<SubscriptionProvider> = [.claude, .codex, .kimi, .go]
+    private var supportsMenuBar: Bool { card.account.provider.menuBarID != nil }
     private var snapshot: SubscriptionSnapshot { card.snapshot }
     private var hasData: Bool { AccountStatus.hasData(card) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if let message = SubscriptionText.problem(snapshot) {
+            if let message = SubscriptionText.problem(snapshot, autoDiscovered: card.account.isAutoDiscovered) {
                 Text(message)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
@@ -267,7 +265,7 @@ private struct AccountDetail: View {
                     Text(SubscriptionText.time(sampled) + (snapshot.privateAPI ? " · " + L10n.text("非公开接口") : ""))
                 }
             }
-            if menuBarProviders.contains(card.account.provider) {
+            if supportsMenuBar {
                 GridRow {
                     Text(L10n.text("菜单栏")).foregroundStyle(.secondary)
                     Text(card.account.isActive ? L10n.text("显示中") : L10n.text("未显示"))
@@ -287,7 +285,7 @@ private struct AccountDetail: View {
                 Button(L10n.text("重新登录")) { state.startSubscriptionLogin(card.account.provider) }
                     .buttonStyle(.borderedProminent)
             }
-            if menuBarProviders.contains(card.account.provider) {
+            if supportsMenuBar {
                 if card.account.isActive {
                     Pill(text: L10n.text("显示在菜单栏"), tint: .brand)
                 } else {
@@ -295,7 +293,11 @@ private struct AccountDetail: View {
                 }
             }
             Spacer(minLength: 8)
-            Button(L10n.text("移除"), role: .destructive, action: remove)
+            if card.account.isAutoDiscovered {
+                Pill(text: L10n.text("自动读取本机登录"), tint: .secondary)
+            } else {
+                Button(L10n.text("移除"), role: .destructive, action: remove)
+            }
         }
     }
 }

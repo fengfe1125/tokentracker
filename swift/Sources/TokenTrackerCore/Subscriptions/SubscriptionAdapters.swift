@@ -20,6 +20,7 @@ enum SubscriptionAdapters {
     static let hosts: [SubscriptionProvider: Set<String>] = [
         .claude: ["api.anthropic.com"],
         .codex: ["chatgpt.com"],
+        .antigravity: ["daily-cloudcode-pa.googleapis.com"],
         .kimi: ["api.kimi.com", "api.kimi.ai"],
         .go: ["opencode.ai"],
         .deepseek: ["api.deepseek.com"],
@@ -32,7 +33,7 @@ enum SubscriptionAdapters {
         .zcode: ["zcode.z.ai", "api.z.ai", "open.bigmodel.cn"],
     ]
 
-    static let privateAPIs: Set<SubscriptionProvider> = [.copilot, .gemini, .minimax, .grok, .workbuddy, .workbuddyAI, .zcode]
+    static let privateAPIs: Set<SubscriptionProvider> = [.antigravity, .copilot, .gemini, .minimax, .grok, .workbuddy, .workbuddyAI, .zcode]
 
     static func fetch(_ account: SubscriptionAccount, _ ctx: SubscriptionFetchContext) -> SubscriptionSnapshot {
         if let problem = account.discoveryProblem {
@@ -49,6 +50,7 @@ enum SubscriptionAdapters {
         switch account.provider {
         case .claude: snapshot = claude(credential, needsIdentity: account.providerAccountID == nil, ctx)
         case .codex: snapshot = codex(credential, ctx)
+        case .antigravity: snapshot = antigravity(credential, ctx)
         case .kimi: snapshot = kimi(credential, ctx)
         case .go: snapshot = go(credential, ctx)
         case .deepseek: snapshot = deepseek(credential, ctx)
@@ -170,6 +172,216 @@ enum SubscriptionAdapters {
                 ?? subscriptionNumber(w["reset_after_seconds"]).map { now.addingTimeInterval($0) }
             return SubscriptionWindow(id: key, duration: subscriptionNumber(w["limit_window_seconds"]).map { Int($0) },
                                       usedPercent: pct, resetsAt: reset)
+        }
+    }
+
+    // -------------------------------------------------------- Antigravity ----
+
+    static let antigravityUserAgent = "antigravity/hub/2.34.0 (aidev_client; os_type=darwin; arch=arm64)"
+
+    static func antigravity(_ c: SubscriptionCredential, _ ctx: SubscriptionFetchContext) -> SubscriptionSnapshot {
+        guard c.kind == .oauth else { return .failure(.unsupported, .apiKeyOnly) }
+        let base = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+        let headers = [
+            "Authorization": "Bearer " + c.token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": antigravityUserAgent,
+        ]
+        let load = send(.antigravity, SubscriptionRequest(
+            url: URL(string: base + "loadCodeAssist")!,
+            method: "POST",
+            headers: headers,
+            body: jsonBody(["metadata": ["ideType": "ANTIGRAVITY"]])), ctx)
+        guard load.status == 200 else { return failure(load, ctx) }
+
+        let projectValue = load.json["cloudaicompanionProject"]
+        let project = projectValue as? String ?? (projectValue as? [String: Any])?["id"] as? String
+        let plan = (load.json["paidTier"] as? [String: Any])?["name"] as? String
+            ?? (load.json["currentTier"] as? [String: Any])?["name"] as? String ?? ""
+        let queryBody = jsonBody(project.flatMap { $0.isEmpty ? nil : ["project": $0] } ?? [:])
+
+        let quota = send(.antigravity, SubscriptionRequest(
+            url: URL(string: base + "retrieveUserQuota")!,
+            method: "POST",
+            headers: headers,
+            body: queryBody), ctx)
+        if quota.status == 200 {
+            let windows = antigravityQuotaWindows(buckets: quota.json["buckets"] as? [[String: Any]] ?? [])
+            if !windows.isEmpty {
+                return current(windows, plan: plan)
+            }
+        } else if [401, 403, 429].contains(quota.status) || quota.failure != nil {
+            return failure(quota, ctx)
+        }
+
+        // 回退：从 fetchAvailableModels 的 quotaInfo 读取（耗尽模型省略 remainingFraction 时按 0 计）。
+        let modelsResp = send(.antigravity, SubscriptionRequest(
+            url: URL(string: base + "fetchAvailableModels")!,
+            method: "POST",
+            headers: headers,
+            body: queryBody), ctx)
+        guard modelsResp.status == 200 else {
+            return quota.status == 200 ? .failure(.failed, .noWindows) : failure(modelsResp, ctx)
+        }
+        let windows = antigravityModelWindows(models: modelsResp.json["models"] as? [String: Any] ?? [:])
+        return current(windows, plan: plan)
+    }
+
+    private struct AntigravityPoolBucket {
+        let modelID: String
+        let remainingFraction: Double
+        let resetTimeRaw: String
+        let resetsAt: Date?
+    }
+
+    static func antigravityQuotaWindows(buckets: [[String: Any]]) -> [SubscriptionWindow] {
+        var parsed: [AntigravityPoolBucket] = []
+        for bucket in buckets {
+            guard let modelID = bucket["modelId"] as? String, !modelID.isEmpty,
+                  let fraction = subscriptionNumber(bucket["remainingFraction"]),
+                  fraction.isFinite else { continue }
+            let clamped = max(0, min(1, fraction))
+            let resetRaw = bucket["resetTime"] as? String ?? ""
+            parsed.append(AntigravityPoolBucket(
+                modelID: modelID,
+                remainingFraction: clamped,
+                resetTimeRaw: resetRaw,
+                resetsAt: subscriptionDate(bucket["resetTime"])))
+        }
+        return antigravityPoolWindows(parsed)
+    }
+
+    static func antigravityModelWindows(models: [String: Any]) -> [SubscriptionWindow] {
+        var parsed: [AntigravityPoolBucket] = []
+        for (modelID, rawValue) in models {
+            guard let info = rawValue as? [String: Any],
+                  let quota = info["quotaInfo"] as? [String: Any] else { continue }
+            let resetRaw = quota["resetTime"] as? String ?? ""
+            let fraction: Double
+            if let value = subscriptionNumber(quota["remainingFraction"]), value.isFinite {
+                fraction = max(0, min(1, value))
+            } else if !resetRaw.isEmpty || (quota["isExhausted"] as? Bool) == true {
+                // Antigravity 在配额耗尽（0%）时会省略 remainingFraction，仅保留 resetTime。
+                fraction = 0
+            } else {
+                continue
+            }
+            parsed.append(AntigravityPoolBucket(
+                modelID: modelID,
+                remainingFraction: fraction,
+                resetTimeRaw: resetRaw,
+                resetsAt: subscriptionDate(quota["resetTime"])))
+        }
+        return antigravityPoolWindows(parsed)
+    }
+
+    private static func antigravityPoolWindows(_ buckets: [AntigravityPoolBucket]) -> [SubscriptionWindow] {
+        let nonInternal = buckets.filter {
+            let low = $0.modelID.lowercased()
+            return !low.hasPrefix("tab_") && !low.hasPrefix("chat_")
+        }
+        let active = nonInternal.isEmpty ? buckets : nonInternal
+        guard !active.isEmpty else { return [] }
+
+        enum Family: Int { case gemini = 0, thirdParty = 1, other = 2 }
+        struct PoolKey: Hashable {
+            let family: Family
+            let resetKey: String
+            let basisPoints: Int
+        }
+        struct PoolGroup {
+            let key: PoolKey
+            var models: [String]
+            var remainingFraction: Double
+            var resetsAt: Date?
+        }
+
+        func family(of modelID: String) -> Family {
+            let low = modelID.lowercased()
+            if low.hasPrefix("gemini") || low.hasPrefix("gemma") { return .gemini }
+            if low.hasPrefix("claude") || low.hasPrefix("gpt") || low.hasPrefix("o1")
+                || low.hasPrefix("o3") || low.hasPrefix("o4") { return .thirdParty }
+            return .other
+        }
+
+        func baseModelName(_ modelID: String) -> String {
+            var parts = modelID.lowercased().split(separator: "-").map(String.init)
+            let suffixes: Set<String> = ["low", "medium", "high", "xhigh", "tiered", "thinking", "sonar", "preview"]
+            while parts.count > 2, let last = parts.last, suffixes.contains(last) {
+                parts.removeLast()
+            }
+            return parts.joined(separator: "-")
+        }
+
+        func prettyModel(_ base: String) -> String {
+            let upper: Set<String> = ["gpt", "oss"]
+            return base.split(separator: "-").map { raw in
+                let token = String(raw)
+                if upper.contains(token) { return token.uppercased() }
+                if token.first?.isNumber == true { return token }
+                return token.prefix(1).uppercased() + token.dropFirst()
+            }.joined(separator: " ")
+        }
+
+        var groups: [PoolKey: PoolGroup] = [:]
+        for bucket in active {
+            let fam = family(of: bucket.modelID)
+            let bp = Int((bucket.remainingFraction * 10_000).rounded())
+            let key = PoolKey(family: fam, resetKey: bucket.resetTimeRaw, basisPoints: bp)
+            if var existing = groups[key] {
+                existing.models.append(bucket.modelID)
+                if existing.resetsAt == nil { existing.resetsAt = bucket.resetsAt }
+                groups[key] = existing
+            } else {
+                groups[key] = PoolGroup(key: key, models: [bucket.modelID],
+                                        remainingFraction: bucket.remainingFraction,
+                                        resetsAt: bucket.resetsAt)
+            }
+        }
+
+        let geminiGroups = groups.values.filter { $0.key.family == .gemini }
+        var usedNames: [String: Int] = [:]
+
+        func label(for group: PoolGroup) -> (id: String, name: String, rank: Int) {
+            let bases = Array(Set(group.models.map(baseModelName))).sorted()
+            switch group.key.family {
+            case .thirdParty:
+                let hasClaude = bases.contains { $0.hasPrefix("claude") }
+                let hasGPT = bases.contains { $0.hasPrefix("gpt") || $0.hasPrefix("o1") || $0.hasPrefix("o3") || $0.hasPrefix("o4") }
+                if hasClaude && hasGPT { return ("claude-gpt", "Claude / GPT", 20) }
+                if hasClaude { return ("claude", "Claude", 21) }
+                return ("gpt", "GPT", 22)
+            case .gemini:
+                if geminiGroups.count == 1 { return ("gemini", "Gemini", 0) }
+                if bases.count == 1, let only = bases.first {
+                    return (only, prettyModel(only), 5)
+                }
+                if bases.allSatisfy({ $0.contains("pro") }) { return ("gemini-pro", "Gemini Pro", 1) }
+                if bases.allSatisfy({ $0.contains("flash") }) { return ("gemini-flash", "Gemini Flash", 2) }
+                return ("gemini", "Gemini", 0)
+            case .other:
+                let first = bases.first ?? group.models[0]
+                return (first, prettyModel(first), 30)
+            }
+        }
+
+        let ordered = groups.values.map { group -> (group: PoolGroup, meta: (id: String, name: String, rank: Int)) in
+            (group, label(for: group))
+        }.sorted { a, b in
+            if a.meta.rank != b.meta.rank { return a.meta.rank < b.meta.rank }
+            if a.meta.name != b.meta.name { return a.meta.name < b.meta.name }
+            return a.group.key.resetKey < b.group.key.resetKey
+        }
+
+        return ordered.map { item in
+            let count = usedNames[item.meta.id, default: 0]
+            usedNames[item.meta.id] = count + 1
+            let windowID = count == 0 ? item.meta.id : "\(item.meta.id)-\(count + 1)"
+            let windowName = count == 0 ? item.meta.name : "\(item.meta.name) #\(count + 1)"
+            let used = max(0, min(100, (1.0 - item.group.remainingFraction) * 100.0))
+            return SubscriptionWindow(id: windowID, name: windowName, duration: nil,
+                                      usedPercent: used, resetsAt: item.group.resetsAt)
         }
     }
 

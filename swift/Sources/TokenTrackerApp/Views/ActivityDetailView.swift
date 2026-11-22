@@ -294,10 +294,7 @@ private struct ActivityDetailRow: View {
 
 private func activityDetailDate(_ ms: Int64?) -> String {
     guard let ms, ms > 0 else { return L10n.text("未知时间") }
-    let formatter = DateFormatter()
-    formatter.locale = L10n.locale
-    formatter.setLocalizedDateFormatFromTemplate("MMMdHHmmss")
-    return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
+    return UIFormat.localizedDate(Date(timeIntervalSince1970: Double(ms) / 1000), template: "MMMdHHmmss")
 }
 
 private func activityDetailKind(_ kind: ActivityKind) -> String {

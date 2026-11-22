@@ -759,7 +759,17 @@
 "活跃小时" = "Active hours";
 "峰值小时" = "Peak hour";
 "每格 1 小时，浅色格为尚未到来的时段，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Each cell is 1 hour; pale cells are hours still to come and gray cells have no recorded usage. Includes input, output and cache tokens.";
+"每格 1 天，浅色格为本月尚未到来的日期，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Each cell is 1 day; pale cells are remaining days this month and gray cells have no recorded usage. Includes input, output and cache tokens.";
 "每格 1 天，范围前的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。" = "Each cell is 1 day; days before the range are faded and gray cells have no recorded usage. Includes input, output and cache tokens.";
+"周一" = "Mon";
+"周二" = "Tue";
+"周三" = "Wed";
+"周四" = "Thu";
+"周五" = "Fri";
+"周六" = "Sat";
+"周日" = "Sun";
+"周合计" = "Weekly total";
+"{0}/{1} 天" = "{0}/{1}d";
 "所选范围另有 {0} Token 仅能定位到天，未分摊到小时。" = "Another {0} tokens in this range can only be dated to the day and are not spread across hours.";
 "悬停或点选格子查看明细" = "Hover or select a cell for details";
 "Token 构成" = "Token breakdown";
@@ -1049,3 +1059,19 @@
 "项目 Token 构成" = "Token Breakdown by Project";
 "项目占比" = "Project Share";
 "高消耗会话" = "Top Sessions";
+
+/* Antigravity quota and task notifications */
+"自动读取本机登录" = "Auto-read local sign-in";
+"账号由 TokenTracker 自己登录并续期，与其他软件的登录互不影响；凭据保存在 ~/.tokentracker/subscription_accounts.json（仅本人可读）。导入只复制一次 API Key；Antigravity 以只读方式自动读取本机登录态，不修改原工具凭据。" = "TokenTracker signs in and renews these accounts itself, independent of other apps' sign-ins. Credentials are stored in ~/.tokentracker/subscription_accounts.json (readable only by you). Importing copies API keys once; Antigravity reads local sign-in credentials read-only without modifying the source app.";
+"配置已保存；新会话或下轮对话结束后将收到 Antigravity 通知。" = "Saved; you will receive Antigravity notifications on new sessions or after the next turn.";
+
+/* Overview today pulse */
+"此刻 {0}" = "Now {0}";
+"{0} · 活跃 1 小时" = "{0} · 1 active hour";
+"活跃 {0} 小时（{1}）" = "{0} active hours ({1})";
+"较昨日同刻 {0}" = "{0} vs. yesterday";
+"今日主要会话" = "Top Sessions Today";
+"切到柱图" = "Bar Chart";
+"切回脉冲面板" = "Pulse View";
+"活跃 ≥ 3 小时自动切回小时柱图" = "Switches to hourly bars at 3+ active hours";
+"点击可看详情" = "Click for details";

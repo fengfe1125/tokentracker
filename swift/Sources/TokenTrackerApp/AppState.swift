@@ -77,6 +77,8 @@ final class AppState: ObservableObject {
     @Published var statSummary = UsageStore.TimeSummary(unallocatedTokens: 0, unallocatedCost: 0,
                                                         unallocatedEvents: 0, estimatedTokens: 0)
     @Published var dailyRows: [UsageStore.DailyRow] = []
+    /// 仅在 range == "day" 时填充：昨日截至当前相同时刻的可计数总 Token，用于概览今日脉冲对比。
+    @Published var yesterdaySameTimeTokens: Int64?
     let heatmap: UsageHeatmapModel
     @Published private(set) var dataLoading = false
     @Published private(set) var loadedRange: String?
@@ -150,6 +152,8 @@ final class AppState: ObservableObject {
     private let queryQueue = DispatchQueue(label: "tokentracker.query")
     /// 上报独占一条队列：网络最长阻塞 12 秒，不能占着查询队列。
     private let publishQueue = DispatchQueue(label: "tokentracker.publish")
+    /// 5s 轮询文件变更检测队列：不在主线程读磁盘或解码 JSON。
+    private let pollQueue = DispatchQueue(label: "tokentracker.poll", qos: .utility)
     private let isPreview = ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1"
     private let publishTokenStore: KeychainPublishTokenStore
     private let publishHistoryStore: PublishHistoryStore
@@ -159,6 +163,8 @@ final class AppState: ObservableObject {
     private var priceSyncTimer: Timer?
     private var priceSyncTask: Task<Void, Never>?
     private var settingsFingerprint: String = ""
+    private var pollInFlight = false
+    private let pollStateBox = PollFileStateBox()
 
     /// 数值刷新闪光（状态栏动画）；由 StatusItemController 消费。
     var onTokensChanged: (() -> Void)?
@@ -325,10 +331,7 @@ final class AppState: ObservableObject {
         // 5s 轮询：扫描状态 + 设置热生效（对齐 menubar.py tt_loop）
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.pollScanStatus()
-                self?.reloadSettingsIfChanged()
-                self?.reloadPriceSyncStatus()
-                if self?.selection == .settings { self?.refreshPublishInfo(refreshToken: false) }
+                self?.pollTick()
             }
         }
         // 60s 数据刷新
@@ -357,6 +360,54 @@ final class AppState: ObservableObject {
     }
 
     // ------------------------------------------------------------ 轮询 ----
+
+    private var publishStatePath: String {
+        isPreview
+            ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json"
+            : NSHomeDirectory() + "/.tokentracker/publish_state.json"
+    }
+
+    private func pollTick() {
+        pollScanStatus()
+        guard !pollInFlight else { return }
+        pollInFlight = true
+        let settingsPath = settingsStore.path
+        let pricesPath = priceCatalogPath
+        let checkPublish = selection == .settings
+        let statePath = publishStatePath
+        let historyStore = publishHistoryStore
+        let box = pollStateBox
+        pollQueue.async { [weak self] in
+            let settingsChanged = box.checkChanged(path: settingsPath, slot: .settings)
+            var priceUpdate: (status: String, message: String, lastSuccessAtMs: Int64)?
+            if box.checkChanged(path: pricesPath, slot: .prices) {
+                let catalog = PriceCatalogDocument.load(from: pricesPath)
+                priceUpdate = (catalog.syncStatus, catalog.syncMessage, catalog.lastSuccessAtMs)
+            }
+            var publishUpdate: (state: PublishState, history: [PublishAttempt])?
+            if checkPublish {
+                let stateChanged = box.checkChanged(path: statePath, slot: .publishState)
+                let historyChanged = box.checkChanged(path: historyStore.path, slot: .publishHistory)
+                if stateChanged || historyChanged {
+                    publishUpdate = (PublishState.load(path: statePath), historyStore.load())
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pollInFlight = false
+                if settingsChanged { self.reloadSettingsIfChanged() }
+                if let priceUpdate {
+                    self.applyPriceSyncStatus(status: priceUpdate.status,
+                                              message: priceUpdate.message,
+                                              lastSuccessAtMs: priceUpdate.lastSuccessAtMs)
+                }
+                if let publishUpdate {
+                    if self.publishState != publishUpdate.state { self.publishState = publishUpdate.state }
+                    if self.publishHistory != publishUpdate.history { self.publishHistory = publishUpdate.history }
+                }
+            }
+        }
+    }
 
     private func pollScanStatus() {
         let snap = scheduler?.snapshot() ?? ScanSchedulerStatus()
@@ -444,9 +495,15 @@ final class AppState: ObservableObject {
 
     private func reloadPriceSyncStatus() {
         let catalog = PriceCatalogDocument.load(from: priceCatalogPath)
-        priceSyncState = catalog.syncStatus
-        priceSyncMessage = catalog.syncMessage
-        priceSyncLastSuccessAtMs = catalog.lastSuccessAtMs
+        applyPriceSyncStatus(status: catalog.syncStatus,
+                             message: catalog.syncMessage,
+                             lastSuccessAtMs: catalog.lastSuccessAtMs)
+    }
+
+    private func applyPriceSyncStatus(status: String, message: String, lastSuccessAtMs: Int64) {
+        if priceSyncState != status { priceSyncState = status }
+        if priceSyncMessage != message { priceSyncMessage = message }
+        if priceSyncLastSuccessAtMs != lastSuccessAtMs { priceSyncLastSuccessAtMs = lastSuccessAtMs }
     }
 
     // ------------------------------------------------------ 公开统计 ----
@@ -540,11 +597,14 @@ final class AppState: ObservableObject {
     }
 
     func refreshPublishInfo(refreshToken: Bool = true) {
-        publishState = PublishState.load(path: isPreview ? (readStore.path as NSString).deletingLastPathComponent + "/publish_state.json" : NSHomeDirectory() + "/.tokentracker/publish_state.json")
-        publishHistory = publishHistoryStore.load()
+        let nextState = PublishState.load(path: publishStatePath)
+        if publishState != nextState { publishState = nextState }
+        let nextHistory = publishHistoryStore.load()
+        if publishHistory != nextHistory { publishHistory = nextHistory }
         if refreshToken {
             let handle = prefs.publishHandle
-            publishTokenConfigured = !isPreview && publishTokenStore.read(handle: handle) != nil
+            let configured = !isPreview && publishTokenStore.read(handle: handle) != nil
+            if publishTokenConfigured != configured { publishTokenConfigured = configured }
         }
     }
 
@@ -584,6 +644,9 @@ final class AppState: ObservableObject {
         if statTotal != snapshot.total { statTotal = snapshot.total }
         if statSummary != snapshot.summary { statSummary = snapshot.summary }
         if dailyRows != snapshot.daily { dailyRows = snapshot.daily }
+        if yesterdaySameTimeTokens != snapshot.yesterdaySameTimeTokens {
+            yesterdaySameTimeTokens = snapshot.yesterdaySameTimeTokens
+        }
         if modelRows != snapshot.models { modelRows = snapshot.models }
         if search == sessionSearch, sessionRows != snapshot.sessions {
             sessionRows = snapshot.sessions
@@ -1027,6 +1090,7 @@ private final class OverviewQueryLoader: @unchecked Sendable {
         let total: UsageStore.ToolStats
         let summary: UsageStore.TimeSummary
         let daily: [UsageStore.DailyRow]
+        let yesterdaySameTimeTokens: Int64?
         let models: [UsageStore.ModelRow]
         let sessions: [UsageStore.SessionRow]
     }
@@ -1105,6 +1169,10 @@ private final class OverviewQueryLoader: @unchecked Sendable {
                 if range == "day" { dayAllDaily = allDaily }
                 let daily = tool.map { selected in allDaily.filter { $0.tool == selected } } ?? allDaily
                 try cancellation.check()
+                let yesterdayTokens: Int64? = range == "day"
+                    ? try store.yesterdaySameTimeTokens(tool: tool)
+                    : nil
+                try cancellation.check()
                 let models = try store.models(rangeKey: range, tool: tool)
                 try cancellation.check()
                 let sessions = try store.sessions(
@@ -1115,7 +1183,8 @@ private final class OverviewQueryLoader: @unchecked Sendable {
                     includeMetadata: fullSessions)
                 scopeSnapshot = ScopeSnapshot(
                     rows: rows, total: total, summary: summary,
-                    daily: daily, models: models, sessions: sessions)
+                    daily: daily, yesterdaySameTimeTokens: yesterdayTokens,
+                    models: models, sessions: sessions)
                 scopeCache[key] = scopeSnapshot
             }
 
@@ -1148,6 +1217,8 @@ private final class OverviewQueryLoader: @unchecked Sendable {
                 let dayKey = ScopeKey(range: "day", tool: nil, search: "", fullSessions: false)
                 if scopeCache[dayKey] == nil, let dayStats = loadedDayStats, let dayDaily = loadedDayDaily {
                     try cancellation.check()
+                    let dayYesterday = try store.yesterdaySameTimeTokens(tool: nil)
+                    try cancellation.check()
                     let dayModels = try store.models(rangeKey: "day", tool: nil)
                     try cancellation.check()
                     let daySessions = try store.sessions(
@@ -1156,7 +1227,8 @@ private final class OverviewQueryLoader: @unchecked Sendable {
                         roots: nil, includeMetadata: false)
                     scopeCache[dayKey] = ScopeSnapshot(
                         rows: dayStats.rows, total: dayStats.total, summary: dayStats.summary,
-                        daily: dayDaily, models: dayModels, sessions: daySessions)
+                        daily: dayDaily, yesterdaySameTimeTokens: dayYesterday,
+                        models: dayModels, sessions: daySessions)
                 }
             }
 
@@ -1179,5 +1251,39 @@ private final class OverviewQueryLoader: @unchecked Sendable {
             dataVersion = nil
             throw error
         }
+    }
+}
+
+/// 在后台轮询队列上记录文件修改时间与体积，文件未变化时跳过磁盘读取与 JSON 解码。
+private final class PollFileStateBox: @unchecked Sendable {
+    enum Slot: Hashable { case settings, prices, publishState, publishHistory }
+
+    private struct Stamp: Equatable {
+        let exists: Bool
+        let modified: TimeInterval
+        let size: UInt64
+    }
+
+    private var stamps: [Slot: Stamp] = [:]
+
+    func checkChanged(path: String, slot: Slot) -> Bool {
+        let current = readStamp(path: path)
+        if let previous = stamps[slot] {
+            if previous == current { return false }
+            stamps[slot] = current
+            return true
+        }
+        // 首次轮询先记下基线（AppState.init 已加载过初始值），避免第 5 秒无故全量解码。
+        stamps[slot] = current
+        return false
+    }
+
+    private func readStamp(path: String) -> Stamp {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return Stamp(exists: false, modified: 0, size: 0)
+        }
+        let mod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        return Stamp(exists: true, modified: mod, size: size)
     }
 }

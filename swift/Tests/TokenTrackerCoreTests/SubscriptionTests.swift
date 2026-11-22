@@ -642,4 +642,301 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.account.provider), [.claude, .claude, .deepseek])
         XCTAssertTrue(ordered[0].account.isActive)
     }
+
+    // ---------------------------------------------------- Antigravity ----
+
+    func testAntigravityLocalKeychainGoKeyringAndAppStorageFallback() throws {
+        let appSupport = home.appendingPathComponent("Library/Application Support/Antigravity")
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "jetski.onboarding.lastLoginUsername": "fallback@example.com",
+        ]).write(to: appSupport.appendingPathComponent("app_storage.json"))
+
+        let payload: [String: Any] = [
+            "auth_method": "consumer",
+            "writer_id": "writer-abc-123",
+            "id_token_email": "ag.user@example.com",
+            "token": [
+                "access_token": "ya29.fixture-access-token-value",
+                "refresh_token": "1//fixture-refresh-token",
+                "expiry": "2026-11-22T00:59:44.902906+07:00",
+                "token_type": "Bearer",
+            ],
+        ]
+        let b64 = try JSONSerialization.data(withJSONObject: payload).base64EncodedString()
+        let reader = AntigravityLocalCredentials(home: home.path, keychainRead: { "go-keyring-base64:" + b64 })
+        let accounts = reader.discover()
+        XCTAssertEqual(accounts.count, 1)
+        let ag = try XCTUnwrap(accounts.first)
+        XCTAssertEqual(ag.provider, .antigravity)
+        XCTAssertEqual(ag.label, "ag.user@example.com")
+        XCTAssertEqual(ag.credential?.token, "ya29.fixture-access-token-value")
+        XCTAssertNotNil(ag.credential?.expiresAt, "带微秒与时区偏移的 ISO8601 过期时间应正确解析")
+        XCTAssertTrue(ag.isActive)
+        XCTAssertTrue(ag.isAutoDiscovered)
+        XCTAssertEqual(ag.sources.first, SubscriptionSource(tool: "Antigravity", location: "钥匙串"))
+
+        // 缺少 id_token_email 时回退读取 app_storage.json 的用户名。
+        var noEmail = payload
+        noEmail.removeValue(forKey: "id_token_email")
+        let b64NoEmail = try JSONSerialization.data(withJSONObject: noEmail).base64EncodedString()
+        let fallbackReader = AntigravityLocalCredentials(home: home.path, keychainRead: { "go-keyring-base64:" + b64NoEmail })
+        XCTAssertEqual(fallbackReader.discover().first?.label, "fallback@example.com")
+    }
+
+    func testAntigravityLocalStateVSCDBProtobufAndAuthStatus() throws {
+        func protoVarint(_ value: UInt64) -> [UInt8] {
+            var v = value
+            var out: [UInt8] = []
+            while true {
+                var byte = UInt8(v & 0x7F)
+                v >>= 7
+                if v != 0 { byte |= 0x80 }
+                out.append(byte)
+                if v == 0 { break }
+            }
+            return out
+        }
+        func protoBytes(field: UInt64, _ data: [UInt8]) -> [UInt8] {
+            protoVarint((field << 3) | 2) + protoVarint(UInt64(data.count)) + data
+        }
+        func protoString(field: UInt64, _ text: String) -> [UInt8] {
+            protoBytes(field: field, Array(text.utf8))
+        }
+
+        // 构造嵌套 base64 protobuf（模拟 antigravityUnifiedStateSync.oauthToken 结构）。
+        let innerProto = protoString(field: 1, "ya29.vscdb-fixture-token-1234567890")
+            + protoString(field: 2, "1//vscdb-refresh-fixture")
+            + protoVarint((3 << 3) | 0) + protoVarint(1_900_000_000)
+        let innerB64 = Data(innerProto).base64EncodedString()
+        let outerProto = protoString(field: 1, "oauthTokenInfoSentinelKey") + protoString(field: 2, innerB64)
+        let outerB64 = Data(outerProto).base64EncodedString()
+
+        let vscdbDir = home.appendingPathComponent("Library/Application Support/Antigravity IDE/User/globalStorage")
+        try FileManager.default.createDirectory(at: vscdbDir, withIntermediateDirectories: true)
+        let dbPath = vscdbDir.appendingPathComponent("state.vscdb").path
+        let conn = try SQLiteConnection(path: dbPath)
+        try conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+        try conn.execute("INSERT INTO ItemTable VALUES (?, ?)", [
+            "antigravityAuthStatus",
+            #"{"email":"ide.user@example.com"}"#,
+        ])
+        try conn.execute("INSERT INTO ItemTable VALUES (?, ?)", [
+            "antigravityUnifiedStateSync.oauthToken",
+            outerB64,
+        ])
+
+        let reader = AntigravityLocalCredentials(home: home.path, keychainRead: { nil })
+        let accounts = reader.discover()
+        XCTAssertEqual(accounts.count, 1)
+        let ag = try XCTUnwrap(accounts.first)
+        XCTAssertEqual(ag.provider, .antigravity)
+        XCTAssertEqual(ag.label, "ide.user@example.com")
+        XCTAssertEqual(ag.credential?.token, "ya29.vscdb-fixture-token-1234567890")
+        XCTAssertEqual(ag.credential?.expiresAt, Date(timeIntervalSince1970: 1_900_000_000))
+        XCTAssertTrue(ag.isAutoDiscovered)
+        XCTAssertEqual(ag.sources.first?.tool, "Antigravity IDE")
+    }
+
+    func testAntigravityQuotaPoolingFallbackAndHostGuard() {
+        let fake = FakeTransport { request in
+            XCTAssertEqual(request.url.host, "daily-cloudcode-pa.googleapis.com")
+            XCTAssertTrue(request.headers["User-Agent"]?.hasPrefix("antigravity/hub/") == true)
+            switch request.url.path {
+            case "/v1internal:loadCodeAssist":
+                return SubscriptionResponse(status: 200, json: [
+                    "cloudaicompanionProject": "managed-proj-fixture",
+                    "paidTier": ["name": "Google AI Pro"],
+                    "currentTier": ["name": "Antigravity"],
+                ])
+            case "/v1internal:retrieveUserQuota":
+                return SubscriptionResponse(status: 200, json: [
+                    "buckets": [
+                        ["modelId": "claude-opus-5-5-high", "remainingFraction": 0, "resetTime": "2026-11-21T18:58:26Z"],
+                        ["modelId": "claude-sonnet-5-5-low", "remainingFraction": 0, "resetTime": "2026-11-21T18:58:26Z"],
+                        ["modelId": "gpt-oss-120b-medium", "remainingFraction": 0, "resetTime": "2026-11-21T18:58:26Z"],
+                        ["modelId": "gemini-3.8-flash-high", "remainingFraction": 0.04, "resetTime": "2026-11-21T19:30:20Z"],
+                        ["modelId": "gemini-4-neon-xhigh", "remainingFraction": 0.04, "resetTime": "2026-11-21T19:30:20Z"],
+                        ["modelId": "gemini-4-argon-high", "remainingFraction": 1, "resetTime": "2026-11-28T17:23:15Z"],
+                        ["modelId": "gemini-4-argon-low", "remainingFraction": 1, "resetTime": "2026-11-28T17:23:15Z"],
+                        ["modelId": "tab_flash_lite_preview", "remainingFraction": 1],
+                    ],
+                ])
+            default:
+                return SubscriptionResponse(status: 404)
+            }
+        }
+        let snapshot = SubscriptionAdapters.fetch(account(.antigravity, "ya29.tok", kind: .oauth, active: true), ctx(fake))
+        XCTAssertEqual(snapshot.status, .current)
+        XCTAssertEqual(snapshot.plan, "Google AI Pro")
+        XCTAssertTrue(snapshot.privateAPI)
+        XCTAssertEqual(snapshot.windows.map(\.name), ["Gemini", "Gemini 4 Argon", "Claude / GPT"])
+        XCTAssertEqual(snapshot.windows[0].usedPercent ?? -1, 96, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[1].usedPercent ?? -1, 0, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[2].usedPercent ?? -1, 100, accuracy: 0.01)
+        XCTAssertNotNil(snapshot.windows[0].resetsAt)
+        XCTAssertNil(snapshot.windows[0].duration)
+
+        // 回退路径：retrieveUserQuota 返回 404 时改用 fetchAvailableModels，缺失 remainingFraction 视为已用尽。
+        let fallbackFake = FakeTransport { request in
+            switch request.url.path {
+            case "/v1internal:loadCodeAssist":
+                return SubscriptionResponse(status: 200, json: ["cloudaicompanionProject": "proj", "paidTier": ["name": "Pro"]])
+            case "/v1internal:retrieveUserQuota":
+                return SubscriptionResponse(status: 404)
+            case "/v1internal:fetchAvailableModels":
+                return SubscriptionResponse(status: 200, json: [
+                    "models": [
+                        "gemini-3-flash": ["quotaInfo": ["remainingFraction": 0.25, "resetTime": "2026-11-21T20:00:00Z"]],
+                        "claude-opus-5-5-high": ["quotaInfo": ["resetTime": "2026-11-21T19:00:00Z"]],
+                    ],
+                ])
+            default:
+                return SubscriptionResponse(status: 500)
+            }
+        }
+        let fallback = SubscriptionAdapters.fetch(account(.antigravity, "ya29.tok", kind: .oauth), ctx(fallbackFake))
+        XCTAssertEqual(fallback.status, .current)
+        XCTAssertEqual(fallback.windows.map(\.name), ["Gemini", "Claude"])
+        XCTAssertEqual(fallback.windows[0].usedPercent ?? -1, 75, accuracy: 0.01)
+        XCTAssertEqual(fallback.windows[1].usedPercent ?? -1, 100, accuracy: 0.01)
+
+        // 非登记域名（含 cloudcode-pa.googleapis.com）不得携带 Antigravity 凭据。
+        XCTAssertEqual(
+            SubscriptionAdapters.send(.antigravity,
+                                      SubscriptionRequest(url: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!),
+                                      ctx(fake)).failure,
+            .blocked)
+    }
+
+    func testAutoDiscoveredAntigravityRecoversWhenLocalTokenRefreshes() throws {
+        let clock = Clock()
+        final class TokenBox: @unchecked Sendable {
+            let lock = NSLock()
+            var token = "ya29.expired-token"
+            var expiresAt = Date(timeIntervalSince1970: 1_799_999_000)
+        }
+        let box = TokenBox()
+        let fake = FakeTransport { request in
+            switch request.url.path {
+            case "/v1internal:loadCodeAssist":
+                return SubscriptionResponse(status: 200, json: ["cloudaicompanionProject": "proj", "paidTier": ["name": "Pro"]])
+            case "/v1internal:retrieveUserQuota":
+                return SubscriptionResponse(status: 200, json: [
+                    "buckets": [["modelId": "gemini-3-flash", "remainingFraction": 0.6, "resetTime": "2026-11-21T20:00:00Z"]],
+                ])
+            default:
+                return SubscriptionResponse(status: 404)
+            }
+        }
+        let s = SubscriptionService(store: store, transport: fake.transport, cachePath: nil, clock: { clock.now }) {
+            box.lock.lock(); let tok = box.token; let exp = box.expiresAt; box.lock.unlock()
+            var acc = SubscriptionAccount(
+                provider: .antigravity, label: "me@example.com",
+                source: SubscriptionSource(tool: "Antigravity", location: "钥匙串"),
+                isActive: true, isAutoDiscovered: true,
+                credential: SubscriptionCredential(kind: .oauth, token: tok, expiresAt: exp),
+                providerAccountID: "writer-1")
+            acc.id = "antigravity:local-fixture"
+            return [acc]
+        }
+        s.discover()
+        s.refresh()
+        XCTAssertEqual(s.cards().first?.snapshot.status, .expired)
+        XCTAssertEqual(fake.count, 0, "过期令牌不发请求")
+
+        // Antigravity 在本地续期新令牌后，下一次 60s 发现与刷新应立即恢复，不等 5 分钟 TTL。
+        box.lock.lock()
+        box.token = "ya29.fresh-token"
+        box.expiresAt = clock.now.addingTimeInterval(3600)
+        box.lock.unlock()
+        clock.now += 30
+        XCTAssertTrue(s.discover())
+        s.refresh()
+        XCTAssertEqual(s.cards().first?.snapshot.status, .current)
+        XCTAssertEqual(s.cards().first?.snapshot.windows.first?.usedPercent ?? -1, 40, accuracy: 0.01)
+    }
+
+    func testAutoDiscoveredAntigravityRefreshesInMemoryWithRefreshToken() throws {
+        let clock = Clock()
+        final class Counter: @unchecked Sendable {
+            let lock = NSLock()
+            var oauthCalls = 0
+            var quotaCalls = 0
+            var rejectOAuth = false
+        }
+        let counter = Counter()
+        let fake = FakeTransport { request in
+            if request.url.host == "oauth2.googleapis.com" {
+                counter.lock.lock()
+                counter.oauthCalls += 1
+                let reject = counter.rejectOAuth
+                counter.lock.unlock()
+                let body = request.body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                XCTAssertTrue(body.contains("grant_type=refresh_token"))
+                XCTAssertTrue(body.contains("refresh_token=1%2F%2Ffixture-refresh-token"))
+                if reject {
+                    return SubscriptionResponse(status: 400, json: ["error": "invalid_grant"])
+                }
+                return SubscriptionResponse(status: 200, json: [
+                    "access_token": "ya29.ephemeral-refreshed",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                ])
+            }
+            XCTAssertEqual(request.url.host, "daily-cloudcode-pa.googleapis.com")
+            XCTAssertEqual(request.headers["Authorization"], "Bearer ya29.ephemeral-refreshed")
+            switch request.url.path {
+            case "/v1internal:loadCodeAssist":
+                return SubscriptionResponse(status: 200, json: ["cloudaicompanionProject": "proj", "paidTier": ["name": "Google AI Pro"]])
+            case "/v1internal:retrieveUserQuota":
+                counter.lock.lock(); counter.quotaCalls += 1; counter.lock.unlock()
+                return SubscriptionResponse(status: 200, json: [
+                    "buckets": [["modelId": "gemini-3-flash", "remainingFraction": 0.7, "resetTime": "2026-11-21T20:00:00Z"]],
+                ])
+            default:
+                return SubscriptionResponse(status: 404)
+            }
+        }
+
+        let s = SubscriptionService(store: store, transport: fake.transport, cachePath: nil, clock: { clock.now }) {
+            var acc = SubscriptionAccount(
+                provider: .antigravity, label: "me@example.com",
+                source: SubscriptionSource(tool: "Antigravity", location: "钥匙串"),
+                isActive: true, isAutoDiscovered: true,
+                credential: SubscriptionCredential(
+                    kind: .oauth,
+                    token: "ya29.expired-keychain-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_799_999_000),
+                    refreshToken: "1//fixture-refresh-token"),
+                providerAccountID: "writer-1")
+            acc.id = "antigravity:local-fixture"
+            return [acc]
+        }
+
+        // 1. 钥匙串 access_token 已过期，但存在 refresh_token：自动在内存中换取访问令牌并查询成功，且不写入账号库。
+        s.discover()
+        s.refresh()
+        XCTAssertEqual(s.cards().first?.snapshot.status, .current)
+        XCTAssertEqual(s.cards().first?.snapshot.plan, "Google AI Pro")
+        XCTAssertEqual(s.cards().first?.snapshot.windows.first?.usedPercent ?? -1, 30, accuracy: 0.01)
+        XCTAssertEqual(counter.oauthCalls, 1)
+        XCTAssertEqual(counter.quotaCalls, 1)
+        XCTAssertTrue(store.load().isEmpty, "只读本机凭据换取的短期令牌不得写入账号库")
+
+        // 2. 5 分钟后再次刷新：直接复用内存中尚在有效期内的短期访问令牌，不重复请求 oauth2.googleapis.com。
+        clock.now += 6 * 60
+        s.refresh()
+        XCTAssertEqual(s.cards().first?.snapshot.status, .current)
+        XCTAssertEqual(counter.oauthCalls, 1)
+        XCTAssertEqual(counter.quotaCalls, 2)
+
+        // 3. 1 小时后短期令牌过期且远端吊销 refresh_token：上报 unauthorized（stale 保留上次快照并标注失效）。
+        counter.lock.lock(); counter.rejectOAuth = true; counter.lock.unlock()
+        clock.now += 60 * 60
+        s.refresh()
+        XCTAssertEqual(counter.oauthCalls, 2)
+        XCTAssertEqual(s.cards().first?.snapshot.status, .stale)
+        XCTAssertEqual(s.cards().first?.snapshot.problem, .unauthorized)
+    }
 }

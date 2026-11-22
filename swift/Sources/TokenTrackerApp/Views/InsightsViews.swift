@@ -188,6 +188,8 @@ struct ProjectCreateSheet: View {
 
 func usageIntervalLabel(_ query:UsageQuery) -> String {
     guard let start=query.start,let end=query.end else { return L10n.text("全部历史（含时间未分配记录）") }
-    let formatter=DateFormatter();formatter.timeZone=TimeZone(identifier:query.timeZoneID);formatter.locale=L10n.locale;formatter.setLocalizedDateFormatFromTemplate("yyyyMMMdHHmm")
-    return formatter.string(from:Date(timeIntervalSince1970:Double(start)/1000))+" — "+formatter.string(from:Date(timeIntervalSince1970:Double(end)/1000))+" · "+query.timeZoneID
+    let zone = TimeZone(identifier: query.timeZoneID) ?? .current
+    let startStr = UIFormat.localizedDate(Date(timeIntervalSince1970: Double(start)/1000), template: "yyyyMMMdHHmm", locale: L10n.locale, timeZone: zone)
+    let endStr = UIFormat.localizedDate(Date(timeIntervalSince1970: Double(end)/1000), template: "yyyyMMMdHHmm", locale: L10n.locale, timeZone: zone)
+    return startStr + " — " + endStr + " · " + query.timeZoneID
 }

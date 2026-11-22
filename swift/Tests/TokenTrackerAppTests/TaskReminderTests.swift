@@ -21,7 +21,45 @@ final class TaskReminderTests: XCTestCase {
     func testDefaultOffAndLocalPreferences() {
         let prefs = TaskReminderPreferences(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         XCTAssertFalse(prefs.enabled); XCTAssertFalse(prefs.system); XCTAssertFalse(prefs.sound)
-        XCTAssertFalse(prefs.accepts(.codex)); XCTAssertFalse(prefs.accepts(.claude))
+        XCTAssertFalse(prefs.accepts(.codex)); XCTAssertFalse(prefs.accepts(.claude)); XCTAssertFalse(prefs.accepts(.antigravity))
+    }
+
+    func testAntigravityMultiTurnStopDedupeAndUserCancelIgnored() throws {
+        let root = URL(fileURLWithPath: "/tmp/tt-tasks-ag-test-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let prefs = TaskReminderPreferences(defaults: defaults)
+        prefs.enabled = true
+        prefs.antigravity = true
+        let model = TaskReminderModel(preferences: prefs, history: root.appendingPathComponent("history.json"))
+
+        func agEvent(_ obj: [String: Any]) throws -> TaskHookEvent {
+            var ev = try TaskHookEvent.parse(JSONSerialization.data(withJSONObject: obj),
+                                             provider: .antigravity, sourceApp: "com.google.antigravity")
+            ev.source = TaskClientSource(client: .antigravity, location: .local, confidence: .launchContext)
+            return ev
+        }
+
+        // 第 1 轮：PreInvocation(1) + Stop(exec 1) → 产生 1 条提醒；重复 Stop 去重。
+        model.receive(try agEvent(["hookEventName": "PreInvocation", "conversationId": "c1", "invocationNum": 1, "cwd": "/tmp/MyApp"]))
+        model.receive(try agEvent(["hookEventName": "Stop", "conversationId": "c1", "executionNum": 1, "terminationReason": "NO_TOOL_CALL", "cwd": "/tmp/MyApp"]))
+        model.receive(try agEvent(["hookEventName": "Stop", "conversationId": "c1", "executionNum": 1, "terminationReason": "NO_TOOL_CALL", "cwd": "/tmp/MyApp"]))
+        XCTAssertEqual(model.reminders.count, 1)
+        XCTAssertEqual(model.reminders[0].provider, .antigravity)
+        XCTAssertEqual(model.reminders[0].client, .antigravity)
+        XCTAssertEqual(model.reminders[0].project, "MyApp")
+        XCTAssertEqual(model.reminders[0].state, .ended)
+        XCTAssertNotNil(model.observedClients[.antigravity])
+
+        // 第 2 轮：即便 executionNum 重置为 1，因为 PreInvocation(1) 推进了轮次代数，仍应提醒一次。
+        model.receive(try agEvent(["hookEventName": "PreInvocation", "conversationId": "c1", "invocationNum": 1, "cwd": "/tmp/MyApp"]))
+        model.receive(try agEvent(["hookEventName": "Stop", "conversationId": "c1", "executionNum": 1, "terminationReason": "NO_TOOL_CALL", "cwd": "/tmp/MyApp"]))
+        XCTAssertEqual(model.reminders.count, 2)
+
+        // 用户主动取消：映射为 Interrupt，不产生本轮结束提醒。
+        model.receive(try agEvent(["hookEventName": "PreInvocation", "conversationId": "c1", "invocationNum": 1, "cwd": "/tmp/MyApp"]))
+        model.receive(try agEvent(["hookEventName": "Stop", "conversationId": "c1", "executionNum": 1, "terminationReason": "USER_CANCELED", "cwd": "/tmp/MyApp"]))
+        XCTAssertEqual(model.reminders.count, 2)
     }
     func testClientObservationsAreIndependentAndHistoryRetainsOnlySafeSourceMetadata() throws {
         let root = URL(fileURLWithPath: "/tmp/tt-tasks-test-" + UUID().uuidString)

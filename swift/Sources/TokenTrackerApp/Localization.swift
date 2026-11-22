@@ -92,9 +92,16 @@ enum L10n {
     }
     private final class Storage: @unchecked Sendable {
         let lock = NSLock()
-        var language = AppLanguage(rawValue: LanguageManager.appDefaults.string(forKey: LanguageManager.preferenceKey) ?? "")?
-            .resolved(preferredLanguages: Locale.preferredLanguages)
-            ?? AppLanguage.system.resolved(preferredLanguages: Locale.preferredLanguages)
+        var language: String
+        var locale: Locale
+
+        init() {
+            let resolved = AppLanguage(rawValue: LanguageManager.appDefaults.string(forKey: LanguageManager.preferenceKey) ?? "")?
+                .resolved(preferredLanguages: Locale.preferredLanguages)
+                ?? AppLanguage.system.resolved(preferredLanguages: Locale.preferredLanguages)
+            language = resolved
+            locale = Locale(identifier: resolved)
+        }
     }
     private static let storage = Storage()
     static var language: String {
@@ -102,10 +109,14 @@ enum L10n {
         return storage.language
     }
     static var isEnglish: Bool { language == "en" }
-    static var locale: Locale { Locale(identifier: language) }
+    static var locale: Locale {
+        storage.lock.lock(); defer { storage.lock.unlock() }
+        return storage.locale
+    }
     static func setLanguage(_ value: String) {
         storage.lock.lock(); defer { storage.lock.unlock() }
         storage.language = value
+        storage.locale = Locale(identifier: value)
     }
     // SwiftPM executables look beside the binary; packaged apps carry resources in
     // Contents/Resources. Prefer that location so deployment never depends on .build.
@@ -144,6 +155,7 @@ enum L10n {
     static func render(_ template: Template, language: String) -> String {
         if template.verbatim { return template.key }
         let translated = localizedBundle(language).localizedString(forKey: template.key, value: template.key, table: nil)
+        if template.arguments.isEmpty { return translated }
         // Replace placeholders in a single pass: user text containing {1} stays literal.
         let regex = placeholders
         var result = translated

@@ -26,6 +26,31 @@ func processArguments(_ pid: pid_t) -> [String] {
 }
 
 func clientSource(provider: TaskProvider, host: String?, environment: [String: String]) -> TaskClientSource {
+    if provider == .antigravity {
+        var pid = getppid()
+        var enginePath: String?
+        for _ in 0..<24 {
+            var pathBytes = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            if proc_pidpath(pid, &pathBytes, UInt32(pathBytes.count)) > 0 {
+                let path = String(decoding: pathBytes.prefix(while: { $0 != 0 }), as: UTF8.self)
+                let low = path.lowercased()
+                let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+                if low.contains("antigravity") || name == "agy" || name.contains("language_server") {
+                    enginePath = path
+                    break
+                }
+            }
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+                  info.pbi_ppid > 1, info.pbi_ppid != UInt32(pid) else { break }
+            pid = pid_t(info.pbi_ppid)
+        }
+        let home = NSHomeDirectory()
+        return TaskClientSource.identify(provider: .antigravity, enginePath: enginePath, arguments: [],
+                                         entrypoint: nil, host: host,
+                                         configurationRoot: home + "/.gemini/config", home: home)
+    }
     var pid = getppid()
     for _ in 0..<24 {
         var pathBytes = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
@@ -94,14 +119,19 @@ func run() {
     }
     guard args.count >= 3, let provider = TaskProvider(rawValue: args[1]) else { return }
     let channel = args[2]
-    guard let fd = try? TaskSocket.connect(path: TaskSocket.path(channel: channel)) else { return }
-    defer { Darwin.close(fd) }
     guard var input = readBoundedStdin() else { return }
     let env = ProcessInfo.processInfo.environment
+    if provider == .antigravity {
+        let mapPath = env["TOKENTRACKER_ANTIGRAVITY_WORKSPACES"] ?? AntigravityWorkspaceMap.defaultPath
+        _ = AntigravityWorkspaceMap.recordHookPayload(input, path: mapPath)
+    }
     let terminal = ["Apple_Terminal": "com.apple.Terminal", "iTerm.app": "com.googlecode.iterm2",
                     "WezTerm": "com.github.wez.wezterm", "ghostty": "com.mitchellh.ghostty"]
-    let source = sourceApplication() ?? terminal[env["TERM_PROGRAM"] ?? ""]
+    var source = sourceApplication() ?? terminal[env["TERM_PROGRAM"] ?? ""]
+    if let s = source, s.hasPrefix("com.google.antigravity.") { source = "com.google.antigravity" }
     guard var event = try? TaskHookEvent.parse(input, provider: provider, sourceApp: source) else { return }
+    guard let fd = try? TaskSocket.connect(path: TaskSocket.path(channel: channel)) else { return }
+    defer { Darwin.close(fd) }
     event.source = clientSource(provider: provider, host: source, environment: env)
     guard let data = try? JSONEncoder().encode(event) else { return }
     input.removeAll(keepingCapacity: false)

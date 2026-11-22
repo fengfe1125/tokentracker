@@ -205,7 +205,8 @@ struct AppearanceSettingsSection: View {
     private var notchProviders: [MenuBarQuotaEntry] {
         var entries = state.quotaEntries
         for id in notch.providers where !entries.contains(where: { $0.id == id }) {
-            entries.append(MenuBarQuotaEntry(id: id, name: id == "codex" ? "Codex" : id == "claude" ? "Claude" : id, windows: []))
+            let fallback = ["codex": "Codex", "claude": "Claude", "antigravity": "Antigravity"][id] ?? id
+            entries.append(MenuBarQuotaEntry(id: id, name: fallback, windows: []))
         }
         return entries
     }

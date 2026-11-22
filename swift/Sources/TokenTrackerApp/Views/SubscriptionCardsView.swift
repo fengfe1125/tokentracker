@@ -60,15 +60,20 @@ enum SubscriptionText {
         }
     }
 
-    static func problem(_ snapshot: SubscriptionSnapshot) -> String? {
+    static func problem(_ snapshot: SubscriptionSnapshot, autoDiscovered: Bool = false) -> String? {
         guard let problem = snapshot.problem else {
-            return snapshot.status == .signedOut ? L10n.text("未找到可用凭据，请在设置中重新登录") : nil
+            return snapshot.status == .signedOut
+                ? L10n.text(autoDiscovered ? "未找到可用登录态，请在来源工具中登录" : "未找到可用凭据，请在设置中重新登录")
+                : nil
         }
         let text: String
         switch problem {
-        case .noCredential: text = L10n.text("未找到可用凭据，请在设置中重新登录")
-        case .credentialExpired: text = L10n.text("登录已过期且无法自动续期，请在设置中重新登录")
-        case .unauthorized: text = L10n.text("凭据失效，请在设置中重新登录")
+        case .noCredential:
+            text = L10n.text(autoDiscovered ? "未找到可用登录态，请在来源工具中登录" : "未找到可用凭据，请在设置中重新登录")
+        case .credentialExpired:
+            text = L10n.text(autoDiscovered ? "登录态已过期，打开来源工具后会自动续期" : "登录已过期且无法自动续期，请在设置中重新登录")
+        case .unauthorized:
+            text = L10n.text(autoDiscovered ? "凭据失效，请在来源工具中重新登录" : "凭据失效，请在设置中重新登录")
         case .forbidden: text = L10n.text("账号没有读取额度的权限")
         case .rateLimited: text = L10n.text("接口限流，稍后自动重试")
         case .timeout: text = L10n.text("请求超时，稍后自动重试")
@@ -95,7 +100,7 @@ enum SubscriptionText {
 
     static func sources(_ sources: [SubscriptionSource]) -> String {
         guard let first = sources.first else { return "" }
-        let builtins: Set<String> = ["自有登录", "手动添加"]
+        let builtins: Set<String> = ["自有登录", "手动添加", "钥匙串"]
         func text(_ value: String) -> String {
             if builtins.contains(value) { return L10n.label(value) }
             if value.hasPrefix("导入自 ") {
@@ -146,35 +151,20 @@ enum SubscriptionText {
     }
 
     static func decimal(_ value: Decimal) -> String {
-        let f = NumberFormatter()
-        f.locale = L10n.locale
-        f.numberStyle = .decimal
-        f.maximumFractionDigits = 2
-        return f.string(from: NSDecimalNumber(decimal: value)) ?? "\(value)"
+        UIFormat.decimal(value, locale: L10n.locale)
     }
 
     /// 金额保留两位小数，不经过 Double。
     static func money(_ value: Decimal?, currency: String) -> String {
         guard let value else { return "—" }
-        let f = NumberFormatter()
-        f.locale = L10n.locale
-        f.numberStyle = .currency
-        f.currencyCode = currency
-        f.minimumFractionDigits = 2
-        f.maximumFractionDigits = 2
-        return f.string(from: NSDecimalNumber(decimal: value)) ?? "\(value) \(currency)"
+        return UIFormat.currency(value, code: currency, locale: L10n.locale)
     }
 
     static func time(_ date: Date, relative: Bool = false, now: Date = Date()) -> String {
         if relative && date > now && date.timeIntervalSince(now) < 36 * 3600 {
-            let f = RelativeDateTimeFormatter()
-            f.locale = L10n.locale
-            f.unitsStyle = .short
-            return f.localizedString(for: date, relativeTo: now)
+            return UIFormat.relativeShort(date, relativeTo: now, locale: L10n.locale)
         }
-        let f = DateFormatter()
-        f.locale = L10n.locale
-        f.setLocalizedDateFormatFromTemplate(Calendar.current.isDate(date, inSameDayAs: now) ? "HH:mm" : "MMMdHH:mm")
-        return f.string(from: date)
+        let template = Calendar.current.isDate(date, inSameDayAs: now) ? "HH:mm" : "MMMdHH:mm"
+        return UIFormat.localizedDate(date, template: template, locale: L10n.locale)
     }
 }

@@ -71,17 +71,15 @@ struct ReportsView: View {
     private var previewWeekText: String {
         let interval = WeeklyReport.previousCompletedWeekInterval(before: week, in: .current)
         let lastDay = interval.end.addingTimeInterval(-1)
-        let formatter = DateFormatter()
-        formatter.locale = L10n.locale
-        formatter.timeZone = .current
-        formatter.setLocalizedDateFormatFromTemplate("MMMd")
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         calendar.firstWeekday = 2
         calendar.minimumDaysInFirstWeek = 4
         let yearValue = calendar.component(.year, from: interval.start)
         let weekNum = calendar.component(.weekOfYear, from: interval.start)
-        let rangeText = "\(formatter.string(from: interval.start)) – \(formatter.string(from: lastDay))"
+        let startStr = UIFormat.localizedDate(interval.start, template: "MMMd", locale: L10n.locale, timeZone: .current)
+        let endStr = UIFormat.localizedDate(lastDay, template: "MMMd", locale: L10n.locale, timeZone: .current)
+        let rangeText = "\(startStr) – \(endStr)"
         return "\(yearValue) · W\(weekNum) · \(rangeText)"
     }
 
@@ -124,11 +122,9 @@ struct ReportsView: View {
     /// "11月2日 – 11月8日"（按报告自己的时区）
     private func weekLabel(_ report: WeeklyReport) -> String {
         let (start, lastDay, zone) = dates(report)
-        let formatter = DateFormatter()
-        formatter.locale = L10n.locale
-        formatter.timeZone = zone
-        formatter.setLocalizedDateFormatFromTemplate("MMMd")
-        return formatter.string(from: start) + " – " + formatter.string(from: lastDay)
+        let startStr = UIFormat.localizedDate(start, template: "MMMd", locale: L10n.locale, timeZone: zone)
+        let endStr = UIFormat.localizedDate(lastDay, template: "MMMd", locale: L10n.locale, timeZone: zone)
+        return startStr + " – " + endStr
     }
 
     private func year(_ report: WeeklyReport) -> String {
@@ -254,15 +250,9 @@ struct ReportsView: View {
             }
             TotalsView(totals: report.totals)
             changeCard(report)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                    projectsCard(report).frame(minWidth: 280)
-                    modelsCard(report).frame(minWidth: 280)
-                }
-                VStack(spacing: Metrics.sectionSpacing) {
-                    projectsCard(report)
-                    modelsCard(report)
-                }
+            AdaptiveEqualColumnsLayout(minColumnWidth: 280, spacing: Metrics.sectionSpacing) {
+                projectsCard(report)
+                modelsCard(report)
             }
             healthCard(report)
             Text(L10n.text("时区：\(report.query.timeZoneID) · 规则 v\(report.ruleVersion) · 生成于 \(Date(timeIntervalSince1970: Double(report.generatedAt) / 1000).formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale)))"))

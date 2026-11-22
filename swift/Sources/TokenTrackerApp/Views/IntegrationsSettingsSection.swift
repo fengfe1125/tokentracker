@@ -36,13 +36,15 @@ struct IntegrationsSettingsSection: View {
         }
         var originalText: String {
             switch self {
-            case .task(_, let config, _): return Self.hooksOnlyJSON(config.original)
+            case .task(let provider, let config, _):
+                return provider == .antigravity ? Self.rawJSON(config.original) : Self.hooksOnlyJSON(config.original)
             case .antigravity(let config, _): return Self.rawJSON(config.original)
             }
         }
         var proposedText: String {
             switch self {
-            case .task(_, let config, _): return Self.hooksOnlyJSON(config.proposed)
+            case .task(let provider, let config, _):
+                return provider == .antigravity ? Self.rawJSON(config.proposed) : Self.hooksOnlyJSON(config.proposed)
             case .antigravity(let config, _): return Self.rawJSON(config.proposed)
             }
         }
@@ -318,8 +320,18 @@ struct IntegrationsSettingsSection: View {
     }
 
     private func providerBinding(_ provider: TaskProvider) -> Binding<Bool> {
-        Binding(get: { provider == .codex ? preferences.codex : preferences.claude }, set: {
-            if provider == .codex { preferences.codex = $0 } else { preferences.claude = $0 }
+        Binding(get: {
+            switch provider {
+            case .codex: preferences.codex
+            case .claude: preferences.claude
+            case .antigravity: preferences.antigravity
+            }
+        }, set: {
+            switch provider {
+            case .codex: preferences.codex = $0
+            case .claude: preferences.claude = $0
+            case .antigravity: preferences.antigravity = $0
+            }
         })
     }
 
@@ -364,9 +376,15 @@ struct IntegrationsSettingsSection: View {
                 if installing { try TaskReminderModel.installHelper() }
                 try config.apply()
                 providerBinding(provider).wrappedValue = installing
-                notice = L10n.text(installing
-                    ? "配置已保存；请在原工具检查并信任 Hooks，重新开始会话后验证接入。"
-                    : "已移除 TokenTracker Hooks；其他配置已保留。")
+                if provider == .antigravity {
+                    notice = L10n.text(installing
+                        ? "配置已保存；新会话或下轮对话结束后将收到 Antigravity 通知。"
+                        : "已移除 TokenTracker Hooks；其他配置已保留。")
+                } else {
+                    notice = L10n.text(installing
+                        ? "配置已保存；请在原工具检查并信任 Hooks，重新开始会话后验证接入。"
+                        : "已移除 TokenTracker Hooks；其他配置已保留。")
+                }
             case .antigravity(let config, let installing):
                 if installing { try TaskReminderModel.installHelper() }
                 try config.apply()

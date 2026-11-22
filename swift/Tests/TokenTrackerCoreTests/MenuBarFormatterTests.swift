@@ -103,6 +103,25 @@ final class RingTitlePortTests: XCTestCase {
         XCTAssertEqual(MenuBarFmt.ringGlyph((56, "quota_warn")), "◑")
         XCTAssertEqual(MenuBarFmt.ringGlyph((100, "quota_crit")), "●")
     }
+
+    func testAntigravityRingTitleGlyphAndMenuLine() {
+        let ag = MenuBarQuotaEntry(id: "antigravity", name: "Antigravity",
+                                   windows: [MenuBarQuotaWindow(pct: 86, source: "official", stale: false, label: "Gemini")])
+        let today = MenuBarToday(tokens: 12_300_000, cost: 0)
+        XCTAssertEqual(MenuBarFmt.providerGlyph["antigravity"], "A")
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: today, entries: [ag], provider: "antigravity", ring: true),
+                       "12.30M · A")
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: today, entries: [ag], provider: "antigravity", compact: true, ring: true),
+                       "12.30M·A")
+        XCTAssertEqual(MenuBarFmt.fmtTitle(today: today, entries: [ag], provider: "antigravity"),
+                       "⚡ 12.30M · A 86%")
+        let spec = MenuBarFmt.ringSpec(entries: [ag], provider: "antigravity")
+        XCTAssertEqual(spec.pct, 86)
+        XCTAssertEqual(spec.role, "quota_crit")
+        let line = MenuBarFmt.quotaLineSegments(ag)
+        XCTAssertEqual(line.map(\.text).joined(), "● Antigravity · Gemini 86%")
+        XCTAssertEqual(line.first?.role, "dot_antigravity")
+    }
 }
 
 final class TitleSourcePortTests: XCTestCase {

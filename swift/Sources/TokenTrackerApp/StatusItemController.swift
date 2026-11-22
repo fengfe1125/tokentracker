@@ -35,7 +35,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var quotaItems: [NSMenuItem] = []
     private var displayItem: NSMenuItem?
     private var notchItem: NSMenuItem?
-    private static let maxQuotaLines = 4
+    private static let maxQuotaLines = 5
 
     // 动画状态
     private var animTimer: Timer?

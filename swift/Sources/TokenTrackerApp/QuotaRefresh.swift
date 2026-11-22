@@ -4,7 +4,7 @@ import TokenTrackerCore
 /// App refresh boundary: menu bar entries come only from the active account's
 /// official snapshot; history samples are optional.
 enum QuotaRefresh {
-    static let menuBarProviders: [SubscriptionProvider] = [.claude, .kimi, .go, .codex]
+    static let menuBarProviders: [SubscriptionProvider] = [.claude, .kimi, .go, .codex, .antigravity]
 
     /// One entry per menu bar provider. Without a single active account, or
     /// without official data, the entry has no windows (shown as unavailable).

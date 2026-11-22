@@ -67,27 +67,49 @@ enum UIFormat {
     static func dateTime(ms: Int64?) -> String {
         guard let ms, ms > 0 else { return "—" }
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-        let fmt = DateFormatter()
-        fmt.locale = L10n.locale
-        fmt.setLocalizedDateFormatFromTemplate("yyyyMMMdHHmm")
-        return fmt.string(from: date)
+        return CachedFormatters.shared.localizedTemplate("yyyyMMMdHHmm", date: date, locale: L10n.locale)
     }
 
     /// 本地今日 "yyyy-MM-dd"（会话表里当天的行省略日期，只留时刻）
     static var todayString: String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        return fmt.string(from: Date())
+        CachedFormatters.shared.todayString()
     }
 
     /// 固定紧凑的本地日期时间 "yyyy-MM-dd HH:mm"（会话记录与详情统一使用）
     static func sessionDateTime(ms: Int64?, timeZone: TimeZone = .current) -> String {
         guard let ms, ms > 0 else { return "—" }
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = timeZone
-        fmt.dateFormat = "yyyy-MM-dd HH:mm"
-        return fmt.string(from: Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
+        return CachedFormatters.shared.sessionDateTime(
+            date: Date(timeIntervalSince1970: TimeInterval(ms) / 1000),
+            timeZone: timeZone
+        )
+    }
+
+    /// 紧凑缩写日期（项目列表行复用，避免每行新建 Date.FormatStyle / DateFormatter）。
+    static func abbreviatedDate(ms: Int64, locale: Locale = L10n.locale) -> String {
+        CachedFormatters.shared.abbreviatedDate(
+            date: Date(timeIntervalSince1970: TimeInterval(ms) / 1000),
+            locale: locale
+        )
+    }
+
+    /// 本地化模板格式化（周报、活动详情、区间标签共用，复用缓存 DateFormatter）。
+    static func localizedDate(_ date: Date, template: String,
+                              locale: Locale = L10n.locale,
+                              timeZone: TimeZone = .current) -> String {
+        CachedFormatters.shared.localizedTemplate(template, date: date, locale: locale, timeZone: timeZone)
+    }
+
+    /// 复用的 Decimal / 货币 / 相对时间格式化（订阅卡片共用）。
+    static func decimal(_ value: Decimal, locale: Locale = L10n.locale) -> String {
+        CachedFormatters.shared.decimal(value, locale: locale)
+    }
+
+    static func currency(_ value: Decimal, code: String, locale: Locale = L10n.locale) -> String {
+        CachedFormatters.shared.currency(value, code: code, locale: locale)
+    }
+
+    static func relativeShort(_ date: Date, relativeTo now: Date, locale: Locale = L10n.locale) -> String {
+        CachedFormatters.shared.relativeShort(date, relativeTo: now, locale: locale)
     }
 
     /// 会话时间范围：同分钟只显示单时间点；同日省略结束日期；跨日完整展示起止。
@@ -162,5 +184,151 @@ extension UIFormat {
             return window
         }
         return entry
+    }
+}
+
+/// 线程安全的格式化器缓存：避免表格与长列表滚动时每行重复初始化 DateFormatter / NumberFormatter。
+final class CachedFormatters: @unchecked Sendable {
+    static let shared = CachedFormatters()
+
+    private let lock = NSLock()
+    private var templateDates: [String: DateFormatter] = [:]
+    private var sessionDates: [String: DateFormatter] = [:]
+    private var abbreviatedDates: [String: DateFormatter] = [:]
+    private var decimalNumbers: [String: NumberFormatter] = [:]
+    private var currencyNumbers: [String: NumberFormatter] = [:]
+    private var relativeDates: [String: RelativeDateTimeFormatter] = [:]
+
+    private var cachedTodayValue = ""
+    private var cachedTodayStart: TimeInterval = 0
+    private var cachedTodayEnd: TimeInterval = 0
+    private var cachedTodayTZKey = ""
+
+    private init() {}
+
+    private func tzKey(_ tz: TimeZone, at date: Date) -> String {
+        "\(tz.identifier)|\(tz.secondsFromGMT(for: date))"
+    }
+
+    func todayString(now: Date = Date(), calendar: Calendar = .current) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let ts = now.timeIntervalSince1970
+        let tz = tzKey(calendar.timeZone, at: now)
+        if tz == cachedTodayTZKey, ts >= cachedTodayStart, ts < cachedTodayEnd, !cachedTodayValue.isEmpty {
+            return cachedTodayValue
+        }
+        let start = calendar.startOfDay(for: now)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        let comps = calendar.dateComponents([.year, .month, .day], from: now)
+        let formatted = String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 1, comps.day ?? 1)
+        cachedTodayValue = formatted
+        cachedTodayStart = start.timeIntervalSince1970
+        cachedTodayEnd = end.timeIntervalSince1970
+        cachedTodayTZKey = tz
+        return formatted
+    }
+
+    func sessionDateTime(date: Date, timeZone: TimeZone = .current) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = tzKey(timeZone, at: date)
+        let fmt: DateFormatter
+        if let existing = sessionDates[key] {
+            fmt = existing
+        } else {
+            let created = DateFormatter()
+            created.locale = Locale(identifier: "en_US_POSIX")
+            created.timeZone = timeZone
+            created.dateFormat = "yyyy-MM-dd HH:mm"
+            sessionDates[key] = created
+            fmt = created
+        }
+        return fmt.string(from: date)
+    }
+
+    func localizedTemplate(_ template: String, date: Date, locale: Locale, timeZone: TimeZone = .current) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = "\(template)|\(locale.identifier)|\(tzKey(timeZone, at: date))"
+        let fmt: DateFormatter
+        if let existing = templateDates[key] {
+            fmt = existing
+        } else {
+            let created = DateFormatter()
+            created.locale = locale
+            created.timeZone = timeZone
+            created.setLocalizedDateFormatFromTemplate(template)
+            templateDates[key] = created
+            fmt = created
+        }
+        return fmt.string(from: date)
+    }
+
+    func abbreviatedDate(date: Date, locale: Locale, timeZone: TimeZone = .current) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = "\(locale.identifier)|\(tzKey(timeZone, at: date))"
+        let fmt: DateFormatter
+        if let existing = abbreviatedDates[key] {
+            fmt = existing
+        } else {
+            let created = DateFormatter()
+            created.locale = locale
+            created.timeZone = timeZone
+            created.dateStyle = .medium
+            created.timeStyle = .none
+            abbreviatedDates[key] = created
+            fmt = created
+        }
+        return fmt.string(from: date)
+    }
+
+    func decimal(_ value: Decimal, locale: Locale) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = locale.identifier
+        let fmt: NumberFormatter
+        if let existing = decimalNumbers[key] {
+            fmt = existing
+        } else {
+            let created = NumberFormatter()
+            created.locale = locale
+            created.numberStyle = .decimal
+            created.maximumFractionDigits = 2
+            decimalNumbers[key] = created
+            fmt = created
+        }
+        return fmt.string(from: NSDecimalNumber(decimal: value)) ?? "\(value)"
+    }
+
+    func currency(_ value: Decimal, code: String, locale: Locale) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = "\(locale.identifier)|\(code)"
+        let fmt: NumberFormatter
+        if let existing = currencyNumbers[key] {
+            fmt = existing
+        } else {
+            let created = NumberFormatter()
+            created.locale = locale
+            created.numberStyle = .currency
+            created.currencyCode = code
+            created.minimumFractionDigits = 2
+            created.maximumFractionDigits = 2
+            currencyNumbers[key] = created
+            fmt = created
+        }
+        return fmt.string(from: NSDecimalNumber(decimal: value)) ?? "\(value) \(code)"
+    }
+
+    func relativeShort(_ date: Date, relativeTo now: Date, locale: Locale) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = locale.identifier
+        let fmt: RelativeDateTimeFormatter
+        if let existing = relativeDates[key] {
+            fmt = existing
+        } else {
+            let created = RelativeDateTimeFormatter()
+            created.locale = locale
+            created.unitsStyle = .short
+            relativeDates[key] = created
+            fmt = created
+        }
+        return fmt.localizedString(for: date, relativeTo: now)
     }
 }

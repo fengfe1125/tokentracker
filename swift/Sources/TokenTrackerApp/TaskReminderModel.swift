@@ -13,6 +13,7 @@ final class TaskReminderPreferences: ObservableObject {
     @Published var approval: Bool { didSet { save("approval", approval) } }
     @Published var codex: Bool { didSet { save("codex", codex) } }
     @Published var claude: Bool { didSet { save("claude", claude) } }
+    @Published var antigravity: Bool { didSet { save("antigravity", antigravity) } }
     @Published var system: Bool { didSet { save("system", system) } }
     @Published var sound: Bool { didSet { save("sound", sound) } }
     @Published private(set) var notificationDenied = false
@@ -20,7 +21,7 @@ final class TaskReminderPreferences: ObservableObject {
         self.defaults = defaults
         func value(_ key: String, _ fallback: Bool) -> Bool { defaults.object(forKey: "tt.tasks." + key) as? Bool ?? fallback }
         enabled = value("enabled", false); completion = value("completion", true); approval = value("approval", true)
-        codex = value("codex", false); claude = value("claude", false)
+        codex = value("codex", false); claude = value("claude", false); antigravity = value("antigravity", false)
         system = value("system", false); sound = value("sound", false)
     }
     private func save(_ key: String, _ value: Bool) { defaults.set(value, forKey: "tt.tasks." + key) }
@@ -29,7 +30,14 @@ final class TaskReminderPreferences: ObservableObject {
         objectWillChange.send()
         defaults.set(path, forKey: "tt.tasks.root." + client.rawValue)
     }
-    func accepts(_ provider: TaskProvider) -> Bool { enabled && (provider == .codex ? codex : claude) }
+    func accepts(_ provider: TaskProvider) -> Bool {
+        guard enabled else { return false }
+        switch provider {
+        case .codex: return codex
+        case .claude: return claude
+        case .antigravity: return antigravity
+        }
+    }
     func authorizeSystem() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
             Task { @MainActor in self?.system = granted; self?.notificationDenied = !granted }
@@ -199,7 +207,12 @@ final class TaskReminderModel: ObservableObject {
             if reminders.contains(where: { $0.provider == event.provider && $0.session == event.session && $0.pending }) { return }
             state = .advisory
         } else if event.event == "Stop", event.isMain, preferences.completion {
-            let key = sessionKey + ":" + (event.turn.isEmpty ? String(generations[sessionKey, default: 0]) : event.turn)
+            let key: String
+            if event.provider == .antigravity {
+                key = sessionKey + ":g" + String(generations[sessionKey, default: 0]) + ":" + event.turn
+            } else {
+                key = sessionKey + ":" + (event.turn.isEmpty ? String(generations[sessionKey, default: 0]) : event.turn)
+            }
             guard completed.insert(key).inserted else { return }
             state = .ended
         } else { _ = server.resolve(event.id, decision: .pass); return }
@@ -208,8 +221,9 @@ final class TaskReminderModel: ObservableObject {
             && ($0.agent ?? "") == event.agent && $0.tool == event.tool && $0.arguments == event.arguments }) {
             _ = server.resolve(event.id, decision: .pass); return
         }
+        let project = event.cwd.isEmpty ? "" : URL(fileURLWithPath: event.cwd).lastPathComponent
         var reminder = TaskReminder(id: event.id, provider: event.provider, session: event.session, turn: event.turn,
-            tool: event.tool, project: URL(fileURLWithPath: event.cwd).lastPathComponent, at: event.at,
+            tool: event.tool, project: project, at: event.at,
             deadline: state == .waiting ? event.at.addingTimeInterval(server.approvalTimeout) : nil, sourceApp: event.sourceApp,
             call: event.call.isEmpty ? nil : event.call,
             agent: event.agent.isEmpty ? nil : event.agent,
@@ -275,9 +289,14 @@ final class TaskReminderModel: ObservableObject {
     func navigate(_ row: TaskReminder) {
         returnToOriginal(row.id)
         let allowed = ["com.apple.Terminal", "com.googlecode.iterm2", "com.github.wez.wezterm", "com.mitchellh.ghostty",
-                       "com.openai.codex", "com.anthropic.claudefordesktop"]
-        let bundle = row.sourceApp.flatMap { allowed.contains($0) ? $0 : nil }
-            ?? (row.provider == .codex ? "com.openai.codex" : "com.anthropic.claudefordesktop")
+                       "com.openai.codex", "com.anthropic.claudefordesktop", "com.google.antigravity"]
+        let defaultBundle: String
+        switch row.provider {
+        case .codex: defaultBundle = "com.openai.codex"
+        case .claude: defaultBundle = "com.anthropic.claudefordesktop"
+        case .antigravity: defaultBundle = "com.google.antigravity"
+        }
+        let bundle = row.sourceApp.flatMap { allowed.contains($0) ? $0 : nil } ?? defaultBundle
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else {
             notice = L10n.text("未找到原应用，请自行返回原任务"); return
         }

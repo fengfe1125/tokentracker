@@ -1,12 +1,13 @@
 import Foundation
 
 public enum TaskClient: String, Codable, CaseIterable, Sendable {
-    case codexCLI, codexDesktop, claudeCLI, claudeDesktop, unknown
+    case codexCLI, codexDesktop, claudeCLI, claudeDesktop, antigravity, unknown
 
     public var provider: TaskProvider? {
         switch self {
         case .codexCLI, .codexDesktop: .codex
         case .claudeCLI, .claudeDesktop: .claude
+        case .antigravity: .antigravity
         case .unknown: nil
         }
     }
@@ -16,6 +17,7 @@ public enum TaskClient: String, Codable, CaseIterable, Sendable {
         case .codexDesktop: "Codex 桌面"
         case .claudeCLI: "Claude Code CLI"
         case .claudeDesktop: "Claude 桌面 Code"
+        case .antigravity: "Antigravity"
         case .unknown: "来源未确认"
         }
     }
@@ -46,6 +48,17 @@ public struct TaskClientSource: Codable, Sendable, Equatable {
     public static func identify(provider: TaskProvider, enginePath: String?, arguments: [String],
                                 entrypoint: String?, host: String?, configurationRoot: String?,
                                 home: String) -> Self {
+        if provider == .antigravity {
+            let isAGHost = host == "com.google.antigravity" || host?.hasPrefix("com.google.antigravity.") == true
+            let isAGEngine = enginePath.map { path in
+                let low = path.lowercased()
+                let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+                return low.contains("antigravity") || name == "agy" || name.contains("language_server")
+            } ?? false
+            guard isAGHost || isAGEngine || configurationRoot != nil else { return Self() }
+            return Self(client: .antigravity, location: .local, confidence: .launchContext,
+                        configurationRoot: configurationRoot ?? (home + "/.gemini/config"), engineVersion: nil)
+        }
         guard let enginePath else { return Self() }
         let binary = URL(fileURLWithPath: enginePath).lastPathComponent
         var client: TaskClient = .unknown
@@ -96,6 +109,10 @@ public struct TaskHookConfigurationRoot: Equatable, Sendable {
             return Self(path: URL(fileURLWithPath: selected).standardizedFileURL.path, confirmed: true)
         } else if let observed, observed.hasPrefix("/") {
             return Self(path: URL(fileURLWithPath: observed).standardizedFileURL.path, confirmed: true)
+        } else if provider == .antigravity {
+            candidate = home + "/.gemini/config"
+            guard candidate.hasPrefix("/"), exists(candidate) || exists(home + "/.gemini") else { return nil }
+            return Self(path: URL(fileURLWithPath: candidate).standardizedFileURL.path, confirmed: true)
         } else {
             let isCLI = client == .codexCLI || client == .claudeCLI
             let key = provider == .codex ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"
@@ -105,6 +122,9 @@ public struct TaskHookConfigurationRoot: Equatable, Sendable {
         return Self(path: URL(fileURLWithPath: candidate).standardizedFileURL.path, confirmed: false)
     }
     public func configurationPath(provider: TaskProvider) -> String {
-        path + (provider == .codex ? "/hooks.json" : "/settings.json")
+        switch provider {
+        case .codex, .antigravity: path + "/hooks.json"
+        case .claude: path + "/settings.json"
+        }
     }
 }

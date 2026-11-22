@@ -109,7 +109,7 @@ private struct HeatmapChartPanel: View {
                 .frame(height: canvasHeight)
                 .frame(maxWidth: .infinity)
                 .overlay(alignment: .topLeading) {
-                    HeatmapCanvas(chart: chart, locale: locale) { focused = $0 }
+                    HeatmapCanvas(chart: chart, yi: yi, locale: locale) { focused = $0 }
                         .frame(height: canvasHeight)
                         .transaction { $0.animation = nil }
                 }
@@ -128,9 +128,14 @@ private struct HeatmapChartPanel: View {
             }
             .frame(minHeight: 32)
             VStack(alignment: .leading, spacing: 2) {
-                Text(chart.unit == .hour
-                     ? L10n.text("每格 1 小时，浅色格为尚未到来的时段，灰格为无已记录用量；含输入、输出与缓存 Token。")
-                     : L10n.text("每格 1 天，范围前的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。"))
+                switch chart.style {
+                case .hourly:
+                    Text(L10n.text("每格 1 小时，浅色格为尚未到来的时段，灰格为无已记录用量；含输入、输出与缓存 Token。"))
+                case .monthCalendar:
+                    Text(L10n.text("每格 1 天，浅色格为本月尚未到来的日期，灰格为无已记录用量；含输入、输出与缓存 Token。"))
+                case .yearly:
+                    Text(L10n.text("每格 1 天，范围前的日期以淡色显示，灰格为无已记录用量；含输入、输出与缓存 Token。"))
+                }
                 if chart.hourlyExcludedTokens > 0 {
                     Text(L10n.text("所选范围另有 \(UIFormat.tokens(chart.hourlyExcludedTokens, yi: yi)) Token 仅能定位到天，未分摊到小时。"))
                 }
@@ -172,67 +177,152 @@ private struct HeatmapChartPanel: View {
 }
 
 /// Fixed-cost hit testing; no per-cell SwiftUI buttons, hover handlers, or formatters.
-/// Hour grid: one row per day, 24 columns. Day grid: weekday rows, week columns, one band per year.
-/// Columns always span the full width; cells only grow taller up to a cap.
+/// - `.hourly`: one row per day, 24 columns.
+/// - `.monthCalendar`: Monday–Sunday calendar tiles (7 columns) with an optional row-aligned weekly summary column.
+/// - `.yearly`: weekday rows, week columns, one band per year.
 struct HeatmapGridLayout {
     static let header: CGFloat = 18
+    static let monthHeader: CGFloat = 22
     static let bandGap: CGFloat = 14
+    static let summaryGap: CGFloat = 20
     let cellWidth: CGFloat
     let cellHeight: CGFloat
     let left: CGFloat
     let gap: CGFloat
+    let headerHeight: CGFloat
+    let summaryX: CGFloat
+    let summaryWidth: CGFloat
     let chart: UsageHeatmap
     init(chart: UsageHeatmap, width: CGFloat) {
         self.chart = chart
-        left = chart.unit == .hour ? 40 : 26
-        let columns = CGFloat(max(1, chart.columns))
-        gap = (width - left) / columns >= 12 ? 3 : 2
-        let pitch = (width - left + gap) / columns // the last column ends flush with the right edge
-        cellWidth = max(2, pitch - gap)
-        let cap: CGFloat = chart.unit == .day ? 20 : chart.rowDays.count <= 7 ? 26 : 14
-        cellHeight = min(cellWidth, cap)
+        switch chart.style {
+        case .hourly:
+            left = 40
+            headerHeight = Self.header
+            summaryX = width
+            summaryWidth = 0
+            let columns = CGFloat(max(1, chart.columns))
+            gap = (width - left) / columns >= 12 ? 3 : 2
+            let pitch = (width - left + gap) / columns // the last column ends flush with the right edge
+            cellWidth = max(2, pitch - gap)
+            let cap: CGFloat = chart.rowDays.count <= 7 ? 26 : 14
+            cellHeight = min(cellWidth, cap)
+        case .monthCalendar:
+            left = 0
+            headerHeight = Self.monthHeader
+            gap = width >= 540 ? 6 : 4
+            let showSummary = width >= 620
+            let sumWidth: CGFloat = showSummary ? min(300, max(190, floor(width * 0.28))) : 0
+            summaryWidth = sumWidth
+            let gridWidth = showSummary ? width - sumWidth - Self.summaryGap : width
+            summaryX = showSummary ? gridWidth + Self.summaryGap : width
+            let pitch = (gridWidth + gap) / 7
+            cellWidth = max(24, pitch - gap)
+            let rows = max(1, chart.monthRowCount)
+            let maxTileHeight: CGFloat = rows >= 6 ? 48 : 54
+            cellHeight = min(maxTileHeight, max(44, round(cellWidth * 0.58)))
+        case .yearly:
+            left = 26
+            headerHeight = Self.header
+            summaryX = width
+            summaryWidth = 0
+            let columns = CGFloat(max(1, chart.columns))
+            gap = (width - left) / columns >= 12 ? 3 : 2
+            let pitch = (width - left + gap) / columns
+            cellWidth = max(2, pitch - gap)
+            cellHeight = min(cellWidth, 20)
+        }
     }
     var rowPitch: CGFloat { cellHeight + gap }
-    var rowCount: Int { chart.unit == .hour ? chart.rowDays.count : 7 }
-    var bandHeight: CGFloat { Self.header + CGFloat(rowCount) * rowPitch + Self.bandGap }
-    var height: CGFloat { CGFloat(max(1, chart.unit == .hour ? 1 : chart.bands.count)) * bandHeight - Self.bandGap }
-    func top(of band: Int) -> CGFloat { CGFloat(band) * bandHeight + Self.header }
+    var rowCount: Int {
+        switch chart.style {
+        case .hourly: chart.rowDays.count
+        case .monthCalendar: chart.monthRowCount
+        case .yearly: 7
+        }
+    }
+    var bandHeight: CGFloat { headerHeight + CGFloat(rowCount) * rowPitch + Self.bandGap }
+    var height: CGFloat {
+        switch chart.style {
+        case .hourly:
+            return headerHeight + CGFloat(rowCount) * rowPitch
+        case .monthCalendar:
+            return max(headerHeight, headerHeight + CGFloat(rowCount) * rowPitch - gap)
+        case .yearly:
+            return CGFloat(max(1, chart.bands.count)) * bandHeight - Self.bandGap
+        }
+    }
+    func top(of band: Int) -> CGFloat { CGFloat(band) * bandHeight + headerHeight }
     func band(ofColumn column: Int) -> Int {
         chart.bands.lastIndex { $0.firstColumn <= column } ?? 0
     }
+    func summaryRect(row: Int) -> NSRect? {
+        guard chart.style == .monthCalendar, summaryWidth > 0, row >= 0, row < rowCount else { return nil }
+        return NSRect(x: summaryX, y: top(of: 0) + CGFloat(row) * rowPitch,
+                      width: summaryWidth, height: cellHeight)
+    }
     func rect(_ index: Int) -> NSRect {
-        if chart.unit == .hour {
-            return NSRect(x: left + CGFloat(index % 24) * (cellWidth + gap), y: top(of: 0) + CGFloat(index / 24) * rowPitch,
+        switch chart.style {
+        case .hourly:
+            return NSRect(x: left + CGFloat(index % 24) * (cellWidth + gap),
+                          y: top(of: 0) + CGFloat(index / 24) * rowPitch,
                           width: cellWidth, height: cellHeight)
+        case .monthCalendar:
+            return NSRect(x: left + CGFloat(index % 7) * (cellWidth + gap),
+                          y: top(of: 0) + CGFloat(index / 7) * rowPitch,
+                          width: cellWidth, height: cellHeight)
+        case .yearly:
+            let column = index / 7, row = index % 7, band = band(ofColumn: column)
+            return NSRect(x: left + CGFloat(column - chart.bands[band].firstColumn) * (cellWidth + gap),
+                          y: top(of: band) + CGFloat(row) * rowPitch, width: cellWidth, height: cellHeight)
         }
-        let column = index / 7, row = index % 7, band = band(ofColumn: column)
-        return NSRect(x: left + CGFloat(column - chart.bands[band].firstColumn) * (cellWidth + gap),
-                      y: top(of: band) + CGFloat(row) * rowPitch, width: cellWidth, height: cellHeight)
     }
     func index(at point: NSPoint) -> Int? {
         guard point.x >= left, point.y >= 0 else { return nil }
-        let band = Int(point.y / bandHeight)
-        let bandColumns = chart.unit == .hour ? 24 : chart.bands.indices.contains(band) ? chart.bands[band].columns : 0
-        guard bandColumns > 0, chart.unit == .day || band == 0 else { return nil }
-        let y = point.y - top(of: band), x = point.x - left
-        guard y >= 0 else { return nil }
-        let col = Int(x / (cellWidth + gap)), row = Int(y / rowPitch)
-        guard col < bandColumns, row < rowCount,
-              x.truncatingRemainder(dividingBy: cellWidth + gap) <= cellWidth,
-              y.truncatingRemainder(dividingBy: rowPitch) <= cellHeight else { return nil }
-        let i = chart.unit == .hour ? row * 24 + col : (chart.bands[band].firstColumn + col) * 7 + row
-        return chart.cells.indices.contains(i) && chart.cells[i] != nil ? i : nil
+        switch chart.style {
+        case .hourly:
+            let x = point.x - left, y = point.y - top(of: 0)
+            guard y >= 0 else { return nil }
+            let col = Int(x / (cellWidth + gap)), row = Int(y / rowPitch)
+            guard col < 24, row < rowCount,
+                  x.truncatingRemainder(dividingBy: cellWidth + gap) <= cellWidth,
+                  y.truncatingRemainder(dividingBy: rowPitch) <= cellHeight else { return nil }
+            let i = row * 24 + col
+            return chart.cells.indices.contains(i) && chart.cells[i] != nil ? i : nil
+        case .monthCalendar:
+            let x = point.x - left, y = point.y - top(of: 0)
+            guard y >= 0 else { return nil }
+            let col = Int(x / (cellWidth + gap)), row = Int(y / rowPitch)
+            guard col < 7, row < rowCount,
+                  x.truncatingRemainder(dividingBy: cellWidth + gap) <= cellWidth,
+                  y.truncatingRemainder(dividingBy: rowPitch) <= cellHeight else { return nil }
+            let i = row * 7 + col
+            return chart.cells.indices.contains(i) && chart.cells[i] != nil ? i : nil
+        case .yearly:
+            let band = Int(point.y / bandHeight)
+            let bandColumns = chart.bands.indices.contains(band) ? chart.bands[band].columns : 0
+            guard bandColumns > 0 else { return nil }
+            let y = point.y - top(of: band), x = point.x - left
+            guard y >= 0 else { return nil }
+            let col = Int(x / (cellWidth + gap)), row = Int(y / rowPitch)
+            guard col < bandColumns, row < rowCount,
+                  x.truncatingRemainder(dividingBy: cellWidth + gap) <= cellWidth,
+                  y.truncatingRemainder(dividingBy: rowPitch) <= cellHeight else { return nil }
+            let i = (chart.bands[band].firstColumn + col) * 7 + row
+            return chart.cells.indices.contains(i) && chart.cells[i] != nil ? i : nil
+        }
     }
 }
 
 private struct HeatmapCanvas: NSViewRepresentable {
     let chart: UsageHeatmap
+    let yi: Bool
     let locale: Locale
     let focus: (UsageHeatmap.Day?) -> Void
     func makeNSView(context: Context) -> HeatmapCanvasView { HeatmapCanvasView() }
     func updateNSView(_ view: HeatmapCanvasView, context: Context) {
         view.onFocus = focus
-        view.update(chart, locale: locale)
+        view.update(chart, yi: yi, locale: locale)
     }
 }
 
@@ -240,28 +330,78 @@ final class HeatmapCanvasView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     private(set) var chart: UsageHeatmap?
+    private var yi = false
     private var locale = Locale.current
     private var hovered: Int?
     private var selected: Int?
     private var focusIndex: Int? { hovered ?? selected }
+    private var hoverToken = HoverTokenBox()
+    private var cachedMonthLabels: [(index: Int, text: NSString)] = []
+    private var cachedRowLabels: [NSString] = []
     var onFocus: ((UsageHeatmap.Day?) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
 
     /// 预建 5 级动态色，避免每次 draw 为每个格子重新分配 NSColor 闭包。
     private static let levelColors: [NSColor] = {
         let light: [UInt32] = [0xEBEDF0, 0xDCD0F7, 0xB9A2F0, 0x9470E6, 0x6F45D8]
         let dark: [UInt32] = [0x2D333B, 0x3B2D6E, 0x5C45B0, 0x8566E0, 0xA88CFF]
         return (0..<5).map { level in
-            NSColor(name: nil) { appearance in
-                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                let rgb = (isDark ? dark : light)[level]
-                return NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
-                               blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
-            }
+            dynamicColor(lightRGB: light[level], darkRGB: dark[level])
         }
     }()
 
+    /// 月历格子内的日期文字动态色，保证亮暗模式下所有热力色阶均有清晰对比度。
+    private static let tileDayColors: [NSColor] = [
+        .secondaryLabelColor,
+        dynamicColor(lightRGB: 0x3B2B66, lightAlpha: 0.78, darkRGB: 0xD9D0FF, darkAlpha: 0.78),
+        dynamicColor(lightRGB: 0x26174D, lightAlpha: 0.80, darkRGB: 0xEDE8FF, darkAlpha: 0.84),
+        dynamicColor(lightRGB: 0xFFFFFF, lightAlpha: 0.86, darkRGB: 0xFFFFFF, darkAlpha: 0.88),
+        dynamicColor(lightRGB: 0xFFFFFF, lightAlpha: 0.88, darkRGB: 0x1F1242, darkAlpha: 0.78),
+    ]
+
+    /// 月历格子内的 Token 数值动态色（暗色最高阶亮紫底配深墨字）。
+    private static let tileValueColors: [NSColor] = [
+        .secondaryLabelColor,
+        dynamicColor(lightRGB: 0x26174D, darkRGB: 0xF2EEFF),
+        dynamicColor(lightRGB: 0x1A0E38, darkRGB: 0xFFFFFF),
+        dynamicColor(lightRGB: 0xFFFFFF, darkRGB: 0xFFFFFF),
+        dynamicColor(lightRGB: 0xFFFFFF, darkRGB: 0x140A2E),
+    ]
+
+    /// 品牌紫动态色，用于月历「今天」弱色阶描边与标签，与热力色系保持一致。
+    private static let brandAccent = dynamicColor(lightRGB: 0x6F45D8, darkRGB: 0xA88CFF)
+
+    private static func dynamicColor(lightRGB: UInt32, lightAlpha: CGFloat = 1,
+                                     darkRGB: UInt32, darkAlpha: CGFloat = 1) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let rgb = isDark ? darkRGB : lightRGB
+            let alpha = isDark ? darkAlpha : lightAlpha
+            return NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255,
+                           green: CGFloat(rgb >> 8 & 0xFF) / 255,
+                           blue: CGFloat(rgb & 0xFF) / 255, alpha: alpha)
+        }
+    }
+
     static func color(_ level: Int) -> NSColor {
         levelColors[max(0, min(4, level))]
+    }
+    private static func tileDayColor(_ level: Int) -> NSColor {
+        tileDayColors[max(0, min(4, level))]
+    }
+    private static func tileValueColor(_ level: Int) -> NSColor {
+        tileValueColors[max(0, min(4, level))]
     }
     static func hourLabel(_ date: Date, short: Bool) -> String {
         let parts = Calendar.current.dateComponents([.month, .day, .hour], from: date)
@@ -274,16 +414,44 @@ final class HeatmapCanvasView: NSView {
             + (unit == .hour ? " " + hourLabel(day.date, short: false) : "")
             + " · " + day.tokens.formatted(.number.locale(locale)) + " Token"
     }
-    func update(_ newChart: UsageHeatmap, locale: Locale) {
-        guard chart?.id != newChart.id || self.locale != locale else { return }
-        chart = newChart; self.locale = locale
-        hovered = nil; selected = nil
+    func update(_ newChart: UsageHeatmap, yi: Bool = false, locale: Locale) {
+        guard chart?.id != newChart.id || self.yi != yi || self.locale != locale else { return }
+        let chartChanged = chart?.id != newChart.id
+        chart = newChart; self.yi = yi; self.locale = locale
+        if chartChanged {
+            hoverToken.unregister()
+            hovered = nil; selected = nil
+        }
+        rebuildLabelCaches(for: newChart, locale: locale)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(L10n.text("Token 用量热力图"))
         setAccessibilityHelp(L10n.text("悬停或点选格子查看明细；聚焦后可用方向键浏览。"))
-        setAccessibilityValue(L10n.text("请选择一个格子"))
+        if chartChanged { setAccessibilityValue(L10n.text("请选择一个格子")) }
         needsDisplay = true
+    }
+
+    private func rebuildLabelCaches(for chart: UsageHeatmap, locale: Locale) {
+        let cal = Calendar.current
+        if chart.style == .hourly {
+            cachedMonthLabels = []
+            cachedRowLabels = chart.rowDays.map { day in
+                let parts = cal.dateComponents([.month, .day], from: day)
+                return String(format: "%d/%d", parts.month ?? 1, parts.day ?? 1) as NSString
+            }
+        } else if chart.style == .yearly {
+            cachedRowLabels = []
+            var months: [(index: Int, text: NSString)] = []
+            for i in chart.cells.indices {
+                guard let day = chart.cells[i], cal.component(.day, from: day.date) == 1 else { continue }
+                let label = UIFormat.localizedDate(day.date, template: "MMM", locale: locale) as NSString
+                months.append((i, label))
+            }
+            cachedMonthLabels = months
+        } else {
+            cachedMonthLabels = []
+            cachedRowLabels = []
+        }
     }
     override func updateTrackingAreas() {
         for area in trackingAreas { removeTrackingArea(area) }
@@ -294,68 +462,312 @@ final class HeatmapCanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let chart else { return }
         let layout = HeatmapGridLayout(chart: chart, width: bounds.width)
+        if chart.style == .monthCalendar {
+            drawMonthCalendar(chart, layout: layout, dirtyRect: dirtyRect)
+            return
+        }
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
         let yearAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: NSColor.labelColor]
-        func drawLeft(_ text: String, row: Int, top: CGFloat) {
-            let string = text as NSString, size = string.size(withAttributes: attrs)
-            string.draw(at: NSPoint(x: 0, y: top + CGFloat(row) * layout.rowPitch + (layout.cellHeight - size.height) / 2), withAttributes: attrs)
+        func drawLeft(_ string: NSString, row: Int, top: CGFloat) {
+            let size = string.size(withAttributes: attrs)
+            let y = top + CGFloat(row) * layout.rowPitch + (layout.cellHeight - size.height) / 2
+            guard y + size.height >= dirtyRect.minY - 2 && y <= dirtyRect.maxY + 2 else { return }
+            string.draw(at: NSPoint(x: 0, y: y), withAttributes: attrs)
         }
         let radius = min(3, layout.cellHeight / 4, layout.cellWidth / 4)
-        if chart.unit == .hour {
-            for hour in stride(from: 0, to: 24, by: 3) {
-                (String(hour) as NSString).draw(at: NSPoint(x: layout.left + CGFloat(hour) * (layout.cellWidth + layout.gap), y: 1), withAttributes: attrs)
+        if chart.style == .hourly {
+            if dirtyRect.minY <= layout.headerHeight + 2 {
+                for hour in stride(from: 0, to: 24, by: 3) {
+                    (String(hour) as NSString).draw(at: NSPoint(x: layout.left + CGFloat(hour) * (layout.cellWidth + layout.gap), y: 1), withAttributes: attrs)
+                }
             }
-            for (row, day) in chart.rowDays.enumerated() {
-                let parts = Calendar.current.dateComponents([.month, .day], from: day)
-                drawLeft(String(format: "%d/%d", parts.month ?? 1, parts.day ?? 1), row: row, top: layout.top(of: 0))
+            if dirtyRect.minX <= layout.left + 2 {
+                for (row, label) in cachedRowLabels.enumerated() {
+                    drawLeft(label, row: row, top: layout.top(of: 0))
+                }
             }
         } else {
             let weekLabels: [L10n.Template] = ["一", "", "三", "", "五", "", ""]
             for band in chart.bands.indices {
                 let top = layout.top(of: band)
+                let bandTop = top - layout.headerHeight
+                guard bandTop <= dirtyRect.maxY + 2 && top + 7 * layout.rowPitch >= dirtyRect.minY - 2 else { continue }
                 if chart.bands.count > 1 {
-                    (String(chart.bands[band].year) as NSString).draw(at: NSPoint(x: 0, y: top - HeatmapGridLayout.header), withAttributes: yearAttrs)
+                    (String(chart.bands[band].year) as NSString).draw(at: NSPoint(x: 0, y: bandTop), withAttributes: yearAttrs)
                 }
-                for row in 0..<7 where !weekLabels[row].key.isEmpty { drawLeft(L10n.text(weekLabels[row]), row: row, top: top) }
+                if dirtyRect.minX <= layout.left + 2 {
+                    for row in 0..<7 where !weekLabels[row].key.isEmpty {
+                        drawLeft(L10n.text(weekLabels[row]) as NSString, row: row, top: top)
+                    }
+                }
+            }
+            var lastLabel = (y: CGFloat(-1), end: CGFloat(0))
+            for entry in cachedMonthLabels {
+                let rect = layout.rect(entry.index)
+                let y = rect.minY - CGFloat(entry.index % 7) * layout.rowPitch - layout.headerHeight + 1
+                if lastLabel.y != y || rect.minX >= lastLabel.end {
+                    let w = entry.text.size(withAttributes: attrs).width
+                    if y + layout.headerHeight >= dirtyRect.minY - 2 && y <= dirtyRect.maxY + 2 {
+                        entry.text.draw(at: NSPoint(x: rect.minX, y: y), withAttributes: attrs)
+                    }
+                    lastLabel = (y, rect.minX + w + 4)
+                }
             }
         }
-        var lastLabel = (y: CGFloat(-1), end: CGFloat(0))
-        let currentHour = Calendar.current.dateInterval(of: .hour, for: chart.now)?.start
-        let placeholder = NSColor.labelColor.withAlphaComponent(0.04)
+
+        let currentHour = chart.style == .hourly ? Calendar.current.dateInterval(of: .hour, for: chart.now)?.start : nil
+        let expandedDirty = dirtyRect.insetBy(dx: -3, dy: -3)
+
+        // 批量合并同色阶格子路径，将数百次 NSBezierPath 分配与动态色解析压为 ≤11 次 CGContext 填充。
+        let fillPaths = (0..<5).map { _ in CGMutablePath() }
+        let dimmedPaths = (0..<5).map { _ in CGMutablePath() }
+        let placeholderPath = CGMutablePath()
+        var focusRect: CGRect?
+        var nowRect: CGRect?
+
         for i in chart.cells.indices {
+            let rect = layout.rect(i)
+            guard rect.intersects(expandedDirty) else { continue }
             guard let day = chart.cells[i] else {
-                // An hour row is always a full day: later hours keep their slot.
-                if chart.unit == .hour {
-                    placeholder.setFill()
-                    NSBezierPath(roundedRect: layout.rect(i), xRadius: radius, yRadius: radius).fill()
+                if chart.style == .hourly {
+                    placeholderPath.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
                 }
                 continue
             }
-            let rect = layout.rect(i)
-            if chart.unit == .day, Calendar.current.component(.day, from: day.date) == 1 {
-                let month = day.date.formatted(.dateTime.month(.abbreviated).locale(locale)) as NSString
-                let y = rect.minY - CGFloat(i % 7) * layout.rowPitch - HeatmapGridLayout.header + 1
-                if lastLabel.y != y || rect.minX >= lastLabel.end {
-                    month.draw(at: NSPoint(x: rect.minX, y: y), withAttributes: attrs)
-                    lastLabel = (y, rect.minX + month.size(withAttributes: attrs).width + 4)
+            let level = chart.level(for: day.tokens)
+            let bucket = chart.contains(day) ? fillPaths[level] : dimmedPaths[level]
+            bucket.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
+            let isNow = chart.style == .hourly ? day.date == currentHour : day.date == chart.today
+            if focusIndex == i {
+                focusRect = rect
+            } else if isNow {
+                nowRect = rect
+            }
+        }
+
+        if let cg = NSGraphicsContext.current?.cgContext {
+            if !placeholderPath.isEmpty {
+                cg.setFillColor(NSColor.labelColor.withAlphaComponent(0.04).cgColor)
+                cg.addPath(placeholderPath)
+                cg.fillPath()
+            }
+            for level in 0..<5 {
+                let hasMain = !fillPaths[level].isEmpty
+                let hasDim = !dimmedPaths[level].isEmpty
+                guard hasMain || hasDim else { continue }
+                let nsColor = Self.color(level)
+                if hasMain {
+                    cg.setFillColor(nsColor.cgColor)
+                    cg.addPath(fillPaths[level])
+                    cg.fillPath()
+                }
+                if hasDim {
+                    cg.setFillColor(nsColor.withAlphaComponent(0.28).cgColor)
+                    cg.addPath(dimmedPaths[level])
+                    cg.fillPath()
                 }
             }
-            guard rect.intersects(dirtyRect.insetBy(dx: -3, dy: -3)) else { continue }
-            let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-            let color = Self.color(chart.level(for: day.tokens))
-            (chart.contains(day) ? color : color.withAlphaComponent(0.28)).setFill(); path.fill()
-            let isNow = chart.unit == .hour ? day.date == currentHour : day.date == chart.today
+            if let rect = nowRect {
+                let ring = rect.insetBy(dx: 0.5, dy: 0.5)
+                cg.setStrokeColor(NSColor.controlAccentColor.cgColor)
+                cg.setLineWidth(1)
+                cg.addPath(CGPath(roundedRect: ring, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                cg.strokePath()
+            }
+            if let rect = focusRect {
+                cg.setStrokeColor(NSColor.labelColor.cgColor)
+                cg.setLineWidth(1.5)
+                cg.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                cg.strokePath()
+            }
+        }
+    }
+
+    private func drawMonthCalendar(_ chart: UsageHeatmap, layout: HeatmapGridLayout, dirtyRect: NSRect) {
+        let headerAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10.5, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let padX: CGFloat = layout.cellWidth >= 76 ? 8 : 6
+        let padY: CGFloat = layout.cellHeight >= 48 ? 6 : 5
+        let weekdays: [L10n.Template] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        for col in 0..<7 {
+            let x = layout.left + CGFloat(col) * (layout.cellWidth + layout.gap) + padX
+            (L10n.text(weekdays[col]) as NSString).draw(at: NSPoint(x: x, y: 2), withAttributes: headerAttrs)
+        }
+        let tileRadius: CGFloat = 8
+        let futureFill = NSColor.labelColor.withAlphaComponent(0.024)
+        let futureBorder = NSColor.labelColor.withAlphaComponent(0.065)
+        let zeroBorder = NSColor.labelColor.withAlphaComponent(0.04)
+        let futureDayAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ]
+        for i in chart.cells.indices {
+            guard let dayNumber = chart.monthDayNumber(at: i) else { continue }
+            let rect = layout.rect(i)
+            guard rect.intersects(dirtyRect.insetBy(dx: -4, dy: -4)) else { continue }
+            guard let day = chart.cells[i] else {
+                // Remaining days of this month after today: subtle pale placeholder tile with muted day number.
+                let path = NSBezierPath(roundedRect: rect, xRadius: tileRadius, yRadius: tileRadius)
+                futureFill.setFill(); path.fill()
+                let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.375, dy: 0.375),
+                                          xRadius: tileRadius - 0.375, yRadius: tileRadius - 0.375)
+                futureBorder.setStroke(); border.lineWidth = 0.75; border.stroke()
+                (String(dayNumber) as NSString).draw(at: NSPoint(x: rect.minX + padX, y: rect.minY + padY),
+                                                     withAttributes: futureDayAttrs)
+                continue
+            }
+            let level = chart.level(for: day.tokens)
+            let isToday = day.date == chart.today
+            let path = NSBezierPath(roundedRect: rect, xRadius: tileRadius, yRadius: tileRadius)
+            Self.color(level).setFill(); path.fill()
+            if level == 0 {
+                let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.375, dy: 0.375),
+                                          xRadius: tileRadius - 0.375, yRadius: tileRadius - 0.375)
+                zeroBorder.setStroke(); border.lineWidth = 0.75; border.stroke()
+            }
+            let dayColor = isToday && level == 0 ? Self.brandAccent : Self.tileDayColor(level)
+            let dayFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: isToday ? .bold : .medium)
+            let dayAttrs: [NSAttributedString.Key: Any] = [.font: dayFont, .foregroundColor: dayColor]
+            let dayStr = String(dayNumber) as NSString
+            let dayOrigin = NSPoint(x: rect.minX + padX, y: rect.minY + padY)
+            dayStr.draw(at: dayOrigin, withAttributes: dayAttrs)
+            if isToday {
+                let daySize = dayStr.size(withAttributes: dayAttrs)
+                let badgeText = L10n.text("今天") as NSString
+                let badgeFg = level == 0 ? Self.brandAccent : Self.tileValueColor(level)
+                let badgeAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .semibold),
+                    .foregroundColor: badgeFg,
+                ]
+                let badgeSize = badgeText.size(withAttributes: badgeAttrs)
+                let pillW = badgeSize.width + 10
+                let pillH = badgeSize.height + 2
+                let availableW = rect.maxX - padX - (dayOrigin.x + daySize.width + 4)
+                if availableW >= pillW {
+                    let pillRect = NSRect(x: rect.maxX - padX - pillW,
+                                          y: dayOrigin.y + (daySize.height - pillH) / 2,
+                                          width: pillW, height: pillH)
+                    let pillBg = level == 0
+                        ? Self.brandAccent.withAlphaComponent(0.14)
+                        : Self.tileValueColor(level).withAlphaComponent(0.18)
+                    pillBg.setFill()
+                    NSBezierPath(roundedRect: pillRect, xRadius: pillH / 2, yRadius: pillH / 2).fill()
+                    badgeText.draw(at: NSPoint(x: pillRect.minX + 5, y: pillRect.minY + 1), withAttributes: badgeAttrs)
+                } else {
+                    let dotSize: CGFloat = 4.5
+                    let dotRect = NSRect(x: dayOrigin.x + daySize.width + 4,
+                                         y: dayOrigin.y + (daySize.height - dotSize) / 2,
+                                         width: dotSize, height: dotSize)
+                    badgeFg.setFill()
+                    NSBezierPath(ovalIn: dotRect).fill()
+                }
+            }
+            if day.tokens > 0 {
+                let valueStr = UIFormat.compact(day.tokens, yi: yi) as NSString
+                let maxW = max(8, rect.width - padX * 2)
+                var fontSize: CGFloat = layout.cellWidth >= 78 ? 12 : 10.5
+                var valueAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold),
+                    .foregroundColor: Self.tileValueColor(level),
+                ]
+                var valueSize = valueStr.size(withAttributes: valueAttrs)
+                if valueSize.width > maxW {
+                    fontSize = 9.5
+                    valueAttrs[.font] = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold)
+                    valueSize = valueStr.size(withAttributes: valueAttrs)
+                }
+                let valueY = max(rect.minY + padY + 14, rect.maxY - padY - valueSize.height)
+                valueStr.draw(in: NSRect(x: rect.minX + padX, y: valueY, width: maxW, height: valueSize.height),
+                              withAttributes: valueAttrs)
+            }
             if focusIndex == i {
-                NSColor.labelColor.setStroke(); path.lineWidth = 1.5; path.stroke()
-            } else if isNow {
-                let ring = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-                NSColor.controlAccentColor.setStroke(); ring.lineWidth = 1; ring.stroke()
+                let ring = NSBezierPath(roundedRect: rect.insetBy(dx: 0.875, dy: 0.875),
+                                        xRadius: tileRadius - 0.875, yRadius: tileRadius - 0.875)
+                NSColor.labelColor.withAlphaComponent(0.85).setStroke(); ring.lineWidth = 1.75; ring.stroke()
+            } else if isToday {
+                let ring = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75),
+                                        xRadius: tileRadius - 0.75, yRadius: tileRadius - 0.75)
+                let ringColor = level <= 2
+                    ? Self.brandAccent.withAlphaComponent(0.85)
+                    : Self.tileValueColor(level).withAlphaComponent(0.55)
+                ringColor.setStroke(); ring.lineWidth = 1.5; ring.stroke()
+            }
+        }
+        guard layout.summaryWidth > 0 else { return }
+        (L10n.text("周合计") as NSString).draw(at: NSPoint(x: layout.summaryX, y: 2), withAttributes: headerAttrs)
+        let dividerX = layout.summaryX - HeatmapGridLayout.summaryGap / 2
+        let divider = NSBezierPath()
+        divider.move(to: NSPoint(x: dividerX, y: layout.top(of: 0)))
+        divider.line(to: NSPoint(x: dividerX, y: layout.height))
+        NSColor.separatorColor.withAlphaComponent(0.45).setStroke()
+        divider.lineWidth = 0.75
+        divider.stroke()
+
+        let maxWeekTokens = max(chart.monthWeeks.map(\.tokens).max() ?? 0, 1)
+        let focusedRow = focusIndex.map { $0 / 7 }
+        let weekTotalAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let mutedTotalAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ]
+        let weekMetaAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let trackFill = NSColor.labelColor.withAlphaComponent(0.065)
+        let highlightFill = NSColor.labelColor.withAlphaComponent(0.035)
+        for week in chart.monthWeeks {
+            guard let sRect = layout.summaryRect(row: week.row),
+                  sRect.insetBy(dx: -8, dy: -2).intersects(dirtyRect) else { continue }
+            if focusedRow == week.row {
+                highlightFill.setFill()
+                NSBezierPath(roundedRect: sRect.insetBy(dx: -6, dy: 0), xRadius: tileRadius, yRadius: tileRadius).fill()
+            }
+            if week.elapsedDays == 0 {
+                let dash = "—" as NSString
+                let size = dash.size(withAttributes: mutedTotalAttrs)
+                dash.draw(at: NSPoint(x: sRect.minX, y: sRect.midY - size.height / 2), withAttributes: mutedTotalAttrs)
+                continue
+            }
+            let totalStr = (week.tokens > 0 ? UIFormat.compact(week.tokens, yi: yi) : "—") as NSString
+            let totalAttrs = week.tokens > 0 ? weekTotalAttrs : mutedTotalAttrs
+            let totalSize = totalStr.size(withAttributes: totalAttrs)
+            let metaStr = L10n.text("\(week.activeDays)/\(week.elapsedDays) 天") as NSString
+            let metaSize = metaStr.size(withAttributes: weekMetaAttrs)
+            let barHeight: CGFloat = 6
+            let innerGap: CGFloat = 6
+            let blockHeight = totalSize.height + innerGap + barHeight
+            let blockY = sRect.minY + floor((sRect.height - blockHeight) / 2)
+            totalStr.draw(at: NSPoint(x: sRect.minX, y: blockY), withAttributes: totalAttrs)
+            metaStr.draw(at: NSPoint(x: sRect.maxX - metaSize.width, y: blockY + (totalSize.height - metaSize.height) / 2),
+                         withAttributes: weekMetaAttrs)
+            let trackRect = NSRect(x: sRect.minX, y: blockY + totalSize.height + innerGap,
+                                   width: sRect.width, height: barHeight)
+            trackFill.setFill()
+            NSBezierPath(roundedRect: trackRect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+            if week.tokens > 0 {
+                let fillWidth = max(barHeight, sRect.width * CGFloat(week.tokens) / CGFloat(maxWeekTokens))
+                let fillRect = NSRect(x: trackRect.minX, y: trackRect.minY, width: fillWidth, height: barHeight)
+                let weekLevel = week.tokens == maxWeekTokens
+                    ? 4
+                    : max(2, min(4, Int(ceil(sqrt(Double(week.tokens) / Double(maxWeekTokens)) * 4))))
+                Self.color(weekLevel).setFill()
+                NSBezierPath(roundedRect: fillRect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
             }
         }
     }
     private func invalidate(_ index: Int?) {
         guard let chart, let index else { return }
-        setNeedsDisplay(HeatmapGridLayout(chart: chart, width: bounds.width).rect(index).insetBy(dx: -2, dy: -2))
+        let layout = HeatmapGridLayout(chart: chart, width: bounds.width)
+        setNeedsDisplay(layout.rect(index).insetBy(dx: -2, dy: -2))
+        if chart.style == .monthCalendar, let sumRect = layout.summaryRect(row: index / 7) {
+            setNeedsDisplay(sumRect.insetBy(dx: -8, dy: -2))
+        }
     }
     private func publishFocus(from old: Int?) {
         guard old != focusIndex else { return }
@@ -366,9 +778,20 @@ final class HeatmapCanvasView: NSView {
         setAccessibilityValue(value ?? L10n.text("请选择一个格子"))
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { hoverToken.unregister() }
+        super.viewWillMove(toWindow: newWindow)
+    }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseMoved(with event: NSEvent) {
+        guard !ScrollActivity.shared.isScrolling else { return }
         focus(at: convert(event.locationInWindow, from: nil))
+        hoverToken.setActive(hovered != nil) { [weak self] in
+            guard let self, self.hovered != nil else { return }
+            let old = self.focusIndex
+            self.hovered = nil
+            self.publishFocus(from: old)
+        }
     }
     func focus(at point: NSPoint) {
         guard let chart else { return }
@@ -377,11 +800,12 @@ final class HeatmapCanvasView: NSView {
         publishFocus(from: old)
     }
     override func mouseExited(with event: NSEvent) {
+        hoverToken.unregister()
         let old = focusIndex; hovered = nil; publishFocus(from: old)
     }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        mouseMoved(with: event)
+        focus(at: convert(event.locationInWindow, from: nil))
         selected = hovered
     }
     override func keyDown(with event: NSEvent) {
@@ -389,11 +813,19 @@ final class HeatmapCanvasView: NSView {
         let old = focusIndex
         if event.keyCode == 53 { hovered = nil; selected = nil; publishFocus(from: old); return }
         let step: Int
-        switch event.keyCode {
-        case 123: step = chart.unit == .hour ? -1 : -7
-        case 124: step = chart.unit == .hour ? 1 : 7
-        case 125: step = chart.unit == .hour ? 24 : 1
-        case 126: step = chart.unit == .hour ? -24 : -1
+        switch (chart.style, event.keyCode) {
+        case (.hourly, 123): step = -1
+        case (.hourly, 124): step = 1
+        case (.hourly, 125): step = 24
+        case (.hourly, 126): step = -24
+        case (.monthCalendar, 123): step = -1
+        case (.monthCalendar, 124): step = 1
+        case (.monthCalendar, 125): step = 7
+        case (.monthCalendar, 126): step = -7
+        case (.yearly, 123): step = -7
+        case (.yearly, 124): step = 7
+        case (.yearly, 125): step = 1
+        case (.yearly, 126): step = -1
         default: super.keyDown(with: event); return
         }
         var candidate = focusIndex.map { $0 + step } ?? (chart.cells.firstIndex { $0 != nil } ?? 0)

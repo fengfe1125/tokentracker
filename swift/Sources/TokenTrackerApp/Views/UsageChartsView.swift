@@ -476,6 +476,7 @@ struct UsageDonutCard: View {
     var onSelect: ((String) -> Void)? = nil
 
     @State private var hoveredID: String?
+    @State private var hoverToken = HoverTokenBox()
 
     private var hoveredSlice: UsageDonutSlice? {
         guard let hoveredID else { return nil }
@@ -491,15 +492,16 @@ struct UsageDonutCard: View {
             if data.slices.isEmpty {
                 emptyMetricState
             } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 18) {
-                        donutCanvas
-                        legendList.frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-                    }
-                    VStack(alignment: .center, spacing: 14) {
-                        donutCanvas
-                        legendList.frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                AdaptiveLeadingFixedLayout(
+                    leadingWidth: 162,
+                    minTrailingWidth: 180,
+                    spacing: 18,
+                    verticalSpacing: 14,
+                    horizontalAlignment: .center,
+                    stackCenterLeading: true
+                ) {
+                    donutCanvas
+                    legendList.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -511,7 +513,11 @@ struct UsageDonutCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .card()
-        .onChange(of: data) { _, _ in hoveredID = nil }
+        .onChange(of: data) { _, _ in
+            hoverToken.unregister()
+            if hoveredID != nil { hoveredID = nil }
+        }
+        .onDisappear { hoverToken.unregister() }
     }
 
     private var emptyMetricState: some View {
@@ -554,10 +560,16 @@ struct UsageDonutCard: View {
                     .onContinuousHover { phase in
                         switch phase {
                         case .active(let location):
-                            hoveredID = UsageChartBuilder.sliceID(
+                            guard !ScrollActivity.shared.isScrolling else { return }
+                            let next = UsageChartBuilder.sliceID(
                                 at: location, in: geo.size, slices: data.slices)
+                            if hoveredID != next { hoveredID = next }
+                            hoverToken.setActive(next != nil) {
+                                if hoveredID != nil { hoveredID = nil }
+                            }
                         case .ended:
-                            hoveredID = nil
+                            hoverToken.unregister()
+                            if hoveredID != nil { hoveredID = nil }
                         }
                     }
                     .onTapGesture {
@@ -656,8 +668,16 @@ struct UsageDonutCard: View {
                 .buttonStyle(.plain)
                 .disabled(!clickable)
                 .onHover { active in
-                    if active { hoveredID = slice.id }
-                    else if hoveredID == slice.id { hoveredID = nil }
+                    if active {
+                        guard !ScrollActivity.shared.isScrolling else { return }
+                        if hoveredID != slice.id { hoveredID = slice.id }
+                        hoverToken.setActive(true) {
+                            if hoveredID != nil { hoveredID = nil }
+                        }
+                    } else if hoveredID == slice.id {
+                        hoverToken.unregister()
+                        hoveredID = nil
+                    }
                 }
                 .help("\(slice.label) · \(UIFormat.compact(slice.tokens, yi: yi)) · \(slice.costText)")
             }
@@ -683,7 +703,6 @@ struct TokenMixBarCard: View {
     var onSelect: ((String) -> Void)? = nil
 
     @State private var hoveredID: String?
-    @State private var hoverLocation: CGPoint = .zero
 
     private struct BarSegment: Identifiable {
         let id: String
@@ -742,6 +761,7 @@ struct TokenMixBarCard: View {
                     .frame(maxWidth: .infinity, minHeight: 150)
             } else {
                 let top = xTop
+                let domain = items.map(\.id)
                 let itemMap = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
                 Chart(segments) { seg in
                     BarMark(
@@ -754,7 +774,7 @@ struct TokenMixBarCard: View {
                     ))
                 }
                 .chartXScale(domain: 0...top)
-                .chartYScale(domain: items.map(\.id))
+                .chartYScale(domain: domain)
                 .chartLegend(.hidden)
                 .chartXAxis {
                     AxisMarks(values: TrendScale.ticks(top: top)) { value in
@@ -768,7 +788,7 @@ struct TokenMixBarCard: View {
                     }
                 }
                 .chartYAxis {
-                    AxisMarks(preset: .aligned, position: .leading, values: items.map(\.id)) { value in
+                    AxisMarks(preset: .aligned, position: .leading, values: domain) { value in
                         AxisValueLabel {
                             if let id = value.as(String.self), let item = itemMap[id] {
                                 Text(item.label)
@@ -783,29 +803,14 @@ struct TokenMixBarCard: View {
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geo in
-                        ZStack(alignment: .topLeading) {
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .onContinuousHover { phase in
-                                    switch phase {
-                                    case .active(let location):
-                                        guard let frame = proxy.plotFrame.map({ geo[$0] }) else { return }
-                                        hoverLocation = location
-                                        hoveredID = proxy.value(atY: location.y - frame.origin.y, as: String.self)
-                                    case .ended:
-                                        hoveredID = nil
-                                    }
-                                }
-                                .onTapGesture {
-                                    if let hoveredID, let target = itemMap[hoveredID]?.targetID {
-                                        onSelect?(target)
-                                    }
-                                }
-                            if let hoveredID, let item = itemMap[hoveredID] {
-                                tooltip(for: item, in: geo.size)
-                            }
-                        }
+                        TokenMixHoverOverlay(
+                            proxy: proxy,
+                            geo: geo,
+                            itemMap: itemMap,
+                            yi: yi,
+                            hoveredID: $hoveredID,
+                            onSelect: onSelect
+                        )
                     }
                 }
                 .frame(height: chartHeight)
@@ -815,7 +820,61 @@ struct TokenMixBarCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .card()
-        .onChange(of: items) { _, _ in hoveredID = nil }
+        .onChange(of: items) { _, _ in
+            if hoveredID != nil { hoveredID = nil }
+        }
+    }
+}
+
+/// 独立悬停与浮卡层：hoverLocation 只在此子视图内更新，避免鼠标微移或滚动时 120Hz 重建 Swift Charts。
+private struct TokenMixHoverOverlay: View {
+    let proxy: ChartProxy
+    let geo: GeometryProxy
+    let itemMap: [String: TokenMixItem]
+    let yi: Bool
+    @Binding var hoveredID: String?
+    let onSelect: ((String) -> Void)?
+
+    @State private var hoverLocation: CGPoint = .zero
+    @State private var tokenBox = HoverTokenBox()
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(.clear)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard !ScrollActivity.shared.isScrolling else { return }
+                        guard let frame = proxy.plotFrame.map({ geo[$0] }) else { return }
+                        let next = proxy.value(atY: location.y - frame.origin.y, as: String.self)
+                        if hoveredID != next { hoveredID = next }
+                        if next != nil {
+                            if abs(location.x - hoverLocation.x) >= 1 || abs(location.y - hoverLocation.y) >= 1 {
+                                hoverLocation = location
+                            }
+                            tokenBox.setActive(true) {
+                                if hoveredID != nil { hoveredID = nil }
+                            }
+                        } else {
+                            tokenBox.unregister()
+                        }
+                    case .ended:
+                        tokenBox.unregister()
+                        if hoveredID != nil { hoveredID = nil }
+                    }
+                }
+                .onTapGesture {
+                    if let hoveredID, let target = itemMap[hoveredID]?.targetID {
+                        onSelect?(target)
+                    }
+                }
+                .onDisappear { tokenBox.unregister() }
+            if let hoveredID, let item = itemMap[hoveredID] {
+                tooltip(for: item, in: geo.size)
+            }
+        }
     }
 
     private func tooltip(for item: TokenMixItem, in size: CGSize) -> some View {
@@ -879,13 +938,13 @@ struct CacheHitComparisonCard: View {
     var onSelect: ((String) -> Void)? = nil
 
     @State private var hoveredID: String?
-    @State private var hoverLocation: CGPoint = .zero
 
     private var chartHeight: CGFloat {
         max(120, CGFloat(items.count) * 28 + 24)
     }
 
     var body: some View {
+        let domain = items.map(\.id)
         let itemMap = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         VStack(alignment: .leading, spacing: 10) {
             CardHeader(title: L10n.text("缓存命中率对比")) {
@@ -910,7 +969,7 @@ struct CacheHitComparisonCard: View {
                 }
             }
             .chartXScale(domain: 0...114)
-            .chartYScale(domain: items.map(\.id))
+            .chartYScale(domain: domain)
             .chartLegend(.hidden)
             .chartXAxis {
                 AxisMarks(values: [0, 25, 50, 75, 100]) { value in
@@ -923,7 +982,7 @@ struct CacheHitComparisonCard: View {
                 }
             }
             .chartYAxis {
-                AxisMarks(preset: .aligned, position: .leading, values: items.map(\.id)) { value in
+                AxisMarks(preset: .aligned, position: .leading, values: domain) { value in
                     AxisValueLabel {
                         if let id = value.as(String.self), let item = itemMap[id] {
                             HStack(spacing: 5) {
@@ -942,29 +1001,14 @@ struct CacheHitComparisonCard: View {
             }
             .chartOverlay { proxy in
                 GeometryReader { geo in
-                    ZStack(alignment: .topLeading) {
-                        Rectangle()
-                            .fill(.clear)
-                            .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                switch phase {
-                                case .active(let location):
-                                    guard let frame = proxy.plotFrame.map({ geo[$0] }) else { return }
-                                    hoverLocation = location
-                                    hoveredID = proxy.value(atY: location.y - frame.origin.y, as: String.self)
-                                case .ended:
-                                    hoveredID = nil
-                                }
-                            }
-                            .onTapGesture {
-                                if let hoveredID, let target = itemMap[hoveredID]?.targetID {
-                                    onSelect?(target)
-                                }
-                            }
-                        if let hoveredID, let item = itemMap[hoveredID] {
-                            cacheTooltip(for: item, in: geo.size)
-                        }
-                    }
+                    CacheHitHoverOverlay(
+                        proxy: proxy,
+                        geo: geo,
+                        itemMap: itemMap,
+                        yi: yi,
+                        hoveredID: $hoveredID,
+                        onSelect: onSelect
+                    )
                 }
             }
             .frame(height: chartHeight)
@@ -973,7 +1017,60 @@ struct CacheHitComparisonCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
-        .onChange(of: items) { _, _ in hoveredID = nil }
+        .onChange(of: items) { _, _ in
+            if hoveredID != nil { hoveredID = nil }
+        }
+    }
+}
+
+private struct CacheHitHoverOverlay: View {
+    let proxy: ChartProxy
+    let geo: GeometryProxy
+    let itemMap: [String: CacheHitItem]
+    let yi: Bool
+    @Binding var hoveredID: String?
+    let onSelect: ((String) -> Void)?
+
+    @State private var hoverLocation: CGPoint = .zero
+    @State private var tokenBox = HoverTokenBox()
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(.clear)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard !ScrollActivity.shared.isScrolling else { return }
+                        guard let frame = proxy.plotFrame.map({ geo[$0] }) else { return }
+                        let next = proxy.value(atY: location.y - frame.origin.y, as: String.self)
+                        if hoveredID != next { hoveredID = next }
+                        if next != nil {
+                            if abs(location.x - hoverLocation.x) >= 1 || abs(location.y - hoverLocation.y) >= 1 {
+                                hoverLocation = location
+                            }
+                            tokenBox.setActive(true) {
+                                if hoveredID != nil { hoveredID = nil }
+                            }
+                        } else {
+                            tokenBox.unregister()
+                        }
+                    case .ended:
+                        tokenBox.unregister()
+                        if hoveredID != nil { hoveredID = nil }
+                    }
+                }
+                .onTapGesture {
+                    if let hoveredID, let target = itemMap[hoveredID]?.targetID {
+                        onSelect?(target)
+                    }
+                }
+                .onDisappear { tokenBox.unregister() }
+            if let hoveredID, let item = itemMap[hoveredID] {
+                cacheTooltip(for: item, in: geo.size)
+            }
+        }
     }
 
     private func cacheTooltip(for item: CacheHitItem, in size: CGSize) -> some View {
@@ -1029,13 +1126,10 @@ struct SessionSummaryDock: View {
 
     @AppStorage("tt.sessions.summaryCollapsed") private var collapsed = false
     @State private var hoveredSessionID: String?
+    @State private var hoverToken = HoverTokenBox()
 
     var body: some View {
-        let agents = UsageChartBuilder.sessionAgentSummary(rows: rows)
         let totals = UsageChartBuilder.sessionTotals(rows: rows)
-        let topSessions = Array(rows.filter { $0.tokens > 0 }
-            .sorted { $0.tokens > $1.tokens }
-            .prefix(4))
 
         VStack(alignment: .leading, spacing: collapsed ? 0 : 12) {
             HStack(spacing: 8) {
@@ -1072,48 +1166,40 @@ struct SessionSummaryDock: View {
             }
 
             if !collapsed {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 20) {
-                        agentShareColumn(agents: agents)
-                            .frame(minWidth: 260, maxWidth: .infinity, alignment: .leading)
-                        Divider().frame(height: 112)
-                        topSessionsColumn(topSessions: topSessions)
-                            .frame(minWidth: 320, maxWidth: .infinity, alignment: .leading)
-                    }
-                    VStack(alignment: .leading, spacing: 14) {
-                        agentShareColumn(agents: agents)
-                        topSessionsColumn(topSessions: topSessions)
-                    }
+                let agents = UsageChartBuilder.sessionAgentSummary(rows: rows)
+                let topSessions = Array(rows.filter { $0.tokens > 0 }
+                    .sorted { $0.tokens > $1.tokens }
+                    .prefix(4))
+                AdaptiveDividedPairLayout(
+                    minFirstWidth: 260,
+                    minSecondWidth: 320,
+                    horizontalSpacing: 20,
+                    verticalSpacing: 14
+                ) {
+                    agentShareColumn(agents: agents)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Divider().frame(height: 112)
+                    topSessionsColumn(topSessions: topSessions)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: collapsed ? 10 : 14)
+        .onDisappear { hoverToken.unregister() }
     }
 
     private func agentShareColumn(agents: [SessionAgentSlice]) -> some View {
-        let largest = agents.max { $0.share < $1.share }?.tool
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(L10n.text("Agent 分布"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            GeometryReader { geo in
-                HStack(spacing: 2) {
-                    ForEach(agents) { item in
-                        if item.share > 0 {
-                            if item.tool == largest {
-                                Rectangle().fill(toolColor(item.tool))
-                            } else {
-                                Rectangle()
-                                    .fill(toolColor(item.tool))
-                                    .frame(width: max(4, geo.size.width * item.share))
-                            }
-                        }
-                    }
-                }
-                .clipShape(Capsule())
-            }
-            .frame(height: 8)
+            SegmentedBar(
+                segments: agents.map {
+                    SegmentedBarSegment(value: $0.share, color: toolColor($0.tool), minWidth: 4)
+                },
+                height: 8
+            )
 
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(agents.prefix(4)) { item in
@@ -1144,6 +1230,7 @@ struct SessionSummaryDock: View {
     @ViewBuilder
     private func topSessionsColumn(topSessions: [SessionRowModel]) -> some View {
         let topVal = TrendScale.niceCeiling(Double(topSessions.map(\.tokens).max() ?? 0))
+        let domain = topSessions.map(\.id)
         let rowMap = Dictionary(uniqueKeysWithValues: topSessions.map { ($0.id, $0) })
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -1178,11 +1265,11 @@ struct SessionSummaryDock: View {
                     }
                 }
                 .chartXScale(domain: 0...(topVal * 1.18))
-                .chartYScale(domain: topSessions.map(\.id))
+                .chartYScale(domain: domain)
                 .chartLegend(.hidden)
                 .chartXAxis(.hidden)
                 .chartYAxis {
-                    AxisMarks(preset: .aligned, position: .leading, values: topSessions.map(\.id)) { value in
+                    AxisMarks(preset: .aligned, position: .leading, values: domain) { value in
                         AxisValueLabel {
                             if let id = value.as(String.self), let row = rowMap[id] {
                                 Text(row.title)
@@ -1203,10 +1290,16 @@ struct SessionSummaryDock: View {
                             .onContinuousHover { phase in
                                 switch phase {
                                 case .active(let location):
+                                    guard !ScrollActivity.shared.isScrolling else { return }
                                     guard let frame = proxy.plotFrame.map({ geo[$0] }) else { return }
-                                    hoveredSessionID = proxy.value(atY: location.y - frame.origin.y, as: String.self)
+                                    let next = proxy.value(atY: location.y - frame.origin.y, as: String.self)
+                                    if hoveredSessionID != next { hoveredSessionID = next }
+                                    hoverToken.setActive(next != nil) {
+                                        if hoveredSessionID != nil { hoveredSessionID = nil }
+                                    }
                                 case .ended:
-                                    hoveredSessionID = nil
+                                    hoverToken.unregister()
+                                    if hoveredSessionID != nil { hoveredSessionID = nil }
                                 }
                             }
                             .onTapGesture {

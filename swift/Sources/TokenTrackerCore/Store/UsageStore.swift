@@ -1008,6 +1008,25 @@ public final class UsageStore {
                    : Double(row?.int("COALESCE(SUM(\(expr)),0)") ?? 0)
     }
 
+    /// 昨日截至与当前时刻相同已过时长的可计数总 Token（用于概览「今天」的同刻对比）。
+    /// 使用本地日历计算昨日零点，跨夏令时按昨日零点起算同一已过时长并封顶在今日零点。
+    public func yesterdaySameTimeTokens(tool: String? = nil, calendar: Calendar = .current) throws -> Int64 {
+        let now = Date(timeIntervalSince1970: Double(nowMs()) / 1000)
+        let todayStart = calendar.startOfDay(for: now)
+        guard let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else { return 0 }
+        let elapsed = max(0, now.timeIntervalSince(todayStart))
+        let yesterdayCutoff = min(todayStart, yesterdayStart.addingTimeInterval(elapsed + 1))
+        let lo = Int64(yesterdayStart.timeIntervalSince1970 * 1000)
+        let hi = Int64(yesterdayCutoff.timeIntervalSince1970 * 1000)
+        guard hi > lo else { return 0 }
+        var (sql, args) = countable(lo, hi)
+        (sql, args) = scope(sql, args, tool: tool)
+        let row = try conn.queryOne(
+            "SELECT COALESCE(SUM(\(UsageStore.tokensExpr)),0) AS tokens FROM usage_events WHERE \(sql)",
+            args)
+        return row?.int("tokens") ?? 0
+    }
+
     public func windowUnallocated(startMs: Int64, tool: String? = nil, modelPrefix: String? = nil,
                                   includeCache: Bool = false, usd: Bool = false) throws -> Double {
         var (sql, args) = ("(time_quality='unallocated' OR (time_quality='observed' AND ts>=? AND interval_start<?))",

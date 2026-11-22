@@ -16,16 +16,25 @@ final class QuotaRefreshTests: XCTestCase {
                            SubscriptionWindow(id: "secondary_window", duration: 604_800, usedPercent: 7)]
 
     func testMenuBarUsesActiveOfficialAccountOnlyWithoutLocalEstimates() {
+        let agWindows = [
+            SubscriptionWindow(id: "gemini", name: "Gemini", usedPercent: 62),
+            SubscriptionWindow(id: "claude-gpt", name: "Claude / GPT", usedPercent: 95),
+        ]
         let entries = QuotaRefresh.menuEntries([
             card(.codex, token: "active", active: true, status: .current, windows: windows),
             card(.claude, token: "other", active: false, status: .current, windows: windows),
+            card(.antigravity, token: "ag-active", active: true, status: .current, windows: agWindows),
         ])
-        XCTAssertEqual(entries.map(\.id), ["claude", "kimi", "go", "codex"])
+        XCTAssertEqual(entries.map(\.id), ["claude", "kimi", "go", "codex", "antigravity"])
         let codex = entries.first { $0.id == "codex" }
         XCTAssertEqual(codex?.windows.map(\.pct), [48, 7])
         XCTAssertEqual(codex?.windows.map(\.label), ["5 小时", "周 (7天)"])
         XCTAssertEqual(codex?.windows.first?.source, "official")
         XCTAssertEqual(codex?.sampledAt, 1_800_000_000)
+        let ag = entries.first { $0.id == "antigravity" }
+        XCTAssertEqual(ag?.name, "Antigravity")
+        XCTAssertEqual(ag?.windows.map(\.label), ["Gemini", "Claude / GPT"])
+        XCTAssertEqual(ag?.windows.map(\.pct), [62, 95])
         // 非当前登录账号、无数据账号不填充圆环，也没有本地估算。
         XCTAssertEqual(entries.first { $0.id == "claude" }?.windows.count, 0)
         XCTAssertEqual(entries.first { $0.id == "go" }?.windows.count, 0)

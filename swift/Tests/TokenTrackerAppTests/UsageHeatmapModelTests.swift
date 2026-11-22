@@ -111,6 +111,16 @@ final class UsageHeatmapModelTests: XCTestCase {
         await refresh()
         XCTAssertEqual(model.chart?.id, dayID, "Warm day switch must reuse the prewarmed chart when DB is unchanged")
 
+        // 「本月」同样在加载「近 7 天」时顺手预编译（零额外 SQL），直接同帧命中缓存。
+        XCTAssertTrue(model.applyCachedIfAvailable(for: HeatmapRequest(range: "month")))
+        XCTAssertEqual(model.loadedRequest?.range, "month")
+        XCTAssertEqual(model.chart?.style, .monthCalendar)
+        let monthID = try XCTUnwrap(model.chart?.id)
+
+        model.request = HeatmapRequest(range: "month")
+        await refresh()
+        XCTAssertEqual(model.chart?.id, monthID, "Warm month switch must reuse the prewarmed chart when DB is unchanged")
+
         // 切回「近 7 天」也直接复用缓存实例。
         XCTAssertTrue(model.applyCachedIfAvailable(for: HeatmapRequest(range: "week")))
         XCTAssertEqual(model.chart?.id, weekID)
@@ -118,7 +128,7 @@ final class UsageHeatmapModelTests: XCTestCase {
         await refresh()
         XCTAssertEqual(model.chart?.id, weekID)
 
-        // 数据库有新写入后，两个范围都必须重新计算而不是停留旧快照。
+        // 数据库有新写入后，各范围都必须重新计算而不是停留旧快照。
         try writer.putEvent(tool: "claude", srcKey: "today-2", ts: Int64(now.timeIntervalSince1970 * 1000), input: 5)
         await refresh()
         XCTAssertEqual(model.chart?.totalTokens, 35)
@@ -128,5 +138,9 @@ final class UsageHeatmapModelTests: XCTestCase {
         await refresh()
         XCTAssertEqual(model.chart?.totalTokens, 15)
         XCTAssertNotEqual(model.chart?.id, dayID)
+
+        model.request = HeatmapRequest(range: "month")
+        await refresh()
+        XCTAssertNotEqual(model.chart?.id, monthID)
     }
 }

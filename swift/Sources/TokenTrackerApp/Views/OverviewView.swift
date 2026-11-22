@@ -16,6 +16,8 @@ struct OverviewView: View {
     @ObservedObject private var heatmap: UsageHeatmapModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var slowLoading = false
+    /// 今日活跃小时 ≤ 2 时默认展示脉冲面板；用户可临时切到 24 小时柱图查看。
+    @State private var forceTodayBarChart = false
 
     init(state: AppState) {
         self.state = state
@@ -31,28 +33,15 @@ struct OverviewView: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: Metrics.gridSpacing) {
-                        heroCard.frame(minWidth: 480)
-                        quotaCard.frame(width: 300)
-                    }
-                    VStack(spacing: Metrics.gridSpacing) {
-                        heroCard
-                        quotaCard
-                    }
+                AdaptiveSplitLayout(minLeadingWidth: 480, trailingWidth: 300, spacing: Metrics.gridSpacing) {
+                    heroCard
+                    quotaCard
                 }
                 UsageHeatmapView(model: heatmap, yi: yi)
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: Metrics.gridSpacing) {
-                        compositionCard.frame(minWidth: 250)
-                        agentCard.frame(minWidth: 250)
-                        modelCard.frame(minWidth: 250)
-                    }
-                    VStack(spacing: Metrics.gridSpacing) {
-                        compositionCard
-                        agentCard
-                        modelCard
-                    }
+                AdaptiveEqualColumnsLayout(minColumnWidth: 250, spacing: Metrics.gridSpacing) {
+                    compositionCard
+                    agentCard
+                    modelCard
                 }
                 InsightsOverview(model: state.insights, rescan: { state.requestScan() })
             }
@@ -181,7 +170,11 @@ struct OverviewView: View {
     private var heroCard: some View {
         let total = state.statTotal
         let unpriced = total.events > 0 && total.unpriced == total.events
-        let points = trendPoints
+        let rawPoints = trendPoints
+        let isToday = displayedRange == "day"
+        let todayPulseEligible = isToday && TodayTrendBuilder.shouldUsePulsePanel(activeHourPoints: rawPoints)
+        let showsTodayPulse = todayPulseEligible && !forceTodayBarChart
+        let daySlots = isToday ? TodayTrendBuilder.daySlots(from: rawPoints) : []
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(scopeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
@@ -202,19 +195,50 @@ struct OverviewView: View {
                 kpi(L10n.text("缓存命中率"), UIFormat.percent(total.cacheHitRate))
                 Spacer(minLength: 0)
                 trendLegend
+                    .opacity(showsTodayPulse ? 0.45 : 1)
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: total.tokens)
-            if points.isEmpty {
+            if rawPoints.isEmpty {
                 ContentUnavailableView(L10n.text("暂无数据"), systemImage: "chart.bar.xaxis",
                                        description: Text(L10n.text("点右上角「扫描」")))
                     .frame(height: 220)
+            } else if showsTodayPulse {
+                TodayPulseView(
+                    daySlots: daySlots,
+                    activePoints: rawPoints,
+                    total: total,
+                    yesterdaySameTimeTokens: state.yesterdaySameTimeTokens,
+                    sessions: state.sessionRows.map(SessionRowModel.init),
+                    yi: yi,
+                    onSwitchToBarChart: { forceTodayBarChart = true },
+                    onSelectSession: { id in
+                        state.selectedSessionID = id
+                        state.showSessionDetail()
+                    }
+                )
             } else {
-                TrendChart(points: points, isHourly: displayedRange == "day", yi: yi)
-                    .equatable()
+                let currentHour = Calendar.current.component(.hour, from: Date())
+                let badgeOnLeading = currentHour >= 17
+                ZStack(alignment: badgeOnLeading ? .topLeading : .topTrailing) {
+                    TrendChart(points: isToday ? daySlots : rawPoints,
+                               isHourly: isToday,
+                               yi: yi,
+                               currentTimeLabel: isToday ? TodayTrendBuilder.currentTimeLabel() : nil)
+                        .equatable()
+                    if todayPulseEligible && forceTodayBarChart {
+                        TodayChartModePill(title: L10n.text("切回脉冲面板"), active: true) {
+                            forceTodayBarChart = false
+                        }
+                        .padding(badgeOnLeading ? .leading : .trailing, 46)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
+        .onChange(of: displayedRange) { _, next in
+            if next != "day" { forceTodayBarChart = false }
+        }
     }
 
     private func kpi(_ title: String, _ value: String, help: String? = nil) -> some View {
@@ -244,30 +268,16 @@ struct OverviewView: View {
     private var compositionCard: some View {
         let total = state.statTotal
         let sum = TokenKind.allCases.reduce(Int64(0)) { $0 + tokens($1, in: total) }
-        let largest = TokenKind.allCases.max { tokens($0, in: total) < tokens($1, in: total) }
         return VStack(alignment: .leading, spacing: 12) {
             CardHeader(title: L10n.text("Token 构成")) {
                 Text(rangeLabel).font(.caption).foregroundStyle(.secondary)
             }
-            GeometryReader { geo in
-                HStack(spacing: 2) {
-                    ForEach(TokenKind.allCases) { kind in
-                        let value = tokens(kind, in: total)
-                        if value > 0 {
-                            // 最大的一段吃掉剩余宽度；其余按占比，非零段至少 3pt 可见
-                            if kind == largest {
-                                Rectangle().fill(kind.color)
-                            } else {
-                                Rectangle().fill(kind.color)
-                                    .frame(width: max(3, geo.size.width * Double(value) / Double(max(sum, 1))))
-                            }
-                        }
-                    }
-                    if sum == 0 { Rectangle().fill(Color.primary.opacity(0.08)) }
-                }
-                .clipShape(Capsule())
-            }
-            .frame(height: 10)
+            SegmentedBar(
+                segments: TokenKind.allCases.map { kind in
+                    SegmentedBarSegment(value: Double(tokens(kind, in: total)), color: kind.color, minWidth: 3)
+                },
+                height: 10
+            )
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: sum)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading,
                       spacing: Metrics.gridSpacing) {

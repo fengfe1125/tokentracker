@@ -61,10 +61,11 @@ final class NotchHUDTests: XCTestCase {
         let prefs = NotchHUDPreferences(defaults: defaults)
         XCTAssertFalse(prefs.enabled)
         XCTAssertEqual(prefs.quotaDisplay, .remaining)
-        XCTAssertEqual(prefs.providers, ["codex", "claude"])
+        XCTAssertEqual(prefs.providers, ["codex", "claude", "antigravity"])
         prefs.enabled = true
         prefs.quotaDisplay = .remaining
         prefs.setProvider("codex", visible: false)
+        prefs.setProvider("antigravity", visible: false)
         prefs.setProvider("claude", visible: false)
         prefs.setProvider("kimi", visible: true)
         prefs.setProvider("kimi", visible: true)
@@ -73,6 +74,16 @@ final class NotchHUDTests: XCTestCase {
         XCTAssertEqual(restored.quotaDisplay, .remaining)
         XCTAssertEqual(restored.providers, ["claude", "kimi"])
         XCTAssertNil(defaults.object(forKey: "menubar_ring"))
+
+        let agQuota = NotchHUDQuota(provider: "antigravity", entry: MenuBarQuotaEntry(
+            id: "antigravity", name: "Antigravity", windows: [
+                MenuBarQuotaWindow(pct: 92, source: "official", stale: false, label: "Gemini"),
+                MenuBarQuotaWindow(pct: 30, source: "official", stale: false, label: "Claude / GPT"),
+            ]), display: .remaining)
+        XCTAssertEqual(agQuota.name, "Antigravity")
+        XCTAssertEqual(agQuota.glyph, "A")
+        XCTAssertEqual(agQuota.window?.label, "Gemini")
+        XCTAssertEqual(agQuota.summary, "剩余 8%")
     }
 
     func testOutsideClicksUseTheEventAndIgnoreQueuedClicksBeforeOpening() {

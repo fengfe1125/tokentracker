@@ -148,19 +148,20 @@ final class PortsModel: ObservableObject {
     }
 
     func refresh(quiet: Bool = false) {
-        if !quiet { scanning = true }
+        if !quiet && !scanning { scanning = true }
         generation += 1
         let token = generation
         let path = path
-        let commands = AppPreferences(values: settings.effective()).projectCommands
+        let settingsPath = settings.path
         Task {
             let snapshot = await Task.detached(priority: .utility) {
-                Self.load(path: path, commands: commands)
+                let commands = AppPreferences(values: SettingsStore(path: settingsPath).effective()).projectCommands
+                return Self.load(path: path, commands: commands)
             }.value
             guard token == generation else { return }
             apply(snapshot)
-            scanning = false
-            loaded = true
+            if scanning { scanning = false }
+            if !loaded { loaded = true }
         }
     }
 
@@ -168,19 +169,25 @@ final class PortsModel: ObservableObject {
         for project in snapshot.projects where colorIndex[project.id] == nil {
             colorIndex[project.id] = colorIndex.count
         }
-        let animate = loaded && snapshot.ports.map(\.port) != ports.map(\.port)
-        if animate {
-            withAnimation(.snappy(duration: 0.3)) { ports = snapshot.ports }
-        } else {
-            ports = snapshot.ports
+        if ports != snapshot.ports {
+            let animate = loaded && snapshot.ports.map(\.port) != ports.map(\.port)
+            if animate {
+                withAnimation(.snappy(duration: 0.3)) { ports = snapshot.ports }
+            } else {
+                ports = snapshot.ports
+            }
         }
-        projects = snapshot.projects
+        if projects != snapshot.projects {
+            projects = snapshot.projects
+        }
         let listening = Set(snapshot.ports.map(\.port))
-        stubborn.formIntersection(listening)
-        starting = starting.filter { id in !(snapshot.projects.first { $0.id == id }?.running ?? false) }
+        let nextStubborn = stubborn.intersection(listening)
+        if stubborn != nextStubborn { stubborn = nextStubborn }
+        let nextStarting = starting.filter { id in !(snapshot.projects.first { $0.id == id }?.running ?? false) }
+        if starting != nextStarting { starting = nextStarting }
         if let selectedPort, !listening.contains(selectedPort) {
             self.selectedPort = nil
-            pending = nil
+            if pending != nil { pending = nil }
         }
         if case .stopProject(let id) = pending, !(projects.first { $0.id == id }?.running ?? false) {
             pending = nil

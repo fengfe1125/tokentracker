@@ -19,33 +19,46 @@ public final class SubscriptionService: @unchecked Sendable {
 
     struct Entry {
         var fingerprint: String
+        var credentialFingerprint: String?
         var latest: SubscriptionSnapshot
         var lastGood: SubscriptionSnapshot?
         var nextAttempt: Date
     }
 
+    struct EphemeralToken {
+        var refreshHash: String
+        var token: String
+        var expiresAt: Date?
+    }
+
     private let store: SubscriptionAccountStore
     private let transport: SubscriptionTransport
     private let clock: () -> Date
+    private let localAccounts: @Sendable () -> [SubscriptionAccount]
     private let cachePath: String?
     private let lock = NSLock()
     private var accounts: [SubscriptionAccount] = []
     private var stored: [String: StoredSubscriptionAccount] = [:]
     private var entries: [String: Entry] = [:]
+    private var ephemeralTokens: [String: EphemeralToken] = [:]
     private var inFlight: Set<String> = []
 
     public convenience init(store: SubscriptionAccountStore = SubscriptionAccountStore(),
                             transport: @escaping SubscriptionTransport = SubscriptionHTTP.live,
-                            cachePath: String? = NSHomeDirectory() + "/.tokentracker/subscription_cache.json") {
-        self.init(store: store, transport: transport, cachePath: cachePath, clock: Date.init)
+                            cachePath: String? = NSHomeDirectory() + "/.tokentracker/subscription_cache.json",
+                            localAccounts: (@Sendable () -> [SubscriptionAccount])? = nil) {
+        self.init(store: store, transport: transport, cachePath: cachePath, clock: Date.init,
+                  localAccounts: localAccounts ?? { AntigravityLocalCredentials().discover() })
     }
 
     init(store: SubscriptionAccountStore, transport: @escaping SubscriptionTransport,
-         cachePath: String?, clock: @escaping () -> Date) {
+         cachePath: String?, clock: @escaping () -> Date,
+         localAccounts: @escaping @Sendable () -> [SubscriptionAccount] = { [] }) {
         self.store = store
         self.transport = transport
         self.cachePath = cachePath
         self.clock = clock
+        self.localAccounts = localAccounts
         loadPersisted()
     }
 
@@ -53,18 +66,39 @@ public final class SubscriptionService: @unchecked Sendable {
 
     // ------------------------------------------------------------ 账号 ----
 
-    /// 重新读取账号库；返回账号是否变化。
+    /// 重新读取账号库与自动发现的本机账号（Antigravity）；返回账号是否变化。
     @discardableResult
     public func discover() -> Bool {
         let records = store.load()
-        let found = Self.accounts(records)
+        let found = Self.mergeAccounts(stored: Self.accounts(records), local: localAccounts())
         lock.lock(); defer { lock.unlock() }
         stored = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         guard found != accounts else { return false }
         accounts = found
         let ids = Set(found.map(\.id))
         entries = entries.filter { ids.contains($0.key) }
+        ephemeralTokens = ephemeralTokens.filter { ids.contains($0.key) }
         return true
+    }
+
+    static func mergeAccounts(stored: [SubscriptionAccount], local: [SubscriptionAccount]) -> [SubscriptionAccount] {
+        var merged = stored
+        for var candidate in local {
+            let duplicate = merged.contains { existing in
+                guard existing.provider == candidate.provider else { return false }
+                if let a = existing.providerAccountID, let b = candidate.providerAccountID { return a == b }
+                if let a = existing.credential?.token, let b = candidate.credential?.token { return a == b }
+                return false
+            }
+            guard !duplicate else { continue }
+            let hasExplicitMenuBar = merged.contains { $0.provider == candidate.provider && $0.isActive }
+            if hasExplicitMenuBar { candidate.isActive = false }
+            merged.append(candidate)
+        }
+        return merged.sorted {
+            SubscriptionCard.ordered(SubscriptionCard(account: $0, snapshot: .init(status: .loading)),
+                                     SubscriptionCard(account: $1, snapshot: .init(status: .loading)))
+        }
     }
 
     static func accountID(_ record: StoredSubscriptionAccount) -> String {
@@ -103,6 +137,12 @@ public final class SubscriptionService: @unchecked Sendable {
         let due = accounts.filter { account in
             guard !inFlight.contains(account.id) else { return false }
             guard let entry = entries[account.id], entry.fingerprint == Self.fingerprint(account) else { return true }
+            // 自动读取的本机登录态在原工具续期后换了新令牌：此前处于过期态时立即重查。
+            if entry.latest.status == .expired,
+               let nextCred = account.credential?.fingerprint,
+               entry.credentialFingerprint != nextCred {
+                return true
+            }
             // 强制刷新也不越过 Retry-After。
             if let retry = entry.latest.retryAt, retry > now { return false }
             return force || entry.nextAttempt <= now
@@ -121,7 +161,9 @@ public final class SubscriptionService: @unchecked Sendable {
                 lock.lock()
                 inFlight.remove(account.id)
                 var entry = entries[account.id].flatMap { $0.fingerprint == Self.fingerprint(account) ? $0 : nil }
-                    ?? Entry(fingerprint: Self.fingerprint(account), latest: snapshot, lastGood: nil, nextAttempt: started)
+                    ?? Entry(fingerprint: Self.fingerprint(account), credentialFingerprint: account.credential?.fingerprint,
+                             latest: snapshot, lastGood: nil, nextAttempt: started)
+                entry.credentialFingerprint = account.credential?.fingerprint
                 entry.latest = snapshot
                 if snapshot.status == .current { entry.lastGood = snapshot }
                 entry.nextAttempt = Self.nextAttempt(after: snapshot, at: started)
@@ -137,7 +179,7 @@ public final class SubscriptionService: @unchecked Sendable {
         queue.waitUntilAllOperationsAreFinished()
     }
 
-    /// 续期（需要时）→ 查询；401 时用刷新令牌再试一次。刷新结果写回账号库。
+    /// 续期（需要时）→ 查询；401 时用刷新令牌再试一次。自有账号写回账号库；Antigravity 只读本机账号仅在内存中换取访问令牌。
     private func fetch(_ account: SubscriptionAccount, at now: Date) -> SubscriptionSnapshot {
         lock.lock(); var record = stored[String(account.id.split(separator: ":", maxSplits: 1).last ?? "")]; lock.unlock()
         var current = account
@@ -152,6 +194,47 @@ public final class SubscriptionService: @unchecked Sendable {
             }
             return result
         }
+
+        let localRefresh = (current.isAutoDiscovered && current.provider == .antigravity)
+            ? current.credential?.refreshToken : nil
+        let localRefreshHash = localRefresh.map(subscriptionHash)
+
+        // 若内存中已有同刷新令牌换出的有效短期访问令牌，直接复用，避免每次 5 分钟轮询重复换取。
+        if let hash = localRefreshHash {
+            lock.lock()
+            let cached = ephemeralTokens[current.id]
+            lock.unlock()
+            if let cached, cached.refreshHash == hash,
+               (cached.expiresAt.map { $0.timeIntervalSince(now) >= SubscriptionAuth.refreshMargin } ?? true) {
+                current.credential?.token = cached.token
+                current.credential?.expiresAt = cached.expiresAt
+            }
+        }
+
+        func renewLocal() -> SubscriptionAuth.RefreshResult {
+            guard let refresh = localRefresh, let hash = localRefreshHash else { return .notNeeded }
+            let refreshed = SubscriptionAuth.refreshAntigravityLocal(
+                refreshToken: refresh, now: now, transport: transport)
+            switch refreshed.result {
+            case .refreshed:
+                if let token = refreshed.token {
+                    current.credential?.token = token
+                    current.credential?.expiresAt = refreshed.expiresAt
+                    lock.lock()
+                    ephemeralTokens[current.id] = EphemeralToken(
+                        refreshHash: hash, token: token, expiresAt: refreshed.expiresAt)
+                    lock.unlock()
+                }
+            case .rejected:
+                lock.lock()
+                ephemeralTokens.removeValue(forKey: current.id)
+                lock.unlock()
+            case .failed, .notNeeded:
+                break
+            }
+            return refreshed.result
+        }
+
         var renewed = false
         if let r = record, SubscriptionAuth.needsRefresh(r, now: now) {
             switch renew() {
@@ -159,11 +242,30 @@ public final class SubscriptionService: @unchecked Sendable {
             case .rejected: return .failure(.expired, .unauthorized)
             case .failed, .notNeeded: break
             }
+        } else if localRefresh != nil, let cred = current.credential {
+            let needsLocal = cred.token.isEmpty
+                || (cred.expiresAt.map { $0.timeIntervalSince(now) < SubscriptionAuth.refreshMargin } ?? false)
+            if needsLocal {
+                switch renewLocal() {
+                case .refreshed: renewed = true
+                case .rejected: return .failure(.expired, .unauthorized)
+                case .failed:
+                    if cred.token.isEmpty || (cred.expiresAt.map { $0 <= now } ?? false) {
+                        return .failure(.failed, .network)
+                    }
+                case .notNeeded: break
+                }
+            }
         }
+
         let context = SubscriptionFetchContext(transport: transport, now: now)
         var snapshot = SubscriptionAdapters.fetch(current, context)
-        if snapshot.problem == .unauthorized, !renewed, record?.refreshToken != nil, renew() == .refreshed {
-            snapshot = SubscriptionAdapters.fetch(current, context)
+        if snapshot.problem == .unauthorized, !renewed {
+            if record?.refreshToken != nil, renew() == .refreshed {
+                snapshot = SubscriptionAdapters.fetch(current, context)
+            } else if localRefresh != nil, renewLocal() == .refreshed {
+                snapshot = SubscriptionAdapters.fetch(current, context)
+            }
         }
         return snapshot
     }
@@ -271,7 +373,8 @@ public final class SubscriptionService: @unchecked Sendable {
             var latest = item.snapshot
             latest.status = .failed
             latest.problem = nil
-            entries[id] = Entry(fingerprint: item.fingerprint, latest: latest, lastGood: item.snapshot,
+            entries[id] = Entry(fingerprint: item.fingerprint, credentialFingerprint: nil,
+                                latest: latest, lastGood: item.snapshot,
                                 nextAttempt: .distantPast)
         }
     }

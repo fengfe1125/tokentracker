@@ -86,17 +86,9 @@ struct ActivityView: View, @MainActor Equatable {
 
     @ViewBuilder
     private var activityBreakdown: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Metrics.sectionSpacing) {
-                rankingCard(title: L10n.text("工具榜"), rows: snapshot.toolRows, skill: false)
-                    .frame(minWidth: 300)
-                rankingCard(title: L10n.text("Skill 榜"), rows: snapshot.skillRows, skill: true)
-                    .frame(minWidth: 300)
-            }
-            VStack(spacing: Metrics.sectionSpacing) {
-                rankingCard(title: L10n.text("工具榜"), rows: snapshot.toolRows, skill: false)
-                rankingCard(title: L10n.text("Skill 榜"), rows: snapshot.skillRows, skill: true)
-            }
+        AdaptiveEqualColumnsLayout(minColumnWidth: 300, spacing: Metrics.sectionSpacing) {
+            rankingCard(title: L10n.text("工具榜"), rows: snapshot.toolRows, skill: false)
+            rankingCard(title: L10n.text("Skill 榜"), rows: snapshot.skillRows, skill: true)
         }
         matrixCard
         timelineCard

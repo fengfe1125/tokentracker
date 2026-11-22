@@ -92,6 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appState.selection = env["TT_UI_TEST_PAGE"].flatMap(SidebarNavigationItem.init(rawValue:))?.selection
                     ?? .activity
             }
+            if let rawRange = env["TT_UI_TEST_RANGE"], ["day", "week", "month", "all"].contains(rawRange) {
+                appState.range = rawRange
+            }
             if let rawTab = env["TT_UI_TEST_SETTINGS_TAB"], !rawTab.isEmpty {
                 let tab = SettingsTab.resolve(rawTab)
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey)

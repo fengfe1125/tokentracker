@@ -7,22 +7,39 @@ public struct TaskHookConfiguration {
     public var text: String { String(data: proposed, encoding: .utf8) ?? "" }
     public static let marker = "TokenTracker task reminders v1"
 
+    public static func antigravityHookName(channel: String) -> String {
+        channel == "development" ? "tokentracker-tasks-dev" : "tokentracker-tasks"
+    }
+
     public static func isInstalled(path: String, channel: String) -> Bool {
         guard let data = FileManager.default.contents(atPath: path),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any] else { return false }
-        let signature = " # " + marker + " [" + channel + "]"
-        return hooks.values.contains { value in
-            (value as? [[String: Any]] ?? []).contains { group in
-                (group["hooks"] as? [[String: Any]] ?? []).contains {
-                    ($0["type"] as? String) == "command" && ($0["command"] as? String)?.hasSuffix(signature) == true
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        if let hooks = root["hooks"] as? [String: Any] {
+            let signature = " # " + marker + " [" + channel + "]"
+            let installed = hooks.values.contains { value in
+                (value as? [[String: Any]] ?? []).contains { group in
+                    (group["hooks"] as? [[String: Any]] ?? []).contains {
+                        ($0["type"] as? String) == "command" && ($0["command"] as? String)?.hasSuffix(signature) == true
+                    }
                 }
             }
+            if installed { return true }
         }
+        if let entry = root[antigravityHookName(channel: channel)] as? [String: Any],
+           (entry["enabled"] as? Bool) != false {
+            let stopHandlers = entry["Stop"] as? [[String: Any]] ?? []
+            let needle = " antigravity " + channel
+            return stopHandlers.contains {
+                ($0["type"] as? String ?? "command") == "command"
+                    && ($0["command"] as? String)?.contains(needle) == true
+            }
+        }
+        return false
     }
 
     /// A preflight, not a claim that upstream trust or managed policy permits hooks.
     public static func blockingReason(provider: TaskProvider, root: String) -> String? {
+        if provider == .antigravity { return nil }
         if provider == .claude {
             guard let data = FileManager.default.contents(atPath: root + "/settings.json"),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -50,6 +67,27 @@ public struct TaskHookConfiguration {
         if let original {
             guard let parsed = try JSONSerialization.jsonObject(with: original) as? [String: Any] else { throw TaskBridgeError.invalidMessage }
             root = parsed
+        }
+        if provider == .antigravity {
+            let key = antigravityHookName(channel: channel)
+            if installing {
+                let command = Resume.shlexQuote(helper) + " antigravity " + channel
+                let handler: [String: Any] = [
+                    "type": "command",
+                    "command": command,
+                    "timeout": 3,
+                ]
+                root[key] = [
+                    "SessionStart": [handler],
+                    "PreInvocation": [handler],
+                    "Stop": [handler],
+                ]
+            } else {
+                root.removeValue(forKey: key)
+            }
+            return Self(path: path, original: original,
+                        proposed: try JSONSerialization.data(withJSONObject: root,
+                                                             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
         }
         if let value = root["hooks"], !(value is [String: Any]) { throw TaskBridgeError.invalidMessage }
         var hooks = root["hooks"] as? [String: Any] ?? [:]

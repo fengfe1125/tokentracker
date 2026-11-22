@@ -9,7 +9,7 @@
 import Foundation
 
 public enum MenuBarFmt {
-    public static let providerGlyph = ["claude": "C", "codex": "X", "kimi": "K", "go": "G"]
+    public static let providerGlyph = ["claude": "C", "codex": "X", "antigravity": "A", "kimi": "K", "go": "G"]
     public static let defaultProvider = "claude"   // "off" = 仅今日用量
 
     // 配额紧急度阈值（百分比）

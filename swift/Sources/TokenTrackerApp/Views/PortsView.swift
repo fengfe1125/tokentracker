@@ -181,20 +181,15 @@ struct PortsView: View {
     /// 端口归属：每个项目一段，未匹配的灰色一段。
     private var ownershipBar: some View {
         let groups = ownershipGroups
-        let total = max(1, model.scopedPorts.count)
         return VStack(alignment: .leading, spacing: 8) {
-            GeometryReader { proxy in
-                HStack(spacing: 2) {
-                    ForEach(groups) { group in
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(group.color)
-                            .frame(width: max(4, (proxy.size.width - CGFloat(max(0, groups.count - 1)) * 2)
-                                              * CGFloat(group.count) / CGFloat(total)))
-                            .help("\(group.name) · \(group.count)")
-                    }
-                }
-            }
-            .frame(height: 10)
+            SegmentedBar(
+                segments: groups.map {
+                    SegmentedBarSegment(value: Double($0.count), color: $0.color, minWidth: 4)
+                },
+                height: 10,
+                spacing: 2,
+                cornerRadius: 3
+            )
             .animation(.snappy(duration: 0.3), value: groups.map(\.count))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
@@ -389,10 +384,13 @@ struct PortsView: View {
                 Text(model.loaded ? L10n.text("本月还没有带工作目录的项目用量。") : L10n.text("正在读取项目…"))
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.vertical, 12)
-            }
-            ForEach(Array(model.projects.enumerated()), id: \.element.id) { index, project in
-                if index > 0 { Divider() }
-                ProjectPortRow(model: model, state: state, project: project)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(model.projects.enumerated()), id: \.element.id) { index, project in
+                        if index > 0 { Divider() }
+                        ProjectPortRow(model: model, state: state, project: project)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

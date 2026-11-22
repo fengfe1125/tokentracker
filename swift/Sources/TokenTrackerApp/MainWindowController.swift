@@ -20,6 +20,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        _ = ScrollActivity.shared
         log2("MainWindowController.show: window=\(window == nil ? "新建" : "唤回")")
         if window == nil {
             let hosting = NSHostingController(rootView: RootView(state: appState).appLanguage())
