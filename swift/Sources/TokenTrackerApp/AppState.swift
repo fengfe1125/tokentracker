@@ -91,6 +91,8 @@ final class AppState: ObservableObject {
     @Published var sessionSearch = ""
     /// 表格选中行；详情面板跟着它走，所以放在 AppState 而不是视图 @State
     @Published var selectedSessionID: String?
+    /// 会话详情当前分页（overview / conversation / timeline）；翻看上一个/下一个会话时保持不变
+    @Published var sessionDetailTab = "overview"
     let activityPage = ActivityPageState()
     @Published var detectInfo: [String: DetectInfo] = [:]
     @Published var todayByTool: [String: Int64] = [:]   // 侧栏今日量（按工具）
@@ -171,8 +173,9 @@ final class AppState: ObservableObject {
     /// 数值刷新闪光（状态栏动画）；由 StatusItemController 消费。
     var onTokensChanged: (() -> Void)?
     /// 双击 / 回车 / ⌘I / 右键「查看详情」：在主窗口里下钻到会话详情
-    func showSessionDetail() {
+    func showSessionDetail(tab: String = "overview") {
         guard selectedSessionID != nil else { return }
+        sessionDetailTab = tab
         detail = .session
     }
     func showActivityDetail(kind: ActivityKind? = nil, query: String? = nil) {
@@ -1052,7 +1055,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func showInsightSession(tool:String,sessionID:String) {
+    func showInsightSession(tool:String,sessionID:String,tab:String = "overview") {
         let path=readStore.path, roots=scanRoots
         detailQueue.async { [weak self] in
             guard let row=try? UsageStore(path:path).sessions(rangeKey:"all",tool:tool,limit:300,query:sessionID,roots:roots).first(where:{$0.sessionID==sessionID}) else { return }
@@ -1061,7 +1064,7 @@ final class AppState: ObservableObject {
                 if !self.sessionRows.contains(where:{$0.tool==tool && $0.sessionID==sessionID}) { self.sessionRows.insert(row,at:0) }
                 self.selection = .usage;self.usageTab = .sessions
                 self.selectedSessionID=SessionRowModel(row:row).id
-                self.showSessionDetail()
+                self.showSessionDetail(tab:tab)
             }
         }
     }

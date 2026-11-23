@@ -14,7 +14,6 @@ import TokenTrackerCore
 struct SessionDetailView: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var state: AppState
-    @State private var tab = "overview"
     @State private var detail: UsageStore.SessionDetail?
 
     private var yi: Bool { state.prefs.unitYi }
@@ -28,9 +27,15 @@ struct SessionDetailView: View {
         Group {
             if let session {
                 Group {
-                    if tab == "timeline" {
+                    if state.sessionDetailTab == "timeline" {
                         SessionTimelineView(state: state, tool: session.tool, sessionID: session.sessionID)
                             .padding(Metrics.pagePadding)
+                    } else if state.sessionDetailTab == "conversation" {
+                        SessionTranscriptView(
+                            session: session,
+                            filePath: (detail?.filePath.isEmpty == false ? detail?.filePath : nil) ?? session.filePath,
+                            pathResolved: detail != nil,
+                            metadata: transcriptMetadata(session))
                     } else {
                         content(session)
                     }
@@ -47,9 +52,10 @@ struct SessionDetailView: View {
             HStack(spacing: 8) {
                 SegmentedPillPicker(
                     accessibilityTitle: L10n.text("详情"),
-                    selection: $tab,
+                    selection: $state.sessionDetailTab,
                     options: [
                         SegmentedOption(value: "overview", title: L10n.text("概览")),
+                        SegmentedOption(value: "conversation", title: L10n.text("对话")),
                         SegmentedOption(value: "timeline", title: L10n.text("执行时间线")),
                     ]
                 )
@@ -79,6 +85,22 @@ struct SessionDetailView: View {
             guard state.selectedSessionID == session.id else { return }  // 选中已变，丢弃迟到结果
             detail = loaded
         }
+    }
+
+    /// 导出 Markdown 的抬头信息：与「会话信息」卡片同口径
+    private func transcriptMetadata(_ session: SessionRowModel) -> TranscriptMarkdown.Metadata {
+        let folder = (detail?.workspacePath.isEmpty == false ? detail?.workspacePath : nil) ?? session.workspacePath
+        let models: [String] = {
+            if let loaded = detail?.models.map(\.model).filter({ !$0.isEmpty }), !loaded.isEmpty { return loaded }
+            return session.models
+        }()
+        let time = UIFormat.sessionTimeRange(firstMs: detail?.firstTs ?? session.firstTs,
+                                             lastMs: detail?.lastTs ?? session.row.ts,
+                                             fallbackLastSeen: session.row.lastSeen)
+        return TranscriptMarkdown.Metadata(
+            title: session.title, agentName: toolDisplayName(session.tool), sessionID: session.sessionID,
+            workspace: folder, timeRange: time, models: models,
+            sourcePath: (detail?.filePath.isEmpty == false ? detail?.filePath : nil) ?? session.filePath)
     }
 
     private func content(_ session: SessionRowModel) -> some View {

@@ -15,7 +15,7 @@
   - **用量（`UsageView` / `UsageChartsView`）**：含 `项目`、`模型`、`会话` 三个子视图，均配齐原生 Swift Charts 可视化。
     - `项目`（`ProjectsView`）：汇总指标下方置顶「项目占比」环形图（Tokens / 费用切换、联动高亮与点击下钻）与「项目 Token 构成」四类堆叠横条图，列表下方为 Agent 分布与模型分布；单项目下钻提供四类堆叠柱图 + 成本折线趋势及手动归属调整。
     - `模型`：4 项顶部指标块（活跃模型 / 主力模型 / 费用合计 / 缓存命中率）、模型占比环形图、Token 构成堆叠图与缓存命中率对比图。
-    - `会话`（`SessionsView` / `SessionDetailView` / `SessionMetadataView`）：未选中会话时底部展示可收起的「会话分布」面板（Agent 占比条 + 高消耗会话对比）；选中或下钻展示完整元数据（时间、工作目录、会话 ID、多模型构成、四类 Token 与成本）、执行时间线（`SessionTimelineView`）、源日志文件路径与 Finder 一键定位（`SessionSourceResolver`），并支持在 Terminal / iTerm2 / WezTerm / Ghostty 中恢复会话（`Resume`）。
+    - `会话`（`SessionsView` / `SessionDetailView` / `SessionMetadataView`）：未选中会话时底部展示可收起的「会话分布」面板（Agent 占比条 + 高消耗会话对比）；选中或下钻展示完整元数据（时间、工作目录、会话 ID、多模型构成、四类 Token 与成本）、「对话」预览（`SessionTranscriptView`：按需读取本机原始记录还原用户/助手/思考/工具调用，支持筛选、搜索与导出/复制 Markdown，解析在 `Transcript/SessionTranscriptReader`、`TranscriptMarkdown`）、执行时间线（`SessionTimelineView`）、源日志文件路径与 Finder 一键定位（`SessionSourceResolver`），并支持在 Terminal / iTerm2 / WezTerm / Ghostty 中恢复会话（`Resume`）。
   - **端口（`PortsView` / `PortsModel`）**：扫描本机 TCP 监听端口，解析绑定地址（区分仅本机与局域网可达）、RSS 内存占用、命令行与常见开发框架（Vite / Next.js / Wrangler / Uvicorn / FastAPI / Rails 等），按进程工作目录或命令行路径归属到项目并识别启动命令；支持搜索、默认过滤系统常驻进程、固定到状态栏、一键浏览器打开、终端内启停/重启项目及确认后关闭端口进程。
   - **活动（`ActivityView` / `ActivityDetailView`）**：活动解析 `v3`（Codex 已收到输出的 `response_item` 晋升为已确认执行，配对 DSH `tool/result`、Pi `toolResult` 与 Antigravity 后继 `GENERIC` 步骤的结果状态与耗时）；默认展示已确认执行事实、4 项核心指标、工具/Skill 榜单与 Agent × 工具矩阵，点击直达明细，底部折叠能力覆盖说明。
   - **报告与洞察（`ReportsView` / `InsightsStore`）**：按规范自然周主键（`week:yyyy-MM-dd`）生成与管理本地周报快照（ISO 周次标牌、生成区间预览、删除周报），提供预算/配额风险提醒、过去 14 天同刻异常检测、数据健康面板与脱敏 CSV/JSON 导出（`ReportsExport`）。
@@ -26,9 +26,9 @@
 
 ## 仓库地图
 
-- `swift/Sources/TokenTrackerCore/`：无 UI 依赖的核心模块，含 `Scanners/`、`Store/`、`Pricing/`、`Billing/`、`Quotas/`、`Subscriptions/`、`Activity/`、`Insights/`、`Ports/`、`Tasks/`、`Accounts/`、`Resume/`、`MenuBar/`、`Public/`、`Settings/`、`Differential/` 及 `ScanScheduler`、`UpdateChecker`、`UpdateInstaller`。业务计算放这里，不放 App。
+- `swift/Sources/TokenTrackerCore/`：无 UI 依赖的核心模块，含 `Scanners/`、`Store/`、`Pricing/`、`Billing/`、`Quotas/`、`Subscriptions/`、`Activity/`、`Insights/`、`Ports/`、`Tasks/`、`Accounts/`、`Resume/`、`Transcript/`、`MenuBar/`、`Public/`、`Settings/`、`Differential/` 及 `ScanScheduler`、`UpdateChecker`、`UpdateInstaller`。业务计算放这里，不放 App。
 - `swift/Sources/TokenTrackerApp/`：SwiftUI/AppKit 状态栏、速览面板、刘海 HUD、任务提醒浮层、主窗口各视图、设置与应用内更新。
-- `swift/Sources/tt-swift/`：原生 CLI（`detect`、`scan`、`stats`、`sessions`、`activity`、`quotas`、`subscriptions`、`antigravity-hook`、`export-public`、`publish`）；根目录 `./tt` 首次运行时构建它。
+- `swift/Sources/tt-swift/`：原生 CLI（`detect`、`scan`、`stats`、`sessions`、`transcript`、`activity`、`quotas`、`subscriptions`、`antigravity-hook`、`export-public`、`publish`）；根目录 `./tt` 首次运行时构建它。
 - `swift/Sources/TokenTrackerHook/`：随 App 打包的任务提醒与 Antigravity 工作区映射 Hook 入口。
 - `swift/Tests/`：`TokenTrackerCoreTests`（含 `Fixtures/`）与 `TokenTrackerAppTests`。
 - `web/worker/`：公开统计的 Cloudflare Worker 与载荷校验器；`tests/test_web.js` 是校验器回归。
@@ -52,7 +52,7 @@ node tests/test_web.js                # Web 载荷校验器
 
 ## 数据边界
 
-- 扫描与 Activity 持久化保持本地、只记元数据，不存 prompt、工具调用参数或文件内容。`exact`、`derived`、`unknown`、`unavailable` 保持区分，缺失数据不显示为零。
+- 扫描与 Activity 持久化保持本地、只记元数据，不存 prompt、工具调用参数或文件内容。会话「对话」预览只在用户打开时从原始日志只读解析到内存，不写入用量库或缓存；Markdown 仅在用户主动导出/复制时落到其选择的位置。`exact`、`derived`、`unknown`、`unavailable` 保持区分，缺失数据不显示为零。
 - 计价只用 `~/.tokentracker/prices.json` 中供应商、模型、事件时间精确匹配的费率；无匹配则保留 Token、费用未计价，不用默认价或子串匹配；放宽仅限把转发前缀（`relay/model`）、已知来源别名和推理强度后缀去掉后再精确匹配，早于模型首个价格版本的事件按首个版本回溯估算。细节见 `docs/metrics.md`。
 - 端口信息（含完整命令行）只在内存中，不写入用量库，也不进入公开统计。结束进程前须确认，不对系统进程或其他用户的进程提供关闭。
 - 订阅查询使用 TokenTracker 自己的账号库 `~/.tokentracker/subscription_accounts.json`，不读取其他软件的配置或登录态；唯一例外是 Antigravity 只读自动识别本机钥匙串（`service=gemini, account=antigravity`）与 Antigravity IDE `state.vscdb`，凭据仅留内存、不落盘且不改写原工具登录态（见 `docs/subscriptions.md`）。

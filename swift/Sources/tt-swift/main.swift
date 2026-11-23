@@ -114,6 +114,41 @@ case "sessions":
         print("\(when)  \(row.tool.padding(toLength: 12, withPad: " ", startingAt: 0)) \(fmt(row.stats.tokens))\t\(cost)\t[\(proj)]  \(title)")
     }
 
+case "transcript":
+    // 读取单个会话的本地原始记录，输出 Markdown（只读；不写入用量库）
+    let store = try openStore()
+    func option(_ name: String) -> String? {
+        guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else { return nil }
+        return args[index + 1]
+    }
+    guard let tool = option("--tool"), let sid = option("--session") else {
+        print("用法: tt-swift transcript --tool NAME --session ID [--thinking] [--system] [--no-tools] [--lang zh|en] [--out FILE]")
+        exit(2)
+    }
+    let detail = try store.sessionDetail(tool: tool, sessionID: sid, roots: ScanRoots())
+    let transcript = SessionTranscriptReader.load(tool: tool, sessionID: sid, filePath: detail.filePath)
+    guard transcript.status == .ok else {
+        FileHandle.standardError.write(Data("无法读取对话（\(transcript.status.rawValue)）：\(detail.filePath)\n".utf8))
+        exit(1)
+    }
+    let title = (try? store.conn.queryOne("SELECT title FROM session_meta WHERE tool=? AND session_id=?",
+                                          [tool, sid]))??.string("title")
+    let metadata = TranscriptMarkdown.Metadata(
+        title: title ?? transcript.firstUserText ?? sid, agentName: tool, sessionID: sid,
+        workspace: detail.workspacePath, models: detail.models.map(\.model).filter { !$0.isEmpty },
+        sourcePath: detail.filePath)
+    let filter = TranscriptFilter(includeTools: !args.contains("--no-tools"),
+                                  includeThinking: args.contains("--thinking"),
+                                  includeSystem: args.contains("--system"))
+    let labels = option("--lang") == "en" ? TranscriptMarkdown.Labels.english : TranscriptMarkdown.Labels()
+    let markdown = TranscriptMarkdown.render(transcript, metadata: metadata, filter: filter, labels: labels)
+    if let out = option("--out") {
+        try markdown.write(toFile: out, atomically: true, encoding: .utf8)
+        FileHandle.standardError.write(Data("✓ 已导出 \(transcript.entries.count) 条记录到 \(out)\n".utf8))
+    } else {
+        print(markdown, terminator: "")
+    }
+
 case "antigravity-hook":
     func option(_ name: String) -> String? {
         guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else { return nil }
@@ -364,6 +399,9 @@ default:
       tt-swift scan [--full]     扫描日志入库（增量，可重复执行）
       tt-swift stats [--range day|week|month|all]
       tt-swift sessions [--range day|week|month|all] [--tool NAME] [--limit 30] [--query TEXT]
+      tt-swift transcript --tool NAME --session ID [--thinking] [--system] [--no-tools]
+                          [--lang zh|en] [--out FILE]
+                                 把单个会话的本地对话记录导出为 Markdown
       tt-swift antigravity-hook [--status|--install|--remove] [--dry-run] [--path PATH]
       tt-swift activity [--range day|week|month|all] [--group agent|tool|skill]
                         [--agent NAME] [--confidence exact|derived|all] [--json]

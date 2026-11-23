@@ -266,8 +266,13 @@ struct SessionsView: View {
             if let id = selection.first, let row = cachedSortedRows.first(where: { $0.id == id }) {
                 Button(L10n.text("查看详情")) {
                     state.selectedSessionID = id
-                    state.showSessionDetail()
+                    state.showSessionDetail(tab: "overview")
                 }
+                Button(L10n.text("查看对话")) {
+                    state.selectedSessionID = id
+                    state.showSessionDetail(tab: "conversation")
+                }
+                .disabled(!row.fileExists)
                 Divider()
                 Button(L10n.text("在 Finder 中显示记录文件")) {
                     SessionFileActions.revealFile(row.filePath)

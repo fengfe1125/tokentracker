@@ -100,6 +100,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey)
             }
             DispatchQueue.main.async { [weak self] in self?.showMainPanel() }
+            // TT_UI_TEST_SESSION=tool|sessionID 直接下钻会话详情，TT_UI_TEST_SESSION_TAB 指定分页
+            if let target = env["TT_UI_TEST_SESSION"], let bar = target.firstIndex(of: "|") {
+                let tool = String(target[..<bar]), sid = String(target[target.index(after: bar)...])
+                let tab = env["TT_UI_TEST_SESSION_TAB"] ?? "overview"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    self?.appState.showInsightSession(tool: tool, sessionID: sid, tab: tab)
+                }
+            }
         }
         appState.insights.onInspect = { [weak self] in self?.appState.selection = .usage; self?.appState.usageTab = .projects; self?.showMainPanel() }
         appState.insights.onSession = { [weak self] tool,session in self?.appState.showInsightSession(tool:tool,sessionID:session) }
