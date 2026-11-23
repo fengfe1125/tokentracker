@@ -142,6 +142,17 @@ final class SettingsStorePortTests: XCTestCase {
         XCTAssertFalse(store.effectiveBool("menubar_compact"))
         XCTAssertFalse(store.effectiveBool("unit_yi"))
         XCTAssertTrue(store.effectiveBool("price_sync_enabled"))
+        XCTAssertEqual(store.effectiveString("menubar_style"), "native")
+    }
+
+    /// 状态栏样式只接受 native / stacked / capsule。
+    func testMenubarStyleValidation() {
+        let store = SettingsStore(path: storePath)
+        XCTAssertTrue(store.set(key: "menubar_style", value: "capsule"))
+        XCTAssertEqual(store.effectiveString("menubar_style"), "capsule")
+        XCTAssertFalse(store.set(key: "menubar_style", value: "classic"))
+        XCTAssertFalse(store.set(key: "menubar_style", value: 1))
+        XCTAssertEqual(store.effectiveString("menubar_style"), "capsule")
     }
 
     /// test_settings_post_validates_and_merges

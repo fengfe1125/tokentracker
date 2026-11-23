@@ -94,8 +94,9 @@ struct AppearanceSettingsSection: View {
                 }
             }
             SettingsDivider()
-            SettingsToggle(L10n.text("圆环显示配额"), isOn: binding("menubar_ring"))
+            MenuBarStylePicker(state: state)
                 .disabled(provider == "tokens")
+                .opacity(provider == "tokens" ? 0.5 : 1)
             SettingsDivider()
             SettingsToggle(L10n.text("紧凑标题"), isOn: binding("menubar_compact"))
             SettingsDivider()

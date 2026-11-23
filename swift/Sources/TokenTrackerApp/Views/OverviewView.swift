@@ -562,7 +562,10 @@ private struct QuotaRow: View {
             }
         }
         .contentShape(Rectangle())
-        .help(SubscriptionText.account(group))
+        // 未能刷新时悬停说明原因（如网络超时），避免误以为登录失效。
+        .help(stale ? (SubscriptionText.problem(card.snapshot, autoDiscovered: card.account.isAutoDiscovered)
+                       ?? SubscriptionText.account(group))
+              : SubscriptionText.account(group))
         .accessibilityElement(children: .combine)
     }
 }

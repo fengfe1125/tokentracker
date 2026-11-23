@@ -41,9 +41,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var animTimer: Timer?
     private var flashStart: Date?
     private var scanStarted: Date?
-    private var lastPlain: String?
-    private var lastAnimKey: String?
-    private var lastRingKey: String?
+    private var lastRenderKey: String?
+    private var appearanceObservation: NSKeyValueObservation?
 
     // 自愈状态
     private var invisibleSince: Date?
@@ -75,8 +74,25 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         appState.prefs.menubarProvider
     }
     private var compact: Bool { appState.prefs.menubarCompact }
-    private var ring: Bool { provider != "tokens" && (appState.prefs.menubarRing) }
+    private var style: MenuBarStyle { appState.prefs.menubarStyle }
     private var yi: Bool { appState.prefs.unitYi }
+
+    private var currentDisplay: MenuBarDisplay {
+        MenuBarFmt.display(today: appState.today, entries: appState.quotaEntries,
+                           provider: provider, yi: yi && !L10n.isEnglish)
+    }
+
+    static var labels: MenuBarLabels {
+        MenuBarLabels(today: L10n.text("今日 Token"), scanning: L10n.text("扫描中…"))
+    }
+
+    /// 读屏与菜单「当前：」预览用的纯文本描述。
+    static func describe(_ display: MenuBarDisplay) -> String {
+        let tokens = display.hasTokens ? L10n.text("今日 \(display.tokensText) Token") : L10n.text("今日暂无数据")
+        guard let quota = display.quota else { return tokens }
+        guard let pct = quota.pct else { return tokens + " · " + L10n.text("\(quota.name) 暂无配额数据") }
+        return tokens + " · " + L10n.text("\(quota.name) 已用 \(String(format: "%.0f%%", pct))")
+    }
 
     // ------------------------------------------------------------ 颜色 ----
 
@@ -122,11 +138,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // this variable-width item outside the visible menu bar permanently.
         // An anonymous item is laid out against the current screen on every run.
         item.isVisible = true
-        let initialSegments = MenuBarFmt.fmtSegments(
-            today: appState.today, entries: appState.quotaEntries,
-            provider: provider, compact: compact, yi: (yi && !L10n.isEnglish), ring: ring)
-        let initialTitle = initialSegments.map(\.text).joined()
-        item.button?.title = initialTitle
+        item.button?.title = ""
+        item.button?.imagePosition = .imageOnly
+        // 菜单栏随壁纸切换深浅色时，彩色图片要按新外观重画
+        appearanceObservation = item.button?.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.render() }
+            }
+        }
 
         let menu = NSMenu()
         menu.delegate = self
@@ -254,56 +273,27 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // ------------------------------------------------------------ 标题渲染 ----
 
-    /// 渲染状态栏标题。动画参数为 nil 时用静态值。
-    /// macOS 26 Tahoe 缺陷：重复设置相同 attributedTitle 会导致图标消失，
-    /// 因此只在内容或动画值变化时才写 button。
+    /// 渲染状态栏标题（整段一张图，样式见 MenuBarStyleRenderer）。动画参数为 nil 时用静态值。
+    /// macOS 26 Tahoe 缺陷：重复设置相同内容会导致图标消失，因此只在缓存键变化时才写 button。
     func render(spin: Int? = nil, flash: Double? = nil, pulse: Double? = nil) {
         guard let button = statusItem?.button else { return }
-        if appState.scanning && provider != "tokens" {
-            let frame = spin.map(MenuBarFmt.spinnerFrame) ?? "⟳"
-            let plain = L10n.text("\(frame) 扫描中…")
-            let key = "\(plain)|\(spin ?? -1)"
-            if key != lastAnimKey {
-                lastAnimKey = key
-                lastPlain = nil
-                applyRing(button, pulse: nil)          // 扫描中收起圆环
-                button.title = plain
-                button.attributedTitle = attributed([MenuBarSegment(plain, "dim")])
-            }
-            return
-        }
-        let segs = MenuBarFmt.fmtSegments(today: appState.today, entries: appState.quotaEntries,
-                                          provider: provider, compact: compact,
-                                          yi: (yi && !L10n.isEnglish), ring: ring)
-        let plain = segs.map(\.text).joined()
-        // 圆环模式的标题里已无百分比段，脉冲只作用在圆上
-        let textPulse = ring ? nil : pulse
-        // 圆环模式：平台字母承担文字版的紧急度着色
-        let glyphRole = ring
-            ? MenuBarFmt.ringSpec(entries: appState.quotaEntries, provider: provider).role
-            : nil
-        var parts: [MenuBarSegment] = []
-        for seg in segs {
-            var role = seg.role
-            if role == "glyph", let glyphRole { role = glyphRole }
-            if role == "tokens", flash != nil { role = "__flash" }
-            else if role == "quota_crit", textPulse != nil { role = "__pulse" }
-            parts.append(MenuBarSegment(seg.text, role))
-        }
-        applyRing(button, pulse: pulse)
-        let animKey = "\(plain)|f:\(flash.map { String(format: "%.2f", $0) } ?? "-")|p:\(textPulse.map { String(format: "%.2f", $0) } ?? "-")"
-        if plain != lastPlain {
-            lastPlain = plain
-            // NSVariableStatusItemLength 只按纯文本测量宽度，两者必须同时设
-            button.title = plain
-        }
-        if animKey != lastAnimKey {
-            lastAnimKey = animKey
-            button.attributedTitle = attributedCustom(parts, flash: flash, pulse: textPulse)
-        }
+        let display = currentDisplay
+        let anim = MenuBarAnimation(scanning: appState.scanning && !display.tokensOnly,
+                                    spin: spin ?? 0, flash: flash, pulse: pulse)
+        let labels = Self.labels
+        let appearance = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])?.rawValue ?? ""
+        let key = MenuBarStyleRenderer.cacheKey(display: display, style: style, compact: compact,
+                                                anim: anim, labels: labels) + "|" + appearance
+        guard key != lastRenderKey else { return }
+        lastRenderKey = key
+        if !button.title.isEmpty { button.title = "" }
+        button.image = MenuBarStyleRenderer.image(display: display, style: style, compact: compact,
+                                                  anim: anim, labels: labels)
+        button.imagePosition = .imageOnly
+        button.setAccessibilityLabel(Self.describe(display))
         // 诊断：渲染结果落盘（排查 launchd 环境下的链条问题）
         if ProcessInfo.processInfo.environment["TT_DEBUG_TITLE"] == "1" {
-            let debug = "title=\(plain) today=\(appState.today?.tokens ?? -1) "
+            let debug = "style=\(style.rawValue) title=\(Self.describe(display)) today=\(appState.today?.tokens ?? -1) "
                 + "entries=\(appState.quotaEntries.count) scanning=\(appState.scanning)\n"
             if let h = FileHandle(forWritingAtPath: "/tmp/tt_swift_debug.log") {
                 h.seekToEndOfFile(); h.write(Data(debug.utf8)); try? h.close()
@@ -312,82 +302,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                                                contents: Data(debug.utf8))
             }
         }
-    }
-
-    /// 带自定义颜色（闪光混合/脉冲透明）的富文本。
-    private func attributedCustom(_ segments: [MenuBarSegment],
-                                  flash: Double?, pulse: Double?) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        for seg in segments {
-            var color = color(for: seg.role)
-            if seg.role == "__flash", let flash {
-                color = Self.accent.blended(withFraction: flash, of: .labelColor) ?? .labelColor
-            } else if seg.role == "__pulse", let pulse {
-                color = color.withAlphaComponent(pulse)
-            }
-            result.append(NSAttributedString(
-                string: seg.text, attributes: [.foregroundColor: color]))
-        }
-        return result
-    }
-
-    // ------------------------------------------------------------ 配额圆 ----
-
-    /// 状态栏配额圆：14pt 彩色扇形（填充角 = 百分比，颜色按紧急度）。
-    private func ringImage(spec: (pct: Double?, role: String), alpha: Double) -> NSImage {
-        let side = MenuBarFmt.ringPt
-        let c = side / 2
-        let r = c - 1.4
-        let pct = spec.pct
-        let baseColor = color(for: spec.role)
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            var drawColor = baseColor
-            if alpha < 1 { drawColor = baseColor.withAlphaComponent(alpha) }
-            let rect = NSRect(x: c - r, y: c - r, width: r * 2, height: r * 2)
-            guard let pct else {
-                // 无数据：灰色空心圆
-                drawColor.setStroke()
-                let circle = NSBezierPath(ovalIn: rect)
-                circle.lineWidth = 1.3
-                circle.stroke()
-                return true
-            }
-            // 未用完的部分：同色低透明轨道
-            drawColor.withAlphaComponent(0.22 * alpha).setFill()
-            NSBezierPath(ovalIn: rect).fill()
-            let frac = max(0, min(1, pct / 100))
-            if frac > 0 {
-                drawColor.setFill()
-                let pie = NSBezierPath()
-                pie.move(to: NSPoint(x: c, y: c))
-                // 12 点方向起、顺时针扫过 frac 圈
-                pie.appendArc(withCenter: NSPoint(x: c, y: c), radius: r,
-                              startAngle: 90, endAngle: 90 - 360 * frac, clockwise: true)
-                pie.close()
-                pie.fill()
-            }
-            return true
-        }
-        image.isTemplate = false   // 保留彩色，不被系统染成菜单栏单色
-        return image
-    }
-
-    /// 把配额圆写到按钮（变化才重绘：按整数百分点 + 量化脉冲缓存）。
-    private func applyRing(_ button: NSStatusBarButton, pulse: Double?) {
-        if !ring || appState.scanning {
-            if lastRingKey != nil || button.image != nil {
-                lastRingKey = nil
-                button.image = nil
-            }
-            return
-        }
-        let spec = MenuBarFmt.ringSpec(entries: appState.quotaEntries, provider: provider)
-        let alpha = pulse ?? 1
-        let key = "\(spec.pct.map { Int($0.rounded()) } ?? -1)|\(spec.role)|\(pulse.map { Int($0 * 100) } ?? -1)"
-        if key == lastRingKey { return }
-        lastRingKey = key
-        button.image = ringImage(spec: spec, alpha: alpha)
-        button.imagePosition = .imageLeft
     }
 
     // ------------------------------------------------------------ 动画 ----
@@ -504,10 +418,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let old = statusItem
         statusItem = nil
         if let old { NSStatusBar.system.removeStatusItem(old) }
+        appearanceObservation = nil
+        lastRenderKey = nil
         install()
-        lastPlain = nil
-        lastAnimKey = nil
-        lastRingKey = nil
         render()
     }
 
@@ -570,20 +483,28 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         rebuildDisplayMenu()
     }
 
-    private var titlePreview: String {
-        let text = MenuBarFmt.fmtTitle(today: appState.today, entries: appState.quotaEntries,
-                                       provider: provider, compact: compact, yi: (yi && !L10n.isEnglish), ring: ring)
-        guard ring else { return text }
-        let glyph = MenuBarFmt.ringGlyph(
-            MenuBarFmt.ringSpec(entries: appState.quotaEntries, provider: provider))
-        return "\(glyph)\(compact ? "" : " ")\(text)"
-    }
-
     private func rebuildDisplayMenu() {
         let sub = NSMenu()
-        let preview = NSMenuItem(title: L10n.text("当前：") + titlePreview, action: nil, keyEquivalent: "")
+        let preview = NSMenuItem(title: L10n.text("当前：") + Self.describe(currentDisplay),
+                                 action: nil, keyEquivalent: "")
         preview.isEnabled = false
         sub.addItem(preview)
+        sub.addItem(.separator())
+        let styleHeader = NSMenuItem(title: L10n.text("样式"), action: nil, keyEquivalent: "")
+        styleHeader.isEnabled = false
+        sub.addItem(styleHeader)
+        for option in MenuBarStyle.allCases {
+            let item = NSMenuItem(title: option.title, action: #selector(pickStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = option.rawValue
+            item.state = option == style ? .on : .off
+            item.indentationLevel = 1
+            item.image = MenuBarStyleRenderer.image(
+                display: MenuBarStylePreview.sample(provider: provider, entries: appState.quotaEntries,
+                                                    yi: yi && !L10n.isEnglish),
+                style: option, compact: false, anim: MenuBarAnimation(), labels: Self.labels)
+            sub.addItem(item)
+        }
         sub.addItem(.separator())
         for entry in appState.quotaEntries {
             addProviderItem(sub, pid: entry.id, title: L10n.text("今日用量 + \(entry.name)"),
@@ -633,6 +554,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func toggleNotchHUD(_: Any?) {
         NotchHUDPreferences.shared.enabled.toggle()
+    }
+
+    @objc private func pickStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, raw != style.rawValue else { return }
+        appState.updateSetting(key: "menubar_style", value: raw)
+        render()
     }
 
     @objc private func pickProvider(_ sender: NSMenuItem) {

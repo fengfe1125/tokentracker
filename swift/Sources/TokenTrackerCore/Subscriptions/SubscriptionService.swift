@@ -123,6 +123,10 @@ public final class SubscriptionService: @unchecked Sendable {
                 credential: record.credential, providerAccountID: record.accountID,
                 discoveryProblem: record.provider == .zenFree ? .freeModel : nil)
             account.id = accountID(record)
+            if record.origin == .login, record.kind == .oauth {
+                account.savedLogin = SubscriptionSavedLogin(
+                    expiresAt: record.expiresAt, autoRenews: !(record.refreshToken ?? "").isEmpty)
+            }
             return account
         }.sorted { SubscriptionCard.ordered(SubscriptionCard(account: $0, snapshot: .init(status: .loading)),
                                             SubscriptionCard(account: $1, snapshot: .init(status: .loading))) }

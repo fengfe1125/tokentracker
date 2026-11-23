@@ -132,9 +132,17 @@ extension MenuBarFmt {
         return "≈"
     }
 
+    /// 状态栏与菜单里的紧凑数。中文「亿」模式按量级用 万 / 亿
+    /// （4412万 而非 0.44亿，≥1 亿才用亿），其余 K / M / B。
     public static func fmtTokens(_ n: Double, yi: Bool = false) -> String {
         let n = max(n, 0)
-        if yi && n >= 1e6 { return String(format: "%.2f亿", n / 1e8) }
+        if yi {
+            let wan = n / 1e4
+            if (wan.rounded()) >= 10_000 { return String(format: "%.2f亿", n / 1e8) }
+            if (wan * 10).rounded() / 10 >= 1000 { return String(format: "%.0f万", wan) }
+            if n >= 1e4 { return String(format: "%.1f万", wan) }
+            return String(Int(n))
+        }
         if n >= 1e9 { return String(format: "%.2fB", n / 1e9) }
         if n >= 1e6 { return String(format: "%.2fM", n / 1e6) }
         if n >= 1e4 { return String(format: "%.1fK", n / 1e3) }

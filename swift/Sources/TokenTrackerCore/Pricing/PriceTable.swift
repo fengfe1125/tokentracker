@@ -3,9 +3,8 @@
 //  TokenTrackerCore
 //
 //  Event-time price lookup over the shared local price catalog. Model names
-//  match only by provider plus an exact model ID or an explicit alias; a
-//  relay-prefixed name (`workbuddy/deepseek-flash`) falls back to the exact
-//  name after its last `/`.
+//  match by provider plus an exact model ID or alias; relay prefixes, known
+//  source aliases and reasoning-effort suffixes are retried as exact names.
 //
 
 import Foundation
@@ -148,12 +147,32 @@ public struct PriceTable: Sendable {
         return nil
     }
 
-    /// Looks up an exact event-time version. When the source did not record its
-    /// provider, a unique exact model match is safe; ambiguous names are unpriced.
-    /// A relay-prefixed model (`codex/gpt-6.1-sol`) that has no exact match is
-    /// retried with the name after its last `/`. The recorded provider usually
-    /// names the client rather than the upstream model owner, so if it does not
-    /// match the stripped name the lookup falls back to a unique provider.
+    /// Model names that a source logs under a different name than the official
+    /// price table. Keys and values are normalized (lowercased) model IDs.
+    static let knownModelAliases: [String: String] = [
+        // DeepSeek's `deepseek-flash` API model is served by DeepSeek-V4.1-Flash;
+        // relays such as WorkBuddy log the versioned name.
+        "deepseek-v4.1-flash": "deepseek-flash",
+    ]
+
+    /// Reasoning-effort suffixes that some clients (Antigravity) append to the
+    /// model ID. Effort changes token counts, not the per-token rate.
+    static let effortSuffixes = ["-minimal", "-low", "-medium", "-high", "-xhigh"]
+
+    /// Looks up an event-time version. The name is first matched exactly by
+    /// provider plus model ID or alias. Without a recorded provider, a unique
+    /// exact match is safe; ambiguous names are unpriced.
+    ///
+    /// Only when the exact name has no match, these forms are retried in order,
+    /// each still as an exact name: the part after a relay prefix
+    /// (`codex/gpt-6.1-sol`), a known model alias, and the name without a
+    /// reasoning-effort suffix (`gemini-4-neon-xhigh`). The recorded provider
+    /// usually names the client rather than the upstream owner, so a retried
+    /// name that misses under it falls back to a unique provider.
+    ///
+    /// Events earlier than a model's first catalog version use that earliest
+    /// version (the first official rate seen); later rate changes still split
+    /// by event time, and observed intervals that cross a change stay unpriced.
     public func quote(provider rawProvider: String? = nil, model: String,
                       input: Int64, output: Int64, cacheRead: Int64 = 0,
                       cacheWrite: Int64 = 0, eventAtMs: Int64 = 0,
@@ -162,21 +181,23 @@ public struct PriceTable: Sendable {
         guard !modelKey.isEmpty else { return nil }
         let normalizedProvider = rawProvider.map { Self.normalizeProvider($0) } ?? ""
         let provider = normalizedProvider.isEmpty ? nil : normalizedProvider
-        var matchingModels = exactMatches(model: modelKey, provider: provider)
-        var relayPrefix: String?
-        if matchingModels.isEmpty, let (prefix, base) = Self.splitRelayPrefix(modelKey) {
-            matchingModels = exactMatches(model: base, provider: provider)
-            if matchingModels.isEmpty, provider != nil {
-                matchingModels = exactMatches(model: base, provider: nil)
-            }
-            if !matchingModels.isEmpty { relayPrefix = prefix }
-        }
-        guard !matchingModels.isEmpty else { return nil }
+        guard let (matchingModels, matchNotes) = resolveVersions(modelKey: modelKey, provider: provider),
+              let earliest = matchingModels.min(by: { $0.effectiveAtMs < $1.effectiveAtMs })
+        else { return nil }
+        var notes = matchNotes
         let at = eventAtMs > 0 ? eventAtMs : Int64.max
-        let candidates = matchingModels.filter { $0.effectiveAtMs <= at }
-        guard let selected = candidates.max(by: { $0.effectiveAtMs < $1.effectiveAtMs }) else { return nil }
+        let selected: PriceVersion
+        if let current = matchingModels.filter({ $0.effectiveAtMs <= at })
+            .max(by: { $0.effectiveAtMs < $1.effectiveAtMs }) {
+            selected = current
+        } else {
+            selected = earliest
+            notes.append("Event predates the first catalog version of this model; estimated with the earliest official rate on record.")
+        }
         if let start = intervalStartMs, start > 0, start < at,
-           matchingModels.contains(where: { start < $0.effectiveAtMs && $0.effectiveAtMs <= at }) {
+           matchingModels.contains(where: {
+               $0.effectiveAtMs > earliest.effectiveAtMs && start < $0.effectiveAtMs && $0.effectiveAtMs <= at
+           }) {
             return nil
         }
         let inputCost = Double(input) * selected.rates.input
@@ -186,12 +207,39 @@ public struct PriceTable: Sendable {
         let rawCost = (inputCost + outputCost + cacheReadCost + cacheWriteCost) / 1_000_000
         // Match Python's round(..., 8), which uses half-even rounding.
         let cost = (rawCost * 1e8).rounded(.toNearestOrEven) / 1e8
-        var conditions = selected.conditions
-        if let relayPrefix {
-            conditions.append("Matched after removing relay prefix '\(relayPrefix)/'; the relay's own billing may differ from the official rate.")
-        }
         return PriceQuote(cost: cost, provider: Self.normalizeProvider(selected.provider),
-                          priceVersionID: selected.id, conditions: conditions)
+                          priceVersionID: selected.id, conditions: selected.conditions + notes)
+    }
+
+    /// Resolves the catalog versions for a logged model name, returning notes
+    /// that describe any non-exact step used to reach them.
+    private func resolveVersions(modelKey: String, provider: String?) -> ([PriceVersion], [String])? {
+        let exact = exactMatches(model: modelKey, provider: provider)
+        if !exact.isEmpty { return (exact, []) }
+
+        var forms: [(name: String, notes: [String])] = []
+        var base = modelKey
+        var baseNotes: [String] = []
+        if let (prefix, stripped) = Self.splitRelayPrefix(modelKey) {
+            base = stripped
+            baseNotes = ["Matched after removing relay prefix '\(prefix)/'; the relay's own billing may differ from the official rate."]
+            forms.append((base, baseNotes))
+        }
+        if let alias = Self.knownModelAliases[base] {
+            forms.append((alias, baseNotes + ["Matched model '\(base)' as its official API name '\(alias)'."]))
+        }
+        if let suffix = Self.effortSuffixes.first(where: { base.hasSuffix($0) && base.count > $0.count }) {
+            let stripped = String(base.dropLast(suffix.count))
+            forms.append((stripped, baseNotes + ["Matched after removing reasoning-effort suffix '\(suffix)'; effort changes token counts, not the per-token rate."]))
+        }
+        for form in forms {
+            var matches = exactMatches(model: form.name, provider: provider)
+            if matches.isEmpty, provider != nil {
+                matches = exactMatches(model: form.name, provider: nil)
+            }
+            if !matches.isEmpty { return (matches, form.notes) }
+        }
+        return nil
     }
 
     /// Exact model/alias matches. Without a provider the match must resolve to a

@@ -96,6 +96,8 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
     public internal(set) var isAutoDiscovered: Bool
     /// 发现阶段即知的问题（如只发现 API Key、免费模型）。
     public internal(set) var discoveryProblem: SubscriptionProblem?
+    /// TokenTracker 自己登录并保存在账号库的凭据（仅展示：到期时间与能否自动续期，不含令牌）。
+    public internal(set) var savedLogin: SubscriptionSavedLogin?
 
     var credential: SubscriptionCredential?
     /// 供应商账号 ID（去重依据）；仅内存。
@@ -149,8 +151,17 @@ public struct SubscriptionAccount: Identifiable, Equatable, Sendable {
         a.id == b.id && a.label == b.label && a.planHint == b.planHint && a.sources == b.sources
             && a.isActive == b.isActive && a.isAutoDiscovered == b.isAutoDiscovered
             && a.discoveryProblem == b.discoveryProblem
+            && a.savedLogin == b.savedLogin
             && a.credential?.fingerprint == b.credential?.fingerprint
     }
+}
+
+/// 自有登录凭据的展示信息：令牌本身只在账号库与内存中，不经此暴露。
+public struct SubscriptionSavedLogin: Equatable, Sendable {
+    /// 访问令牌到期时间；供应商未给出时为 nil。
+    public var expiresAt: Date?
+    /// 保存了刷新令牌，到期前（或接口返回 401 时）自动续期，无需重新登录。
+    public var autoRenews: Bool
 }
 
 // ---------------------------------------------------------- 窗口与余额 ----

@@ -17,7 +17,8 @@ public struct SettingsStore {
     public nonisolated(unsafe) static let defaults: [String: Any] = [
         "menubar_provider": "claude",   // 状态栏标题追加显示的平台配额；"off" = 仅今日用量
         "menubar_compact": false,       // 紧凑标题（刘海屏防挤出）
-        "menubar_ring": true,           // 圆环显示配额（彩色扇形圆代替 ⚡）
+        "menubar_ring": true,           // 旧版圆环开关；已由 menubar_style 取代，仅保留兼容
+        "menubar_style": MenuBarStyle.default.rawValue, // 状态栏样式：native / stacked / capsule
         "launch_at_login": false,       // 开机自动启动（SMAppService）
         "terminal_app": "auto",         // 继续会话用哪个终端
         "unit_yi": false,               // 大数以「亿」显示
@@ -100,6 +101,8 @@ public struct SettingsStore {
             return [90, 365, 730].contains((value as? NSNumber)?.intValue ?? 0)
         case "terminal_app":
             return (value as? String).map { terminalApps.contains($0) } ?? false
+        case "menubar_style":
+            return (value as? String).map { MenuBarStyle(rawValue: $0) != nil } ?? false
         case "overview_quota_position":
             return (value as? String).map { overviewQuotaPositions.contains($0) } ?? false
         case "scan_interval":

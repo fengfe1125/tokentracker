@@ -28,7 +28,8 @@ struct AppPreferences {
     /// 状态栏标题追加显示的平台配额；"off" = 仅今日用量，"tokens" = 仅数字
     var menubarProvider: String { string("menubar_provider", MenuBarFmt.defaultProvider) }
     var menubarCompact: Bool { bool("menubar_compact", false) }
-    var menubarRing: Bool { bool("menubar_ring", true) }
+    /// 状态栏样式（A 原生单色 / B 双行仪表 / C 配额胶囊），默认 A
+    var menubarStyle: MenuBarStyle { MenuBarStyle(setting: values["menubar_style"] as? String) }
     var launchAtLogin: Bool { bool("launch_at_login", false) }
     /// 概览页配额卡片位置（SettingsStore.overviewQuotaPositions）
     var overviewQuotaPosition: String { string("overview_quota_position", "right") }

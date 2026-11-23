@@ -302,6 +302,13 @@ private struct AccountDetail: View {
                     Text(SubscriptionText.time(sampled) + (snapshot.privateAPI ? " · " + L10n.text("非公开接口") : ""))
                 }
             }
+            if let login = card.account.savedLogin {
+                GridRow {
+                    Text(L10n.text("登录凭证")).foregroundStyle(.secondary)
+                    Text(SubscriptionText.savedLogin(login))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if supportsMenuBar {
                 GridRow {
                     Text(L10n.text("菜单栏")).foregroundStyle(.secondary)

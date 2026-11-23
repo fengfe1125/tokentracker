@@ -213,10 +213,14 @@ final class YiFormatPortTests: XCTestCase {
     /// test_fmt_tokens_yi / test_title_segments_yi / test_today_line_yi
     func testFmtTokensYi() {
         XCTAssertEqual(MenuBarFmt.fmtTokens(5.5e8, yi: true), "5.50亿")
-        XCTAssertEqual(MenuBarFmt.fmtTokens(55_000_000, yi: true), "0.55亿")
+        // 不足 1 亿按「万」读数：4412万 而非 0.44亿
+        XCTAssertEqual(MenuBarFmt.fmtTokens(55_000_000, yi: true), "5500万")
+        XCTAssertEqual(MenuBarFmt.fmtTokens(44_120_000, yi: true), "4412万")
         XCTAssertEqual(MenuBarFmt.fmtTokens(1e8, yi: true), "1.00亿")
-        XCTAssertEqual(MenuBarFmt.fmtTokens(999_999, yi: true), "1000.0K") // 不足 1M 保持 K
-        XCTAssertEqual(MenuBarFmt.fmtTokens(99_999_999, yi: true), "1.00亿")
+        XCTAssertEqual(MenuBarFmt.fmtTokens(999_999, yi: true), "100.0万")
+        XCTAssertEqual(MenuBarFmt.fmtTokens(9_999_999, yi: true), "1000万")   // 进位后不出现 1000.0万
+        XCTAssertEqual(MenuBarFmt.fmtTokens(99_999_999, yi: true), "1.00亿")  // 进位到亿
+        XCTAssertEqual(MenuBarFmt.fmtTokens(9_999, yi: true), "9999")
         XCTAssertEqual(MenuBarFmt.fmtTokens(5.5e8), "550.00M")             // 关闭时保持原样
     }
 
@@ -248,5 +252,59 @@ final class TokenNumbersOnlyTests: XCTestCase {
         XCTAssertEqual(MenuBarFmt.fmtTitle(today: .init(tokens: 0, cost: 0), entries: nil,
                                          provider: "tokens"), "0")
         XCTAssertTrue(SettingsStore.isValid(key: "menubar_provider", value: "tokens"))
+    }
+}
+
+final class MenuBarStyleTests: XCTestCase {
+    private func quotaEntry(_ id: String, pct: Double?, source: String = "official") -> MenuBarQuotaEntry {
+        MenuBarQuotaEntry(id: id, name: id == "codex" ? "Codex" : id,
+                          windows: [MenuBarQuotaWindow(pct: pct, source: source, stale: false, label: "5h")])
+    }
+
+    func testStyleSettingFallsBackToNative() {
+        XCTAssertEqual(MenuBarStyle.default, .native)
+        XCTAssertEqual(MenuBarStyle(setting: nil), .native)
+        XCTAssertEqual(MenuBarStyle(setting: "bogus"), .native)
+        XCTAssertEqual(MenuBarStyle(setting: "stacked"), .stacked)
+        XCTAssertEqual(MenuBarStyle(setting: "capsule"), .capsule)
+        XCTAssertEqual(MenuBarStyle.allCases.map(\.rawValue), ["native", "stacked", "capsule"])
+    }
+
+    func testDisplayWithProviderQuota() {
+        let display = MenuBarFmt.display(today: MenuBarToday(tokens: 44_120_000, cost: 0),
+                                         entries: [quotaEntry("codex", pct: 38)], provider: "codex", yi: true)
+        XCTAssertEqual(display.tokensText, "4412万")
+        XCTAssertTrue(display.hasTokens)
+        XCTAssertFalse(display.tokensOnly)
+        XCTAssertEqual(display.quota?.glyph, "X")
+        XCTAssertEqual(display.quota?.name, "Codex")
+        XCTAssertEqual(display.quota?.brandHex, MenuBarFmt.toolHex["codex"])
+        XCTAssertEqual(display.quota?.pct, 38)
+        XCTAssertEqual(display.quota?.urgency, .ok)
+        XCTAssertEqual(display.quota?.approximate, false)
+    }
+
+    func testDisplayUrgencyClampAndEstimate() {
+        let warn = MenuBarFmt.display(today: nil, entries: [quotaEntry("claude", pct: 65, source: "local")],
+                                      provider: "claude")
+        XCTAssertEqual(warn.quota?.urgency, .warn)
+        XCTAssertEqual(warn.quota?.approximate, true)
+        XCTAssertEqual(warn.tokensText, "—")
+        XCTAssertFalse(warn.hasTokens)
+        let crit = MenuBarFmt.display(today: nil, entries: [quotaEntry("claude", pct: 140)], provider: "claude")
+        XCTAssertEqual(crit.quota?.pct, 100)
+        XCTAssertEqual(crit.quota?.urgency, .crit)
+    }
+
+    func testDisplayWithoutQuotaData() {
+        // 选了平台但还没有配额：保留平台信息，pct 为空
+        let missing = MenuBarFmt.display(today: nil, entries: [], provider: "claude")
+        XCTAssertEqual(missing.quota?.name, "Claude")
+        XCTAssertNil(missing.quota?.pct)
+        XCTAssertEqual(missing.quota?.urgency, MenuBarDisplay.Urgency.none)
+        XCTAssertNil(MenuBarFmt.display(today: nil, entries: [], provider: "off").quota)
+        let tokens = MenuBarFmt.display(today: nil, entries: [quotaEntry("claude", pct: 10)], provider: "tokens")
+        XCTAssertNil(tokens.quota)
+        XCTAssertTrue(tokens.tokensOnly)
     }
 }

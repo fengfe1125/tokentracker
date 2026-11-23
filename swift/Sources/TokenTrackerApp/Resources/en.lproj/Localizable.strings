@@ -601,7 +601,6 @@
 "赠送 {0} · 充值 {1}" = "Granted {0} · Topped up {1}";
 "加载中" = "Loading";
 "官方最新" = "Official, current";
-"官方过期" = "Official, outdated";
 "未登录" = "Signed out";
 "凭据失效" = "Credential invalid";
 "权限不足" = "No permission";
@@ -1086,3 +1085,24 @@
 "页面底部" = "Bottom of page";
 "不显示" = "Hidden";
 "也可在概览页配额卡片右上角直接切换。" = "You can also switch it from the top-right corner of the Overview quota card.";
+"未能刷新" = "Not refreshed";
+"登录凭证" = "Login";
+"到期前自动续期，无需重新登录" = "renews automatically before it expires; no need to sign in again";
+"到期后需重新登录" = "sign in again after it expires";
+"已保存在本机 · {0}" = "Saved on this Mac · {0}";
+"已保存在本机 · 有效至 {0} · {1}" = "Saved on this Mac · valid until {0} · {1}";
+
+/* Menu bar styles */
+"今日 {0} Token" = "Today {0} tokens";
+"{0} 暂无配额数据" = "{0}: no quota data";
+"{0} 已用 {1}" = "{0} {1} used";
+"样式" = "Style";
+"原生单色" = "Native";
+"双行仪表" = "Two-Line Gauge";
+"配额胶囊" = "Quota Capsule";
+"状态栏样式" = "Menu bar style";
+"默认" = "Default";
+"预览为示例数据；右键状态栏图标也可切换。" = "Previews use sample data. You can also switch styles by right-clicking the menu bar icon.";
+"进度环内嵌平台字母，与系统图标同为单色，仅预警时上色。" = "A progress ring with the provider letter inside. Monochrome like system icons; colored only on warnings.";
+"上行今日 Token，下行平台与百分比，竖条表示配额用量。" = "Today's tokens on top, provider and percentage below, with a bar for quota usage.";
+"品牌色头像加按用量填充的胶囊，告警最醒目，占位最宽。" = "A brand-colored badge in a capsule filled by usage. Most visible alerts, but the widest.";

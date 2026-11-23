@@ -51,7 +51,7 @@ enum SubscriptionText {
         switch status {
         case .loading: return L10n.text("加载中")
         case .current: return L10n.text("官方最新")
-        case .stale: return L10n.text("官方过期")
+        case .stale: return L10n.text("未能刷新")
         case .signedOut: return L10n.text("未登录")
         case .expired: return L10n.text("凭据失效")
         case .forbidden: return L10n.text("权限不足")
@@ -96,6 +96,15 @@ enum SubscriptionText {
         if !account.shortLabel.isEmpty { return account.shortLabel }
         if !account.keyHint.isEmpty { return "API Key " + account.keyHint }
         return L10n.text("账号 \(L10n.Template(verbatim: String(account.id.suffix(6))))")
+    }
+
+    /// 账号详情「登录凭证」：已保存在本机，何时到期、能否自动续期。
+    static func savedLogin(_ login: SubscriptionSavedLogin) -> String {
+        let renew = login.autoRenews ? L10n.text("到期前自动续期，无需重新登录") : L10n.text("到期后需重新登录")
+        guard let expiry = login.expiresAt else {
+            return L10n.text("已保存在本机 · \(L10n.Template(verbatim: renew))")
+        }
+        return L10n.text("已保存在本机 · 有效至 \(L10n.Template(verbatim: time(expiry))) · \(L10n.Template(verbatim: renew))")
     }
 
     /// 合并展示的账号组：「API Key ····d0ea 等 3 把」。

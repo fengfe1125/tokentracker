@@ -632,6 +632,19 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertNil(SubscriptionService.menuBarCard([other], provider: .claude), "不取其他账号替代")
     }
 
+    func testSavedLoginExposesExpiryAndRenewalWithoutTokens() {
+        let expiry = Date(timeIntervalSince1970: 1_797_828_739)
+        let login = StoredSubscriptionAccount(provider: .workbuddy, label: "WB", kind: .oauth, origin: .login,
+                                              token: "wb-access", refreshToken: "wb-refresh", expiresAt: expiry)
+        let noRefresh = StoredSubscriptionAccount(provider: .zcode, kind: .oauth, origin: .login, token: "jwt")
+        let key = StoredSubscriptionAccount(provider: .deepseek, kind: .apiKey, origin: .manual, token: "sk-xxxxxxxxxxxx")
+        let accounts = SubscriptionService.accounts([login, noRefresh, key])
+        let byProvider = Dictionary(uniqueKeysWithValues: accounts.map { ($0.provider, $0) })
+        XCTAssertEqual(byProvider[.workbuddy]?.savedLogin, SubscriptionSavedLogin(expiresAt: expiry, autoRenews: true))
+        XCTAssertEqual(byProvider[.zcode]?.savedLogin, SubscriptionSavedLogin(expiresAt: nil, autoRenews: false))
+        XCTAssertNil(byProvider[.deepseek]?.savedLogin, "API Key 不是登录凭证")
+    }
+
     func testDisplayGroupsMergeKeysOfSameBalanceAccountOnly() {
         func balance(_ total: Decimal, granted: Decimal = 0, currency: String = "CNY") -> SubscriptionSnapshot {
             SubscriptionSnapshot(status: .current, balances: [

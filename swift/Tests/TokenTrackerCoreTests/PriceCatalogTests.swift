@@ -13,11 +13,12 @@ final class PriceCatalogTests: XCTestCase {
 
         let result = await service.synchronize(nowMs: 1_000)
         XCTAssertEqual(result.status, "success")
-        XCTAssertEqual(Set(result.updatedProviders), Set(["anthropic", "deepseek", "moonshot", "xai", "openai"]))
+        XCTAssertEqual(Set(result.updatedProviders),
+                       Set(["anthropic", "deepseek", "moonshot", "xai", "openai", "google", "minimax"]))
 
         let document = PriceCatalogDocument.load(from: path)
         XCTAssertEqual(document.lastSuccessAtMs, 1_000)
-        XCTAssertEqual(document.versions.count, 11)
+        XCTAssertEqual(document.versions.count, 20)
         let table = PriceTable.load(from: path)
         let anthropic = table.quote(provider: "anthropic", model: "claude-sonnet-4-5",
             input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000,
@@ -107,6 +108,56 @@ final class PriceCatalogTests: XCTestCase {
             input: 1_000_000, output: 0, eventAtMs: 400)?.cost, 1)
     }
 
+    func testNewSourcesShortContextTableAndSourceAliasesPrice() async throws {
+        let tmp = try TempDir()
+        let path = tmp.path("prices.json")
+        let pages = samplePages()
+        let service = PriceSyncService(path: path) { url in Data((pages[url.absoluteString] ?? "").utf8) }
+        let result = await service.synchronize(nowMs: 1_000)
+        XCTAssertEqual(result.status, "success")
+        let table = PriceTable.load(from: path)
+        func cost(_ provider: String?, _ model: String, at: Int64 = 1_000, input: Int64 = 1_000_000,
+                  output: Int64 = 0, cacheRead: Int64 = 0, cacheWrite: Int64 = 0) -> Double? {
+            table.quote(provider: provider, model: model, input: input, output: output,
+                        cacheRead: cacheRead, cacheWrite: cacheWrite, eventAtMs: at)?.cost
+        }
+
+        // OpenAI 旗舰表按「短上下文」列读取，并去掉「(<272K context length)」注记。
+        XCTAssertEqual(cost("openai", "gpt-6.1-sol", output: 1_000_000, cacheRead: 1_000_000,
+                            cacheWrite: 1_000_000), 14.6)
+        XCTAssertEqual(cost("openai", "gpt-5.5"), 5)
+        XCTAssertEqual(cost("openai", "gpt-5.1", input: 0, cacheRead: 1_000_000), 0.125)
+        XCTAssertEqual(cost("openai", "codex/gpt-6.1-sol"), 2)
+
+        // DeepSeek API 名 deepseek-flash 由 V4.1-Flash 提供，目录别名可直接命中。
+        XCTAssertTrue(PriceCatalogDocument.load(from: path).versions.contains {
+            $0.model == "deepseek-flash" && $0.aliases.contains("deepseek-v4.1-flash")
+        })
+        XCTAssertEqual(cost(nil, "workbuddy/deepseek-v4.1-flash"), 0.15)
+
+        // Gemini：Standard 付费列、带日期的调价，以及 Antigravity 的推理强度后缀。
+        XCTAssertEqual(cost("google", "gemini-4-neon-xhigh", output: 1_000_000, cacheRead: 1_000_000), 18.15)
+        XCTAssertEqual(cost("google", "gemini-4-argon", at: 500), 2)
+        XCTAssertEqual(cost("google", "gemini-4-argon"), 2)
+        XCTAssertEqual(cost("google", "gemini-4-argon-high", at: 1_796_112_000_000), 4)
+        XCTAssertEqual(cost("google", "gemini-4-argon", at: 1_796_111_999_999), 2)
+        XCTAssertEqual(cost("google", "gemini-4-hydrogen"), 1.5)
+        XCTAssertNil(cost("google", "gemini-2.5-flash-image"))
+
+        // MiniMax：Standard 表、512k 以内档位、永久折扣后的价格；Priority 表不覆盖。
+        XCTAssertEqual(cost(nil, "MiniMax-M3", output: 1_000_000, cacheRead: 1_000_000), 1.56)
+        XCTAssertEqual(cost(nil, "MiniMax-M3.1-Flash"), 0.15)
+
+        // 带日期的调价生效后再同步同一页面，不会把「through」旧价重新加成新版本。
+        let before = PriceCatalogDocument.load(from: path).versions
+        let later = await service.synchronize(nowMs: 1_796_198_400_000)
+        XCTAssertEqual(later.status, "success")
+        let after = PriceCatalogDocument.load(from: path).versions.filter { $0.provider == "google" }
+        XCTAssertEqual(after.count, before.filter { $0.provider == "google" }.count)
+        XCTAssertEqual(PriceTable.load(from: path).quote(provider: "google", model: "gemini-4-argon",
+            input: 1_000_000, output: 0, eventAtMs: 1_796_198_400_000)?.cost, 4)
+    }
+
     func testTwentyFourHourSyncDueBoundary() {
         XCTAssertTrue(PriceSyncService.isDue(lastSuccessAtMs: 0, nowMs: 100))
         XCTAssertFalse(PriceSyncService.isDue(lastSuccessAtMs: 100, nowMs: 100 + PriceSyncService.intervalMs - 1))
@@ -160,6 +211,134 @@ final class PriceCatalogTests: XCTestCase {
             gpt-6-sol | $2.00 | $0.20 | $2.50 | $10.00 | $4.00 | $0.40 | $5.00 | $15.00
             o4-mini | $0.50 | $0.05 | - | $1.50 | $1.00 | $0.10 | - | $3.00
             gpt-6-sol | $1.00 | $0.10 | $1.25 | $5.00 | $2.00 | $0.20 | $2.50 | $7.50
+
+            ### Standard pricing data
+            | Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | gpt-6.1-sol | $2.00 | $10.00 | $0.10 | $2.50 | $5.00 | $4.00 | $15.00 | $0.20 | $5.00 | $10.00 |
+            | gpt-5.5 (<272K context length) | $5.00 | $30.00 | $0.50 | - | - | $10.00 | $45.00 | $1.00 | - | - |
+
+            | Model | Input | Output | Cached input |
+            | --- | --- | --- | --- |
+            | gpt-5.1 | $1.25 | $10.00 | $0.125 |
+
+            ### Batch pricing data
+            | Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |
+            | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+            | gpt-6.1-sol | $1.00 | $5.00 | $0.05 | $1.25 | $2.50 | $2.00 | $7.50 | $0.10 | $2.50 | $5.00 |
+            """,
+            "https://ai.google.dev/gemini-api/docs/pricing": """
+            # Gemini Developer API pricing
+            ## Gemini 4 Argon  {% id="gemini-4-argon" %}
+            {% tabs %}
+            {% tab title="Standard" %}
+            {% table %}
+            * Feature
+            * Free Tier
+            * Paid Tier, per 1M tokens in USD
+            ---
+            * Input price
+            * Not available
+            * $2.00 through November 30, 2026.
+            $4.00 starting December 1, 2026.
+            ---
+            * Output price (including thinking tokens)
+            * Not available
+            * $10.00 through November 30, 2026.
+            $20.00 starting December 1, 2026.
+            ---
+            * Context caching price
+            * Not available
+            * $0.10 through November 30, 2026.
+            $0.20 starting December 1, 2026.
+            {% /table %}
+            {% /tab %}
+            {% tab title="Batch" %}
+            {% table %}
+            ---
+            * Input price
+            * Not available
+            * $1.00 through November 30, 2026.
+            {% /table %}
+            {% /tab %}
+            {% /tabs %}
+            ## Gemini 2.5 Flash Image  {% id="gemini-2.5-flash-image" %}
+            {% table %}
+            ---
+            * Input price
+            * Not available
+            * $0.30 (text / image)
+            ---
+            * Output price
+            * Not available
+            * $0.039 per image{% sup %}*{% /sup %}
+            {% /table %}
+            ## Gemini 4 Neon  {% id="gemini-4-neon" %}
+            {% tabs %}
+            {% tab title="Standard" %}
+            {% table %}
+            ---
+            * Input price
+            * Not available
+            * $3.00
+            ---
+            * Output price (including thinking tokens)
+            * Not available
+            * $15.00
+            ---
+            * Context caching price
+            * Not available
+            * $0.15 Implicit caching only (explicit caching is not supported).
+            {% /table %}
+            {% /tab %}
+            {% /tabs %}
+            ## Gemini 4 Hydrogen  {% id="gemini-4-hydrogen" %}
+            {% tabs %}
+              {% tab title="Standard" %}
+              {% table %}
+              * Feature
+              * Free Tier
+              * Paid Tier, per 1M tokens in USD
+
+              ---
+
+              * Input price
+              * Free of charge
+              * $1.50
+
+              ---
+
+              * Output price (including thinking tokens)
+              * Free of charge
+              * $7.50
+            {% /table %}
+            {% /tab %}
+            {% /tabs %}
+            """,
+            "https://platform.minimax.io/docs/pricing/overview.md": """
+            ## LLM
+
+            | **Model** | **Input** \\$ / M tokens | **Output** \\$ / M tokens | **Prompt caching Read** \\$ / M tokens |
+            | :- | :-: | :-: | :-: |
+            | **MiniMax-M3.1-Flash** | \\$0.15 | \\$0.60 | \\$0.015 |
+
+            > [tab] Standard
+            >
+            > | **Model** | **Input** \\$ / M tokens | **Output** \\$ / M tokens | **Prompt caching Read** \\$ / M tokens |
+            > | :- | :-: | :-: | :-: |
+            > | **MiniMax-M3** ≤ 512k input tokens Permanent 50% off | ~~\\$0.60~~ \\$0.30 | ~~\\$2.40~~ \\$1.20 | ~~\\$0.12~~ \\$0.06 |
+            > | **MiniMax-M3** > 512k input tokens\\* Permanent 50% off | ~~\\$1.20~~ \\$0.60 | ~~\\$4.80~~ \\$2.40 | ~~\\$0.24~~ \\$0.12 |
+
+            > [tab] Priority\\*
+            >
+            > | **Model** | **Input** \\$ / M tokens | **Output** \\$ / M tokens | **Prompt caching Read** \\$ / M tokens |
+            > | :- | :-: | :-: | :-: |
+            > | **MiniMax-M3** ≤ 512k input tokens Permanent 50% off | ~~\\$0.90~~ \\$0.45 | ~~\\$3.60~~ \\$1.80 | ~~\\$0.18~~ \\$0.09 |
+
+            ## Video
+
+            <table><thead><tr><th>Model</th><th>Output Resolution</th><th>Output Video per second</th></tr></thead>
+            <tbody><tr><td>**MiniMax-H3**</td><td>2K</td><td>\\$0.13</td></tr></tbody></table>
             """,
         ]
     }

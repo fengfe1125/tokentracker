@@ -144,6 +144,44 @@ final class PriceTableTests: XCTestCase {
         XCTAssertEqual(row.string("price_version_id"), "grok")
     }
 
+    func testEventsBeforeFirstVersionUseEarliestRateButLaterChangesStillSplit() {
+        let t = PriceTable(versions: [
+            version("openai", "gpt-5", 1, id: "v1", effective: 100),
+            version("openai", "gpt-5", 2, id: "v2", effective: 200),
+        ])
+        let early = t.quote(provider: "openai", model: "gpt-5", input: 1_000_000, output: 0, eventAtMs: 50)
+        XCTAssertEqual(early?.priceVersionID, "v1")
+        XCTAssertTrue(early?.conditions.contains { $0.contains("predates the first catalog version") } ?? false)
+        XCTAssertNil(t.quote(provider: "openai", model: "gpt-5", input: 1_000_000, output: 0,
+                             eventAtMs: 150)?.conditions.first)
+        // 区间跨越首个版本的生效点不算跨价，跨越之后的调价仍保持未计价。
+        XCTAssertEqual(t.quote(provider: "openai", model: "gpt-5", input: 1_000_000, output: 0,
+                               eventAtMs: 150, intervalStartMs: 50)?.cost, 1)
+        XCTAssertNil(t.quote(provider: "openai", model: "gpt-5", input: 1_000_000, output: 0,
+                             eventAtMs: 250, intervalStartMs: 50))
+    }
+
+    func testKnownAliasAndEffortSuffixAreRetriedAsExactNames() {
+        let t = PriceTable(versions: [
+            version("deepseek", "deepseek-flash", 0.15, id: "ds"),
+            version("google", "gemini-4-neon", 3, id: "neon"),
+            version("anthropic", "claude-opus-5-5", 5, id: "opus"),
+        ])
+        let alias = t.quote(provider: "openai", model: "workbuddy/deepseek-v4.1-flash",
+                            input: 1_000_000, output: 0)
+        XCTAssertEqual(alias?.priceVersionID, "ds")
+        XCTAssertEqual(alias?.provider, "deepseek")
+        XCTAssertEqual(alias?.conditions.count, 2)
+        XCTAssertEqual(t.quote(provider: "google", model: "gemini-4-neon-xhigh", input: 1_000_000,
+                               output: 0)?.priceVersionID, "neon")
+        XCTAssertEqual(t.quote(provider: "anthropic", model: "claude-opus-5-5-medium", input: 1_000_000,
+                               output: 0)?.cost, 5)
+        // 只去掉一个已知强度后缀，其余后缀仍不匹配。
+        XCTAssertNil(t.quote(provider: "google", model: "gemini-4-neon-tiered-high", input: 1_000_000, output: 0))
+        XCTAssertNil(t.quote(provider: "google", model: "gemini-4-neon-max", input: 1_000_000, output: 0))
+        XCTAssertNil(t.quote(model: "deepseek-v4.1-flash-free", input: 1_000_000, output: 0))
+    }
+
     func testHalfEvenRounding() {
         let t = PriceTable(versions: [version("openai", "m", 0.0005)])
         XCTAssertEqual(t.quote(provider: "openai", model: "m", input: 1, output: 0)?.cost, 0.0)

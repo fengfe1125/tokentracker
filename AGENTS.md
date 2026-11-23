@@ -53,7 +53,7 @@ node tests/test_web.js                # Web 载荷校验器
 ## 数据边界
 
 - 扫描与 Activity 持久化保持本地、只记元数据，不存 prompt、工具调用参数或文件内容。`exact`、`derived`、`unknown`、`unavailable` 保持区分，缺失数据不显示为零。
-- 计价只用 `~/.tokentracker/prices.json` 中供应商、模型、事件时间精确匹配的费率；无匹配则保留 Token、费用未计价，不用默认价或子串匹配；唯一放宽是 `relay/model` 形式的转发前缀可去掉后再精确匹配。细节见 `docs/metrics.md`。
+- 计价只用 `~/.tokentracker/prices.json` 中供应商、模型、事件时间精确匹配的费率；无匹配则保留 Token、费用未计价，不用默认价或子串匹配；放宽仅限把转发前缀（`relay/model`）、已知来源别名和推理强度后缀去掉后再精确匹配，早于模型首个价格版本的事件按首个版本回溯估算。细节见 `docs/metrics.md`。
 - 端口信息（含完整命令行）只在内存中，不写入用量库，也不进入公开统计。结束进程前须确认，不对系统进程或其他用户的进程提供关闭。
 - 订阅查询使用 TokenTracker 自己的账号库 `~/.tokentracker/subscription_accounts.json`，不读取其他软件的配置或登录态；唯一例外是 Antigravity 只读自动识别本机钥匙串（`service=gemini, account=antigravity`）与 Antigravity IDE `state.vscdb`，凭据仅留内存、不落盘且不改写原工具登录态（见 `docs/subscriptions.md`）。
 - 任务提醒 Hook 通过每用户私有临时目录 Unix Socket（`confstr(_CS_DARWIN_USER_TEMP_DIR)` 下的 `tt-tasks-<uid>-dev|app`，0700/0600，校验 peer UID）通信；审批参数仅在等待期间留存内存，处理或失效后立即清除，不写入 `task-reminders.json` 历史或日志（见 `docs/task-reminders.md`）。

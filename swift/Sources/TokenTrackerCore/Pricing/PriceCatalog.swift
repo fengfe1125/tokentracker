@@ -72,6 +72,12 @@ private struct PriceCandidate: Sendable {
     let rates: PriceRate
     let sourceURL: String
     let conditions: [String]
+    /// Effective time stated by the official page (for example "starting
+    /// December 1, 2026"). Nil means the page states no date.
+    var effectiveAtMs: Int64? = nil
+    /// Last moment an undated rate is valid when the page says "through <date>";
+    /// after it the candidate is ignored so it cannot reappear as a new version.
+    var expiresAtMs: Int64? = nil
 }
 
 /// Fetches official, unauthenticated public price pages and atomically updates
@@ -91,6 +97,8 @@ public final class PriceSyncService: @unchecked Sendable {
         ("moonshot", "https://platform.moonshot.ai/docs/pricing/chat"),
         ("xai", "https://docs.x.ai/developers/pricing"),
         ("openai", "https://developers.openai.com/api/docs/pricing.md"),
+        ("google", "https://ai.google.dev/gemini-api/docs/pricing"),
+        ("minimax", "https://platform.minimax.io/docs/pricing/overview.md"),
     ]
 
     private let path: String
@@ -162,23 +170,40 @@ public final class PriceSyncService: @unchecked Sendable {
     private func merge(_ candidates: [PriceCandidate], into versions: inout [PriceVersion],
                        observedAtMs: Int64) {
         for candidate in candidates {
+            if let expires = candidate.expiresAtMs, observedAtMs > expires { continue }
             let provider = PriceTable.normalizeProvider(candidate.provider)
             let key = PriceTable.modelKey(candidate.model)
             let indices = versions.indices.filter {
                 PriceTable.normalizeProvider(versions[$0].provider) == provider
                     && PriceTable.modelKey(versions[$0].model) == key
             }
-            let latest = indices.map { versions[$0] }.max { $0.effectiveAtMs < $1.effectiveAtMs }
-            if let latest, latest.rates == candidate.rates {
-                if let index = versions.firstIndex(where: { $0.id == latest.id }) {
-                    versions[index].aliases = Array(Set(latest.aliases + candidate.aliases)).sorted()
-                    versions[index].fetchedAtMs = observedAtMs
-                    versions[index].sourceURL = candidate.sourceURL
-                    versions[index].conditions = candidate.conditions
-                }
-                continue
+            func refresh(_ index: Int) {
+                versions[index].aliases = Array(Set(versions[index].aliases + candidate.aliases)).sorted()
+                versions[index].fetchedAtMs = observedAtMs
+                versions[index].sourceURL = candidate.sourceURL
+                versions[index].conditions = candidate.conditions
             }
-            let baseID = "\(provider):\(key):\(observedAtMs)"
+            let effectiveAt: Int64
+            if let stated = candidate.effectiveAtMs {
+                // A dated rate is keyed by its stated date; a corrected
+                // announcement updates that version instead of adding another.
+                if let index = indices.first(where: { versions[$0].effectiveAtMs == stated }) {
+                    versions[index].rates = candidate.rates
+                    refresh(index)
+                    continue
+                }
+                effectiveAt = stated
+            } else {
+                // Compare with the rate in effect now, not a future dated one.
+                let current = indices.filter { versions[$0].effectiveAtMs <= observedAtMs }
+                    .max { versions[$0].effectiveAtMs < versions[$1].effectiveAtMs }
+                if let current, versions[current].rates == candidate.rates {
+                    refresh(current)
+                    continue
+                }
+                effectiveAt = observedAtMs
+            }
+            let baseID = "\(provider):\(key):\(effectiveAt)"
             var id = baseID
             var suffix = 2
             while versions.contains(where: { $0.id == id }) {
@@ -186,7 +211,7 @@ public final class PriceSyncService: @unchecked Sendable {
                 suffix += 1
             }
             versions.append(PriceVersion(id: id, provider: provider, model: candidate.model,
-                aliases: candidate.aliases, effectiveAtMs: observedAtMs,
+                aliases: candidate.aliases, effectiveAtMs: effectiveAt,
                 fetchedAtMs: observedAtMs, sourceURL: candidate.sourceURL,
                 rates: candidate.rates, conditions: candidate.conditions))
         }
@@ -258,6 +283,13 @@ private enum OfficialPriceParser {
         case "moonshot": parsed = parseMoonshot(tables + parseDocTables(source), sourceURL)
         case "xai": parsed = parseXAI(tables, sourceURL)
         case "openai": parsed = parseOpenAI(tables, sourceURL)
+        case "google": parsed = parseGemini(source, sourceURL)
+        case "minimax":
+            // The Markdown page mixes pipe tables (some inside `>` tab blocks)
+            // with HTML media tables, so read both forms.
+            let unquoted = source.replacingOccurrences(of: #"(?m)^>[ \t]?"#, with: "",
+                                                       options: .regularExpression)
+            parsed = parseMiniMax(parseMarkdownTables(unquoted) + tables, sourceURL)
         default: parsed = []
         }
         guard !parsed.isEmpty else { throw PriceSyncError.noRecognizedRates }
@@ -450,7 +482,7 @@ private enum OfficialPriceParser {
             guard let match = capture(value, pattern: #"(?i)\bdeepseek[- ](flash|v[0-9]+(?:[.-][a-z0-9]+)*)\b"#),
                   match.count > 1 else { return nil }
             let canonical = "deepseek-\(match[1].lowercased().replacingOccurrences(of: "_", with: "-"))"
-            let aliases = canonical == "deepseek-flash" ? [value, "deepseek-v4-flash"] : [value]
+            let aliases = canonical == "deepseek-flash" ? [value] + deepSeekFlashAliases : [value]
             return (canonical, aliases)
         case "moonshot":
             guard let match = capture(value, pattern: #"(?i)\b(kimi-[a-z0-9][a-z0-9._-]*)\b"#),
@@ -588,6 +620,9 @@ private enum OfficialPriceParser {
         return unique(result)
     }
 
+    /// `deepseek-flash` is the API name; logs and relays use the versioned names.
+    private static let deepSeekFlashAliases = ["deepseek-v4-flash", "deepseek-v4.1-flash"]
+
     private static func parseDeepSeek(_ tables: [Table], _ url: String) -> [PriceCandidate] {
         var modelNames: [String] = []
         for table in tables {
@@ -618,7 +653,7 @@ private enum OfficialPriceParser {
         let result = standard.compactMap { name, rates -> PriceCandidate? in
             guard let input = rates["input"], let output = rates["output"] else { return nil }
             let model = name == "deepseek-v4-flash" ? "deepseek-flash" : name
-            let aliases = model == "deepseek-flash" ? ["deepseek-v4-flash"] : []
+            let aliases = model == "deepseek-flash" ? deepSeekFlashAliases : []
             return PriceCandidate(provider: "deepseek", model: model, aliases: aliases,
                 rates: PriceRate(input: input, output: output,
                                  cacheRead: rates["cache_read"] ?? 0, cacheWrite: input),
@@ -657,16 +692,31 @@ private enum OfficialPriceParser {
         for table in tables {
             for headerIndex in table.rows.indices {
                 let header = table.rows[headerIndex].map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                // Flagship tables split short and long context; only the short
+                // context columns are used because logs rarely carry the tier.
+                let shortContext = header.contains("short context input")
+                func usable(_ column: String) -> Bool { !column.contains("long context") }
                 guard let modelIndex = header.firstIndex(where: { $0 == "model" || $0 == "name" }),
-                      let inputIndex = header.indices.first(where: { $0 > modelIndex && header[$0] == "input" }),
+                      let inputIndex = header.indices.first(where: {
+                          $0 > modelIndex && (header[$0] == "input" || header[$0] == "short context input")
+                      }),
                       let outputIndex = header.indices.first(where: {
                           $0 > inputIndex && header[$0].contains("output") && !header[$0].contains("cost")
+                              && usable(header[$0])
                       }) else { continue }
+                // Older tables repeat "Input | ... | Output" for long context; a
+                // cache column belongs to the short-context group before that.
+                let groupEnd = header.indices.first(where: { $0 > inputIndex && header[$0] == "input" })
+                    ?? header.count
                 let cacheReadIndex = header.indices.first(where: {
-                    $0 > inputIndex && ($0 < outputIndex) && header[$0].contains("cached input")
+                    $0 > inputIndex && $0 < groupEnd && header[$0].contains("cached input")
+                        && usable(header[$0])
                 })
+                // The first write column is the shortest cache TTL tier (5m/30m).
                 let cacheWriteIndex = header.indices.first(where: {
-                    $0 > inputIndex && ($0 < outputIndex) && header[$0].contains("cache write")
+                    $0 > inputIndex && usable(header[$0])
+                        && $0 < groupEnd
+                        && (header[$0].contains("cache write") || (shortContext && header[$0].hasSuffix("write")))
                 })
                 for row in table.rows.dropFirst(headerIndex + 1) {
                     guard row.indices.contains(modelIndex), row.indices.contains(inputIndex),
@@ -675,6 +725,8 @@ private enum OfficialPriceParser {
                         .replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]*\)"#,
                                               with: "$1", options: .regularExpression)
                         .replacingOccurrences(of: "`", with: "")
+                        .replacingOccurrences(of: #"\s*\([^)]*context[^)]*\)\s*$"#,
+                                              with: "", options: [.regularExpression, .caseInsensitive])
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .lowercased()
                     modelID = modelID.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
@@ -685,12 +737,168 @@ private enum OfficialPriceParser {
                           let output = money(row[outputIndex]).first else { continue }
                     let cached = cacheReadIndex.flatMap { row.indices.contains($0) ? money(row[$0]).first : nil } ?? 0
                     let cacheWrite = cacheWriteIndex.flatMap { row.indices.contains($0) ? money(row[$0]).first : nil } ?? 0
+                    let conditions = shortContext
+                        ? ["Estimate uses the standard short-context API rate and the shortest cache-write TTL tier.",
+                           "Long-context, batch, fast-mode, and regional modifiers are not inferred without request details."]
+                        : ["Estimate uses the standard short-context API rate.",
+                           "Batch, long-context, fast-mode, and regional modifiers are not inferred without request details."]
                     result.append(PriceCandidate(provider: "openai", model: modelID,
                         aliases: [], rates: PriceRate(input: input, output: output,
                             cacheRead: cached, cacheWrite: cacheWrite), sourceURL: url,
-                        conditions: ["Estimate uses the standard short-context API rate.",
-                                     "Batch, long-context, fast-mode, and regional modifiers are not inferred without request details."]))
+                        conditions: conditions))
                 }
+            }
+        }
+        return unique(result)
+    }
+
+    /// Gemini pricing is a Markdoc page: one `## Name {% id="model" %}` section per
+    /// model, with Standard/Batch/Flex/Priority tabs of `* cell` rows split by `---`.
+    /// Only the Standard tab's paid-tier column is used. Rates published as
+    /// "$x through <date>. $y starting <date>." become dated versions.
+    private static func parseGemini(_ source: String, _ url: String) -> [PriceCandidate] {
+        let headingRegex = try! NSRegularExpression(
+            pattern: #"(?m)^##\s+[^\n]*?\{%\s*id="(gemini-[a-z0-9.-]+)"\s*%\}"#)
+        let full = NSRange(source.startIndex..., in: source)
+        let headings = headingRegex.matches(in: source, range: full).compactMap { match -> (String.Index, String)? in
+            guard let whole = Range(match.range, in: source),
+                  let id = Range(match.range(at: 1), in: source) else { return nil }
+            return (whole.lowerBound, String(source[id]))
+        }
+        var result: [PriceCandidate] = []
+        for (index, heading) in headings.enumerated() {
+            let end = index + 1 < headings.count ? headings[index + 1].0 : source.endIndex
+            var section = String(source[heading.0..<end])
+            if let tab = section.range(of: #"{% tab title="Standard" %}"#) {
+                section = String(section[tab.upperBound...])
+                if let close = section.range(of: "{% /tab %}") { section = String(section[..<close.lowerBound]) }
+            } else if let close = section.range(of: "{% /table %}") {
+                section = String(section[..<close.lowerBound])
+            }
+            var fields: [String: GeminiRate] = [:]
+            let rows = section.replacingOccurrences(of: #"(?m)^[ \t]*---[ \t]*$"#, with: "\u{1E}",
+                                                    options: .regularExpression)
+                .components(separatedBy: "\u{1E}")
+            for row in rows {
+                let cells = row.components(separatedBy: "\n").reduce(into: [String]()) { cells, line in
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("* ") { cells.append(String(trimmed.dropFirst(2))) }
+                    else if !trimmed.isEmpty, !trimmed.hasPrefix("{%"), !cells.isEmpty { cells[cells.count - 1] += " " + trimmed }
+                }
+                guard cells.count >= 2, let paid = cells.last else { continue }
+                let label = cells[0].lowercased()
+                let field: String
+                if label.hasPrefix("input price") { field = "input" }
+                else if label.hasPrefix("output price") { field = "output" }
+                else if label.hasPrefix("context caching price") { field = "cache_read" }
+                else { continue }
+                if let rate = geminiRate(paid) { fields[field] = rate }
+            }
+            guard let input = fields["input"], let output = fields["output"] else { continue }
+            let cache = fields["cache_read"]
+            var conditions = ["Estimate uses the Standard paid-tier rate; Batch, Flex, and Priority tiers are not inferred.",
+                              "Cache-write tokens use the input rate; context-cache storage is not billed per token."]
+            if [input, output].contains(where: \.isTiered) {
+                conditions.append("Prompt-length tiers are not in the logs; the estimate uses the first (shortest prompt) tier.")
+            }
+            let expiry = [input.throughMs, output.throughMs, cache?.throughMs].compactMap { $0 }.min()
+            result.append(PriceCandidate(provider: "google", model: heading.1, aliases: [],
+                rates: PriceRate(input: input.current, output: output.current,
+                                 cacheRead: cache?.current ?? 0, cacheWrite: input.current),
+                sourceURL: url, conditions: conditions, effectiveAtMs: nil, expiresAtMs: expiry))
+            let dates = Set([input.starting, output.starting, cache?.starting].compactMap { $0?.atMs })
+            for date in dates.sorted() {
+                func value(_ rate: GeminiRate?) -> Double? {
+                    guard let rate else { return nil }
+                    if let start = rate.starting, start.atMs <= date { return start.value }
+                    return rate.current
+                }
+                result.append(PriceCandidate(provider: "google", model: heading.1, aliases: [],
+                    rates: PriceRate(input: value(input) ?? 0, output: value(output) ?? 0,
+                                     cacheRead: value(cache) ?? 0, cacheWrite: value(input) ?? 0),
+                    sourceURL: url, conditions: conditions + ["Effective date as published on the official page (00:00 US Pacific)."],
+                    effectiveAtMs: date))
+            }
+        }
+        return result
+    }
+
+    private struct GeminiRate: Equatable {
+        var current: Double
+        var throughMs: Int64?
+        var starting: (value: Double, atMs: Int64)?
+        var isTiered: Bool
+
+        static func == (lhs: GeminiRate, rhs: GeminiRate) -> Bool {
+            lhs.current == rhs.current && lhs.throughMs == rhs.throughMs
+                && lhs.starting?.value == rhs.starting?.value && lhs.starting?.atMs == rhs.starting?.atMs
+                && lhs.isTiered == rhs.isTiered
+        }
+    }
+
+    private static func geminiRate(_ text: String) -> GeminiRate? {
+        // Media models can price output per image or second; that is not a token rate.
+        if text.range(of: #"^\s*\$\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+per\s+(image|second|minute|hour|request|character)"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil { return nil }
+        let datePattern = #"([A-Z][a-z]+ [0-9]{1,2}, [0-9]{4})"#
+        let through = capture(text, pattern: #"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s+through\s+"# + datePattern)
+        let starting = capture(text, pattern: #"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s+starting\s+"# + datePattern)
+        if let through, through.count > 2, let value = Double(through[1].replacingOccurrences(of: ",", with: "")),
+           let lastDay = pacificMidnightMs(through[2]) {
+            var rate = GeminiRate(current: value, throughMs: lastDay + 86_400_000 - 1, starting: nil, isTiered: false)
+            if let starting, starting.count > 2,
+               let next = Double(starting[1].replacingOccurrences(of: ",", with: "")),
+               let at = pacificMidnightMs(starting[2]) {
+                rate.starting = (next, at)
+            }
+            return rate
+        }
+        let values = money(text)
+        guard let first = values.first else { return nil }
+        return GeminiRate(current: first, throughMs: nil, starting: nil, isTiered: values.count > 1)
+    }
+
+    private static func pacificMidnightMs(_ text: String) -> Int64? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+        formatter.dateFormat = "MMMM d, yyyy"
+        return formatter.date(from: text).map { Int64($0.timeIntervalSince1970 * 1000) }
+    }
+
+    /// MiniMax publishes Standard then Priority tables; `unique` keeps Standard.
+    /// Rows above a context threshold ("> 512k") are skipped, and a row with a
+    /// permanent discount lists the list price first and the charged price last.
+    private static func parseMiniMax(_ tables: [Table], _ url: String) -> [PriceCandidate] {
+        var result: [PriceCandidate] = []
+        for table in tables {
+            guard let header = table.rows.first?.map({ $0.lowercased() }),
+                  let inputIndex = header.firstIndex(where: { $0.contains("input") }),
+                  let outputIndex = header.firstIndex(where: { $0.contains("output") }) else { continue }
+            let cacheIndex = header.firstIndex(where: { $0.contains("cach") && $0.contains("read") })
+            for row in table.rows.dropFirst() {
+                guard let label = row.first,
+                      // Text models only (M series); media tables price per second or image.
+                      let match = capture(label, pattern: #"(?i)\b(minimax-m[0-9][a-z0-9.-]*)\b"#),
+                      match.count > 1, !label.contains(">"),
+                      row.indices.contains(inputIndex), row.indices.contains(outputIndex) else { continue }
+                let discounted = label.range(of: #"(?i)[0-9]+%\s*off"#, options: .regularExpression) != nil
+                func price(_ index: Int?) -> Double? {
+                    guard let index, row.indices.contains(index) else { return nil }
+                    let values = money(row[index])
+                    return discounted ? values.last : values.first
+                }
+                guard let input = price(inputIndex), let output = price(outputIndex) else { continue }
+                var conditions = ["Estimate uses the Standard service tier; Priority requests are not identified in logs.",
+                                  "Cache-write tokens use the input rate."]
+                if label.contains("≤") || label.contains("<=") {
+                    conditions.append("Uses the shortest input-length tier; longer-context requests are billed higher.")
+                }
+                if discounted { conditions.append("Uses the published discounted price.") }
+                result.append(PriceCandidate(provider: "minimax", model: match[1], aliases: [],
+                    rates: PriceRate(input: input, output: output,
+                                     cacheRead: price(cacheIndex) ?? 0, cacheWrite: input),
+                    sourceURL: url, conditions: conditions))
             }
         }
         return unique(result)

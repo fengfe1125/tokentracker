@@ -49,7 +49,10 @@ struct MenuBarPanelView: View {
         }.count
     }
 
-    private var risks: [RiskNotice] { state.insights.risks.filter { $0.level > 0 } }
+    /// 官方配额风险已由下方「配额」进度条直接呈现，面板里只保留预算类提醒，避免重复。
+    private var risks: [RiskNotice] {
+        state.insights.risks.filter { $0.level > 0 && !$0.id.hasPrefix("quota:") }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
