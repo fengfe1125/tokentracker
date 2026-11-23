@@ -98,6 +98,13 @@ enum SubscriptionText {
         return L10n.text("账号 \(L10n.Template(verbatim: String(account.id.suffix(6))))")
     }
 
+    /// 合并展示的账号组：「API Key ····d0ea 等 3 把」。
+    static func account(_ group: SubscriptionCardGroup) -> String {
+        let first = account(group.primary.account)
+        guard group.isMerged else { return first }
+        return L10n.text("\(L10n.Template(verbatim: first)) 等 \(group.cards.count) 把")
+    }
+
     static func sources(_ sources: [SubscriptionSource]) -> String {
         guard let first = sources.first else { return "" }
         let builtins: Set<String> = ["自有登录", "手动添加", "钥匙串"]

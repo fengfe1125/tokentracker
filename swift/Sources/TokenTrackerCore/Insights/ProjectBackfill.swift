@@ -16,7 +16,7 @@ public enum ProjectBackfill {
         AND u.project LIKE '/%' AND u.src_key NOT LIKE 'cli|%' LIMIT 500
         """)
         for row in metadataRows { try store.recordProjectPath(tool:row.string("tool"),srcKey:row.string("src_key"),path:row.string("project")) }
-        let antigravityMap = AntigravityWorkspaceMap.load(path: roots.antigravityWorkspaceMap)
+        let antigravityMap = AntigravityWorkspaceMap.load(path: roots.antigravityWorkspaceMap, roots: roots.antigravityRoots)
         if !antigravityMap.isEmpty {
             let unmapped = try store.conn.query("""
             SELECT u.src_key,u.session_id,u.project FROM usage_events u

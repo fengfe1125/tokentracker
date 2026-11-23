@@ -30,6 +30,8 @@ struct AppPreferences {
     var menubarCompact: Bool { bool("menubar_compact", false) }
     var menubarRing: Bool { bool("menubar_ring", true) }
     var launchAtLogin: Bool { bool("launch_at_login", false) }
+    /// 概览页配额卡片位置（SettingsStore.overviewQuotaPositions）
+    var overviewQuotaPosition: String { string("overview_quota_position", "right") }
     /// 继续会话用哪个终端
     var terminalApp: String { string("terminal_app", "auto") }
     /// 自动扫描/刷新节奏（秒）

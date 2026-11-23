@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import CryptoKit
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -44,6 +45,60 @@ public enum AntigravityWorkspaceMap {
             out[conversationID] = normalized
         }
         return out
+    }
+
+    /// Hook 映射 + Antigravity 自带会话索引（`<brain 的上级目录>/conversation_summaries.db`）合并结果；
+    /// 两者都有时以 Hook 记录为准。会话索引只读 `conversation_id` 与 `workspace_uris` 两列，不读标题、预览或正文。
+    public static func load(path: String = defaultPath, roots: [String]) -> [String: String] {
+        var merged = loadSummaries(roots: roots)
+        for (conversationID, workspace) in load(path: path) { merged[conversationID] = workspace }
+        return merged
+    }
+
+    /// 只读 Antigravity 的 `conversation_summaries.db`；库缺失、被锁或结构变化时返回已读到的部分（可能为空）。
+    public static func loadSummaries(roots: [String]) -> [String: String] {
+        var out: [String: String] = [:]
+        var seen: Set<String> = []
+        for root in roots {
+            let dbPath = ((expandPath(root) as NSString).deletingLastPathComponent as NSString)
+                .appendingPathComponent("conversation_summaries.db")
+            guard seen.insert(dbPath).inserted, FileManager.default.fileExists(atPath: dbPath),
+                  let conn = try? sqliteRO(dbPath),
+                  let rows = try? conn.query("SELECT conversation_id, workspace_uris FROM conversation_summaries")
+            else { continue }
+            for row in rows {
+                let conversationID = row.string("conversation_id")
+                guard isValidConversationID(conversationID), out[conversationID] == nil,
+                      let workspace = firstWorkspace(fromURIs: row.string("workspace_uris")) else { continue }
+                out[conversationID] = workspace
+            }
+        }
+        return out
+    }
+
+    /// `workspace_uris` 是 JSON 字符串数组（`file:///…`，百分号编码）；取第一个可用的本机绝对路径。
+    static func firstWorkspace(fromURIs raw: String) -> String? {
+        guard let data = raw.data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return nil }
+        for case let item as String in list {
+            let path: String?
+            if item.hasPrefix("file://") {
+                path = URL(string: item).flatMap { $0.isFileURL ? $0.path : nil }
+            } else {
+                path = item
+            }
+            if let path, let normalized = normalizeWorkspacePath(path) { return normalized }
+        }
+        return nil
+    }
+
+    /// 映射内容摘要：扫描器据此判断是否需要回填历史会话的项目归属。
+    static func digest(_ map: [String: String]) -> String {
+        var hasher = SHA256()
+        for key in map.keys.sorted() {
+            hasher.update(data: Data((key + "\u{1}" + (map[key] ?? "") + "\u{2}").utf8))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// 解析 Antigravity Hook 的 stdin JSON（camelCase protojson），仅提取 conversationId 与工作区路径。

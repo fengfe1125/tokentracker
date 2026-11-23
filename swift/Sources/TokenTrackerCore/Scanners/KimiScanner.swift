@@ -167,7 +167,7 @@ public struct KimiScanner: ScannerAdapter {
                     tool: name, srcKey: key, sessionID: sessionID, project: project,
                     ts: ts, model: model, input: inp, output: outp,
                     cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
-                    provider: "moonshot", priceVersionID: quote?.priceVersionID)
+                    provider: quote?.provider ?? "moonshot", priceVersionID: quote?.priceVersionID)
             }
             cursor[path] = statKey.asDict
             if let title {
@@ -201,7 +201,7 @@ public struct KimiScanner: ScannerAdapter {
                     sessionID: String(filename.dropLast(".jsonl".count)),
                     project: (path as NSString).deletingLastPathComponent,
                     ts: ts, model: model, input: inp, output: outp, cost: quote?.cost,
-                    provider: "moonshot", priceVersionID: quote?.priceVersionID)
+                    provider: quote?.provider ?? "moonshot", priceVersionID: quote?.priceVersionID)
             }
             cursor[path] = statKey.asDict
         }

@@ -211,7 +211,7 @@ public struct CodexScanner: ScannerAdapter {
                            cost: quote?.cost, replace: true,
                            timeQuality: ts > 0 ? quality : "unallocated",
                            costSource: "estimate", sourceKind: kind, sourceScope: turn,
-                           provider: "openai", priceVersionID: quote?.priceVersionID)
+                           provider: quote?.provider ?? "openai", priceVersionID: quote?.priceVersionID)
         return exists ? (0, 1) : (1, 0)
     }
 

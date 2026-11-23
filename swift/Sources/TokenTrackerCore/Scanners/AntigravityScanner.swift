@@ -10,7 +10,8 @@
 //  - 只扫 transcript.jsonl，不扫 transcript_full.jsonl（防止重复计数且体积更小）。
 //  - input_tokens 已扣除 cache_read_tokens，四列与 TokenTracker 互斥口径直接对齐。
 //  - 以 <conversation-id>|step_<step_index> 为幂等键，支持字节游标增量扫描与单调更新。
-//  - 如用户启用可选的 hooks.json 工作区映射，则把会话自动归属到对应工作区目录。
+//  - 会话工作区取自 Antigravity 自带的 conversation_summaries.db（只读 conversation_id / workspace_uris），
+//    启用可选的 hooks.json 工作区映射时以 Hook 记录为准，据此把会话自动归属到对应工作区目录。
 //
 
 import Foundation
@@ -293,12 +294,12 @@ public struct AntigravityScanner: ScannerAdapter {
             || (cursor["parser_version"] as? NSNumber)?.intValue != Self.parserVersion
             || activityNeedsBackfill(cursor)
         var outcome = ScanOutcome()
-        let workspaceMap = AntigravityWorkspaceMap.load(path: workspaceMapPath)
-        let mapCursorKey = "workspace_map:\(workspaceMapPath)"
-        let workspaceMapStat = StatKey(path: workspaceMapPath)
-        let storedMapStat = StatKey(dict: cursor[mapCursorKey] as? [String: Any])
-        let workspaceMapChanged = workspaceMapStat != nil
-            && (effectiveFull || storedMapStat != workspaceMapStat)
+        // Hook 映射 + Antigravity 自带会话索引；内容摘要变化（含首次升级）时回填已扫会话的项目归属。
+        let workspaceMap = AntigravityWorkspaceMap.load(path: workspaceMapPath, roots: roots)
+        let digestCursorKey = "workspace_digest"
+        let workspaceDigest = AntigravityWorkspaceMap.digest(workspaceMap)
+        let workspaceMapChanged = !workspaceMap.isEmpty
+            && (effectiveFull || (cursor[digestCursorKey] as? String) != workspaceDigest)
 
         let transcripts = discoverTranscripts()
         var backfilledSessions: Set<String> = []
@@ -379,9 +380,7 @@ public struct AntigravityScanner: ScannerAdapter {
             for (sessionID, workspace) in workspaceMap where !backfilledSessions.contains(sessionID) {
                 try backfillWorkspace(workspace, sessionID: sessionID, store: store)
             }
-            if let workspaceMapStat {
-                cursor[mapCursorKey] = workspaceMapStat.asDict
-            }
+            cursor[digestCursorKey] = workspaceDigest
         }
 
         cursor["parser_version"] = Self.parserVersion

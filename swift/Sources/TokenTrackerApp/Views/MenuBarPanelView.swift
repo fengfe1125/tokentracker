@@ -32,9 +32,9 @@ struct MenuBarPanelView: View {
 
     private var yi: Bool { state.prefs.unitYi }
 
-    /// 有官方数据（新鲜或过期）的账号；读不到额度的只计数。
+    /// 有官方数据（新鲜或过期）的账号；读不到额度的只计数。同一账号的多把 API Key 只显示一行。
     private var quotaCards: [SubscriptionCard] {
-        state.subscriptionCards.filter {
+        state.subscriptionGroups.map(\.primary).filter {
             ($0.snapshot.status == .current || $0.snapshot.status == .stale)
                 && !($0.snapshot.windows.isEmpty && $0.snapshot.balances.isEmpty)
         }

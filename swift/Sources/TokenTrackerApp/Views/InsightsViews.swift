@@ -2,35 +2,6 @@ import SwiftUI
 import Charts
 import TokenTrackerCore
 
-struct InsightsOverview: View {
-    @ObservedObject private var language = LanguageManager.shared
-    @ObservedObject var model: InsightsModel
-    let rescan: () -> Void
-    var body: some View {
-        VStack(alignment:.leading,spacing:10) {
-            HStack {
-                Label(L10n.text("数据与风险"),systemImage:"checkmark.shield").font(.headline)
-                Spacer()
-                Button(L10n.text("数据健康")) { model.showHealth(rescan:rescan) }
-            }
-            if let explanation=model.explanation {
-                Text(L10n.label(explanation.status)).font(.subheadline.bold())
-                Text(UIFormat.explanation(explanation)).font(.caption).foregroundStyle(.secondary)
-                DisclosureGroup(L10n.text("查看比较依据")) { ExplanationEvidence(explanation:explanation,inspect:model.inspectChange) }
-            }
-            ForEach(model.risks.filter{$0.level>0}) { risk in
-                Label(L10n.label(risk.title)+" · "+UIFormat.riskDetail(risk),systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-            }
-            DisclosureGroup(L10n.text("费用依据与统计覆盖")) {
-                ForEach(model.costSources) { row in HStack { Text(costSourceName(row.id));Spacer();Text(L10n.label(row.totals.costLabel)) }.font(.caption) }
-                Text(L10n.text("未计价 \(model.totals.unpriced.formatted(.number)) 条 · 时间未分配 \(model.totals.unallocatedTokens.formatted(.number)) Token")).font(.caption)
-            }
-            if model.risks.isEmpty { Text(L10n.text("尚未设置预算；官方配额风险依赖新鲜样本。")).font(.caption).foregroundStyle(.secondary) }
-            if let error=model.error { Text(error).font(.caption).foregroundStyle(.red) }
-        }.frame(maxWidth:.infinity,alignment:.leading).card()
-    }
-}
-
 struct BudgetSheet: View {
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject var model:InsightsModel

@@ -3,7 +3,9 @@
 //  TokenTrackerCore
 //
 //  Event-time price lookup over the shared local price catalog. Model names
-//  match only by provider plus an exact model ID or an explicit alias.
+//  match only by provider plus an exact model ID or an explicit alias; a
+//  relay-prefixed name (`workbuddy/deepseek-flash`) falls back to the exact
+//  name after its last `/`.
 //
 
 import Foundation
@@ -148,6 +150,10 @@ public struct PriceTable: Sendable {
 
     /// Looks up an exact event-time version. When the source did not record its
     /// provider, a unique exact model match is safe; ambiguous names are unpriced.
+    /// A relay-prefixed model (`codex/gpt-6.1-sol`) that has no exact match is
+    /// retried with the name after its last `/`. The recorded provider usually
+    /// names the client rather than the upstream model owner, so if it does not
+    /// match the stripped name the lookup falls back to a unique provider.
     public func quote(provider rawProvider: String? = nil, model: String,
                       input: Int64, output: Int64, cacheRead: Int64 = 0,
                       cacheWrite: Int64 = 0, eventAtMs: Int64 = 0,
@@ -156,14 +162,16 @@ public struct PriceTable: Sendable {
         guard !modelKey.isEmpty else { return nil }
         let normalizedProvider = rawProvider.map { Self.normalizeProvider($0) } ?? ""
         let provider = normalizedProvider.isEmpty ? nil : normalizedProvider
-        let matchingModels = versions.filter { version in
-            let names = [version.model] + version.aliases
-            return names.contains { Self.normalizeModel($0) == modelKey }
-                && (provider == nil || Self.normalizeProvider(version.provider) == provider)
+        var matchingModels = exactMatches(model: modelKey, provider: provider)
+        var relayPrefix: String?
+        if matchingModels.isEmpty, let (prefix, base) = Self.splitRelayPrefix(modelKey) {
+            matchingModels = exactMatches(model: base, provider: provider)
+            if matchingModels.isEmpty, provider != nil {
+                matchingModels = exactMatches(model: base, provider: nil)
+            }
+            if !matchingModels.isEmpty { relayPrefix = prefix }
         }
         guard !matchingModels.isEmpty else { return nil }
-        let providers = Set(matchingModels.map { Self.normalizeProvider($0.provider) })
-        guard provider != nil || providers.count == 1 else { return nil }
         let at = eventAtMs > 0 ? eventAtMs : Int64.max
         let candidates = matchingModels.filter { $0.effectiveAtMs <= at }
         guard let selected = candidates.max(by: { $0.effectiveAtMs < $1.effectiveAtMs }) else { return nil }
@@ -178,8 +186,33 @@ public struct PriceTable: Sendable {
         let rawCost = (inputCost + outputCost + cacheReadCost + cacheWriteCost) / 1_000_000
         // Match Python's round(..., 8), which uses half-even rounding.
         let cost = (rawCost * 1e8).rounded(.toNearestOrEven) / 1e8
+        var conditions = selected.conditions
+        if let relayPrefix {
+            conditions.append("Matched after removing relay prefix '\(relayPrefix)/'; the relay's own billing may differ from the official rate.")
+        }
         return PriceQuote(cost: cost, provider: Self.normalizeProvider(selected.provider),
-                          priceVersionID: selected.id, conditions: selected.conditions)
+                          priceVersionID: selected.id, conditions: conditions)
+    }
+
+    /// Exact model/alias matches. Without a provider the match must resolve to a
+    /// single provider; otherwise the name is ambiguous and returns no versions.
+    private func exactMatches(model modelKey: String, provider: String?) -> [PriceVersion] {
+        let matches = versions.filter { version in
+            let names = [version.model] + version.aliases
+            return names.contains { Self.normalizeModel($0) == modelKey }
+                && (provider == nil || Self.normalizeProvider(version.provider) == provider)
+        }
+        guard provider == nil else { return matches }
+        return Set(matches.map { Self.normalizeProvider($0.provider) }).count == 1 ? matches : []
+    }
+
+    /// Splits `relay/model` at the last `/`. Both parts must be non-empty.
+    static func splitRelayPrefix(_ modelKey: String) -> (prefix: String, base: String)? {
+        guard let slash = modelKey.lastIndex(of: "/") else { return nil }
+        let prefix = String(modelKey[..<slash])
+        let base = String(modelKey[modelKey.index(after: slash)...])
+        guard !prefix.isEmpty, !base.isEmpty else { return nil }
+        return (prefix, base)
     }
 
     /// Convenience for non-event UI calculations. Callers that persist an event

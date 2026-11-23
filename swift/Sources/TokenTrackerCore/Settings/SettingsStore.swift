@@ -11,6 +11,8 @@ import Foundation
 
 public struct SettingsStore {
     public static let terminalApps = ["auto", "terminal", "iterm", "wezterm", "ghostty"]
+    /// 概览页「配额」卡片位置：主图右侧 / 左侧 / 页面顶部 / 页面底部 / 隐藏。
+    public static let overviewQuotaPositions = ["right", "left", "top", "bottom", "hidden"]
 
     public nonisolated(unsafe) static let defaults: [String: Any] = [
         "menubar_provider": "claude",   // 状态栏标题追加显示的平台配额；"off" = 仅今日用量
@@ -22,6 +24,7 @@ public struct SettingsStore {
         "scan_interval": 60,            // 自动扫描/刷新节奏（秒）
         "price_sync_enabled": true,     // 每 24 小时自动同步官方公开 API 费率
         "update_beta": false,           // 接收测试版（GitHub 预发布）更新
+        "overview_quota_position": "right", // 概览页配额卡片位置
 
         // 公开统计上报。默认关闭不可协商 —— 这是个把数据发到公网的开关。
         "publish_enabled": false,       // 扫描结束后自动上报
@@ -97,6 +100,8 @@ public struct SettingsStore {
             return [90, 365, 730].contains((value as? NSNumber)?.intValue ?? 0)
         case "terminal_app":
             return (value as? String).map { terminalApps.contains($0) } ?? false
+        case "overview_quota_position":
+            return (value as? String).map { overviewQuotaPositions.contains($0) } ?? false
         case "scan_interval":
             return [30, 60, 300, 600].contains((value as? NSNumber)?.intValue ?? 0)
         case "menubar_ports":

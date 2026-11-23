@@ -92,6 +92,58 @@ final class PriceTableTests: XCTestCase {
                              output: 0, eventAtMs: 250, intervalStartMs: 150))
     }
 
+    func testRelayPrefixIsStrippedOnlyWhenExactNameHasNoMatch() {
+        let t = PriceTable(versions: [
+            version("xai", "grok-4.7", 3, id: "grok"),
+            version("openai", "gpt-6.1-sol", 2, id: "sol"),
+            version("deepseek", "deepseek-flash", 1, id: "ds"),
+            version("openai", "gateway/special", 9, id: "explicit"),
+        ])
+        // 记录的供应商与剥离后模型一致时直接命中。
+        let sol = t.quote(provider: "openai", model: "codex/gpt-6.1-sol", input: 1_000_000, output: 0)
+        XCTAssertEqual(sol?.priceVersionID, "sol")
+        XCTAssertEqual(sol?.cost, 2)
+        XCTAssertTrue(sol?.conditions.contains { $0.contains("'codex/'") } ?? false)
+        // Codex 记为 openai，但转发的是 xAI 模型：回退到唯一供应商。
+        let grok = t.quote(provider: "openai", model: "grok/grok-4.7", input: 1_000_000, output: 0)
+        XCTAssertEqual(grok?.provider, "xai")
+        XCTAssertEqual(grok?.cost, 3)
+        // 多层前缀取最后一个 / 之后的名字；无供应商时同样可用。
+        XCTAssertEqual(t.quote(model: "workbuddy/deepseek/deepseek-flash", input: 1_000_000,
+                               output: 0)?.priceVersionID, "ds")
+        // 目录里显式带 / 的名字优先精确匹配，且不附加转发说明。
+        let explicit = t.quote(provider: "openai", model: "gateway/special", input: 1_000_000, output: 0)
+        XCTAssertEqual(explicit?.priceVersionID, "explicit")
+        XCTAssertEqual(explicit?.conditions, [])
+        // 剥离后仍不做子串或后缀匹配。
+        XCTAssertNil(t.quote(model: "auto/grok-4.7@500k", input: 1_000_000, output: 0))
+        XCTAssertNil(t.quote(model: "group/auto-gpt-6-1-sol", input: 1_000_000, output: 0))
+        XCTAssertNil(t.quote(model: "relay/", input: 1_000_000, output: 0))
+        XCTAssertNil(t.quote(model: "/gpt-6.1-sol", input: 1_000_000, output: 0))
+    }
+
+    func testRelayPrefixWithAmbiguousBaseModelStaysUnpriced() {
+        let t = PriceTable(versions: [version("openai", "shared", 1),
+                                      version("moonshot", "shared", 2)])
+        XCTAssertNil(t.quote(provider: "xai", model: "relay/shared", input: 1_000_000, output: 0))
+        XCTAssertEqual(t.quote(provider: "moonshot", model: "relay/shared", input: 1_000_000,
+                               output: 0)?.cost, 2)
+    }
+
+    func testRepriceBackfillsRelayPrefixedEvents() throws {
+        let tmp = try TempDir()
+        let store = try tmp.store()
+        try store.putEvent(tool: "codex", srcKey: "k1", ts: 1_000, model: "grok/grok-4.7",
+                           input: 1_000_000, provider: "openai")
+        let prices = PriceTable(versions: [version("xai", "grok-4.7", 3, id: "grok")])
+        XCTAssertEqual(try store.reprice(prices), 1)
+        let row = try XCTUnwrap(store.conn.queryOne(
+            "SELECT cost,provider,price_version_id FROM usage_events WHERE src_key='k1'"))
+        XCTAssertEqual(row.double("cost"), 3)
+        XCTAssertEqual(row.string("provider"), "xai")
+        XCTAssertEqual(row.string("price_version_id"), "grok")
+    }
+
     func testHalfEvenRounding() {
         let t = PriceTable(versions: [version("openai", "m", 0.0005)])
         XCTAssertEqual(t.quote(provider: "openai", model: "m", input: 1, output: 0)?.cost, 0.0)

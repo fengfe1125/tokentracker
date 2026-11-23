@@ -33,7 +33,34 @@ struct AppearanceSettingsSection: View {
     var body: some View {
         menubarSection
         notchSection
+        overviewSection
         navigationDisclosure
+    }
+
+    // ------------------------------------------------------------ 概览 ----
+
+    private var quotaPosition: OverviewQuotaPosition {
+        OverviewQuotaPosition(rawValue: state.prefs.overviewQuotaPosition) ?? .right
+    }
+
+    private var overviewSection: some View {
+        SettingsSection(L10n.text("概览"),
+                        footer: L10n.text("也可在概览页配额卡片右上角直接切换。")) {
+            SettingsRow(L10n.text("配额卡片位置")) {
+                SettingsMenuPicker(title: quotaPosition.title) {
+                    Picker(L10n.text("配额卡片位置"), selection: Binding(
+                        get: { quotaPosition },
+                        set: { state.updateSetting(key: "overview_quota_position", value: $0.rawValue) }
+                    )) {
+                        ForEach(OverviewQuotaPosition.allCases) { position in
+                            Text(position.title).tag(position)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------- 状态栏 ----

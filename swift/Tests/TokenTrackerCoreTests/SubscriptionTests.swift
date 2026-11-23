@@ -632,6 +632,36 @@ final class SubscriptionTests: XCTestCase {
         XCTAssertNil(SubscriptionService.menuBarCard([other], provider: .claude), "不取其他账号替代")
     }
 
+    func testDisplayGroupsMergeKeysOfSameBalanceAccountOnly() {
+        func balance(_ total: Decimal, granted: Decimal = 0, currency: String = "CNY") -> SubscriptionSnapshot {
+            SubscriptionSnapshot(status: .current, balances: [
+                SubscriptionBalance(currency: currency, total: total, granted: granted, toppedUp: total - granted)])
+        }
+        let a = SubscriptionCard(account: account(.deepseek, "key-aaaaaaaaaaaa"), snapshot: balance(15.33))
+        let rich = SubscriptionCard(account: account(.deepseek, "key-bbbbbbbbbbbb"), snapshot: balance(168.10))
+        let b = SubscriptionCard(account: account(.deepseek, "key-cccccccccccc"), snapshot: balance(15.33))
+        var staleC = balance(15.33); staleC.status = .stale
+        let c = SubscriptionCard(account: account(.deepseek, "key-dddddddddddd"), snapshot: staleC)
+        let zero1 = SubscriptionCard(account: account(.deepseek, "key-zero-111111"), snapshot: balance(0))
+        let zero2 = SubscriptionCard(account: account(.deepseek, "key-zero-222222"), snapshot: balance(0))
+        let failed = SubscriptionCard(account: account(.deepseek, "key-failed-1111"), snapshot: .init(status: .failed))
+        let otherProvider = SubscriptionCard(account: account(.minimax, "key-eeeeeeeeeeee"), snapshot: balance(15.33))
+        let differentGrant = SubscriptionCard(account: account(.deepseek, "key-ffffffffffff"),
+                                              snapshot: balance(15.33, granted: 1))
+        let oauth = SubscriptionCard(account: account(.kimi, "oauth-1", kind: .oauth), snapshot: balance(15.33))
+        let oauth2 = SubscriptionCard(account: account(.kimi, "oauth-2", kind: .oauth), snapshot: balance(15.33))
+
+        let groups = SubscriptionCardGroup.group([a, rich, b, c, zero1, zero2, failed, otherProvider,
+                                                  differentGrant, oauth, oauth2])
+        XCTAssertEqual(groups.map { $0.cards.map(\.id) }, [
+            [a.id, b.id, c.id], [rich.id], [zero1.id], [zero2.id], [failed.id], [otherProvider.id],
+            [differentGrant.id], [oauth.id], [oauth2.id],
+        ])
+        XCTAssertTrue(groups[0].isMerged)
+        XCTAssertTrue(groups[0].contains(c.id))
+        XCTAssertEqual(groups[0].id, a.id)
+    }
+
     func testCardOrderIsStable() {
         let cards = [
             SubscriptionCard(account: account(.deepseek, "x"), snapshot: .init(status: .current)),

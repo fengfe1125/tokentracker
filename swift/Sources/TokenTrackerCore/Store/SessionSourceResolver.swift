@@ -111,7 +111,7 @@ public enum SessionSourceResolver {
                 }
             }
             if tools.contains("antigravity"), let mapPath = roots?.antigravityWorkspaceMap {
-                index.antigravityWorkspaces = AntigravityWorkspaceMap.load(path: mapPath)
+                index.antigravityWorkspaces = AntigravityWorkspaceMap.load(path: mapPath, roots: roots?.antigravityRoots ?? [])
             }
             return index
         }

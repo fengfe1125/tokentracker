@@ -17,11 +17,14 @@ struct AccountsView: View {
     @State private var removing: SubscriptionCard?
 
     private var cards: [SubscriptionCard] { state.subscriptionCards }
-    private var selected: SubscriptionCard? {
-        cards.first { $0.id == state.accountFocus } ?? cards.first
+    /// 同一账号的多把 API Key（余额完全相同）合并为一行。
+    private var groups: [SubscriptionCardGroup] { state.subscriptionGroups }
+    private var selected: SubscriptionCardGroup? {
+        let groups = groups
+        return state.accountFocus.flatMap { focus in groups.first { $0.contains(focus) } } ?? groups.first
     }
     private var needAttention: Int {
-        cards.filter { AccountStatus.needsAttention($0.snapshot.status) }.count
+        groups.filter { AccountStatus.needsAttention($0.primary.snapshot.status) }.count
     }
     private var showsCodex: Bool { state.detectInfo["codex"]?.installed == true }
 
@@ -75,8 +78,8 @@ struct AccountsView: View {
     private var actionBar: some View {
         HStack(spacing: 8) {
             Text(needAttention > 0
-                 ? L10n.text("\(cards.count) 个账号 · \(needAttention) 个需要留意")
-                 : L10n.text("\(cards.count) 个账号"))
+                 ? L10n.text("\(groups.count) 个账号 · \(needAttention) 个需要留意")
+                 : L10n.text("\(groups.count) 个账号"))
                 .font(.callout).foregroundStyle(.secondary)
             if let notice = state.subscriptionNotice {
                 Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -99,11 +102,11 @@ struct AccountsView: View {
 
     private var accountList: some View {
         VStack(spacing: 2) {
-            ForEach(cards) { card in
+            ForEach(groups) { group in
                 Button {
-                    state.accountFocus = card.id
+                    state.accountFocus = group.id
                 } label: {
-                    AccountListRow(card: card, selected: card.id == selected?.id)
+                    AccountListRow(group: group, selected: group.id == selected?.id)
                 }
                 .buttonStyle(.plain)
             }
@@ -117,11 +120,11 @@ struct AccountsView: View {
     @ViewBuilder
     private var detailColumn: some View {
         VStack(spacing: Metrics.gridSpacing) {
-            if let card = selected {
-                AccountDetail(state: state, card: card) { removing = card }
-                    .id(card.id)
+            if let group = selected {
+                AccountDetail(state: state, group: group) { removing = $0 }
+                    .id(group.id)
             }
-            if showsCodex && (selected?.account.provider == .codex || selected == nil) {
+            if showsCodex && (selected?.primary.account.provider == .codex || selected == nil) {
                 CodexAccountsCard(model: state.codex)
             }
         }
@@ -165,15 +168,16 @@ private struct ProviderMark: View {
 }
 
 private struct AccountListRow: View {
-    let card: SubscriptionCard
+    let group: SubscriptionCardGroup
     let selected: Bool
+    private var card: SubscriptionCard { group.primary }
 
     var body: some View {
         HStack(spacing: 10) {
             ProviderMark(provider: card.account.provider)
             VStack(alignment: .leading, spacing: 1) {
                 Text(card.account.provider.displayName).fontWeight(.semibold).lineLimit(1)
-                Text(SubscriptionText.account(card.account))
+                Text(SubscriptionText.account(group))
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
@@ -207,8 +211,10 @@ private struct AccountListRow: View {
 /// 右栏：选中账号的额度、信息与操作。
 private struct AccountDetail: View {
     @ObservedObject var state: AppState
-    let card: SubscriptionCard
-    let remove: () -> Void
+    let group: SubscriptionCardGroup
+    let remove: (SubscriptionCard) -> Void
+
+    private var card: SubscriptionCard { group.primary }
 
     private var supportsMenuBar: Bool { card.account.provider.menuBarID != nil }
     private var snapshot: SubscriptionSnapshot { card.snapshot }
@@ -225,6 +231,7 @@ private struct AccountDetail: View {
                     .sunkPanel(padding: 10, radius: 10)
             }
             AccountQuotaView(card: card)
+            if group.isMerged { keyList }
             info
             actions
         }
@@ -241,7 +248,7 @@ private struct AccountDetail: View {
                     Text(card.account.provider.displayName).font(.title3.weight(.semibold))
                     if !plan.isEmpty { Text(plan).font(.callout).foregroundStyle(.secondary) }
                 }
-                Text(SubscriptionText.account(card.account))
+                Text(SubscriptionText.account(group))
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                     .textSelection(.enabled)
@@ -251,9 +258,39 @@ private struct AccountDetail: View {
         }
     }
 
+    /// 合并展示的多把 Key：逐把显示来源并可单独移除。
+    private var keyList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.text("\(group.cards.count) 把 API Key 查询到的余额完全相同，视为同一账号合并显示"))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(group.cards.enumerated()), id: \.element.id) { index, member in
+                if index > 0 { Divider() }
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(SubscriptionText.account(member.account))
+                            .font(.callout.monospaced()).lineLimit(1)
+                        Text(SubscriptionText.sources(member.account.sources))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    if member.snapshot.status == .stale {
+                        StatusBadge(status: member.snapshot.status)
+                    }
+                    if !member.account.isAutoDiscovered {
+                        Button(L10n.text("移除"), role: .destructive) { remove(member) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sunkPanel()
+    }
+
     private var info: some View {
         Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-            let sources = SubscriptionText.sources(card.account.sources)
+            let sources = group.isMerged ? "" : SubscriptionText.sources(card.account.sources)
             if !sources.isEmpty {
                 GridRow {
                     Text(sources).fixedSize(horizontal: false, vertical: true).gridCellColumns(2)
@@ -295,8 +332,8 @@ private struct AccountDetail: View {
             Spacer(minLength: 8)
             if card.account.isAutoDiscovered {
                 Pill(text: L10n.text("自动读取本机登录"), tint: .secondary)
-            } else {
-                Button(L10n.text("移除"), role: .destructive, action: remove)
+            } else if !group.isMerged {
+                Button(L10n.text("移除"), role: .destructive) { remove(card) }
             }
         }
     }

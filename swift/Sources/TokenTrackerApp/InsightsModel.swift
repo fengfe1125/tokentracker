@@ -70,7 +70,7 @@ final class InsightsModel: NSObject, ObservableObject {
         let scope="\(query.projectID ?? "")|\(query.tool ?? "")|\(query.model ?? "")|\(query.start ?? 0)|\(query.timeZoneID)"
         if scope != analyticsScope {
             // 仅在切换具体项目时清空项目详情缓存；概览切换时间范围时保留旧的 explanation / costSources，
-            // 避免底部「数据与风险」卡片塌陷再弹回造成页面跳动。
+            // 避免依赖它们的视图塌陷再弹回造成页面跳动。
             if query.projectID != nil {
                 explanation=nil;daily=[];agents=[];sessions=[];breakdown=[]
             }

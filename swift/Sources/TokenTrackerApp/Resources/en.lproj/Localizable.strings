@@ -1075,3 +1075,14 @@
 "切回脉冲面板" = "Pulse View";
 "活跃 ≥ 3 小时自动切回小时柱图" = "Switches to hourly bars at 3+ active hours";
 "点击可看详情" = "Click for details";
+"{0} 把 API Key 查询到的余额完全相同，视为同一账号合并显示" = "{0} API keys report the exact same balance and are shown as one account";
+"{0} 等 {1} 把" = "{0} + {1} keys";
+"显示位置" = "Position";
+"配额卡片显示位置" = "Quota card position";
+"配额卡片位置" = "Quota card position";
+"主图右侧" = "Right of main chart";
+"主图左侧" = "Left of main chart";
+"页面顶部" = "Top of page";
+"页面底部" = "Bottom of page";
+"不显示" = "Hidden";
+"也可在概览页配额卡片右上角直接切换。" = "You can also switch it from the top-right corner of the Overview quota card.";

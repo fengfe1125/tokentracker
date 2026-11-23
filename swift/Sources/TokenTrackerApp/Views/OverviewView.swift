@@ -3,7 +3,7 @@
 //  TokenTrackerApp
 //
 //  概览：配额条（各账号最紧的窗口）→ 指标行（Tokens / 费用 / 记录数 / 缓存命中率）→ Token 构成条 →
-//  使用趋势 → Agent 与模型分布 → 用量热力图 → 数据与风险。
+//  使用趋势 → 用量热力图 → Token 构成 / Agent / 模型分布。数据健康入口在顶栏扫描状态。
 //  时间范围与扫描在窗口工具栏。数据对齐 UsageStore.stats/daily。
 //
 
@@ -33,9 +33,22 @@ struct OverviewView: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                AdaptiveSplitLayout(minLeadingWidth: 480, trailingWidth: 300, spacing: Metrics.gridSpacing) {
+                switch quotaPosition {
+                case .left:
+                    AdaptiveLeadingFixedLayout(leadingWidth: 300, minTrailingWidth: 480, spacing: Metrics.gridSpacing) {
+                        quotaCard(wide: false)
+                        heroCard
+                    }
+                case .top:
+                    quotaCard(wide: true)
                     heroCard
-                    quotaCard
+                case .right:
+                    AdaptiveSplitLayout(minLeadingWidth: 480, trailingWidth: 300, spacing: Metrics.gridSpacing) {
+                        heroCard
+                        quotaCard(wide: false)
+                    }
+                case .bottom, .hidden:
+                    heroCard
                 }
                 UsageHeatmapView(model: heatmap, yi: yi)
                 AdaptiveEqualColumnsLayout(minColumnWidth: 250, spacing: Metrics.gridSpacing) {
@@ -43,7 +56,7 @@ struct OverviewView: View {
                     agentCard
                     modelCard
                 }
-                InsightsOverview(model: state.insights, rescan: { state.requestScan() })
+                if quotaPosition == .bottom { quotaCard(wide: true) }
             }
             .padding(.horizontal, Metrics.pagePadding)
             .padding(.bottom, Metrics.pagePadding)
@@ -96,11 +109,15 @@ struct OverviewView: View {
 
     // -------------------------------------------------------- 配额条 ----
 
-    /// 有官方数据的账号；配额不随时间范围和 Agent 筛选变化。
-    private var quotaCards: [SubscriptionCard] {
-        state.subscriptionCards.filter {
-            ($0.snapshot.status == .current || $0.snapshot.status == .stale)
-                && !($0.snapshot.windows.isEmpty && $0.snapshot.balances.isEmpty)
+    private var quotaPosition: OverviewQuotaPosition {
+        OverviewQuotaPosition(rawValue: state.prefs.overviewQuotaPosition) ?? .right
+    }
+
+    /// 有官方数据的账号；配额不随时间范围和 Agent 筛选变化。同一账号的多把 API Key 合并为一行。
+    private var quotaGroups: [SubscriptionCardGroup] {
+        state.subscriptionGroups.filter {
+            ($0.primary.snapshot.status == .current || $0.primary.snapshot.status == .stale)
+                && !($0.primary.snapshot.windows.isEmpty && $0.primary.snapshot.balances.isEmpty)
         }
     }
 
@@ -113,50 +130,99 @@ struct OverviewView: View {
         }.count
     }
 
-    /// 右侧配额列表：每个账号一行，点一行去账号页看这个账号。
-    private var quotaCard: some View {
-        let cards = quotaCards
+    /// 配额列表：每个账号一行，点一行去账号页看这个账号。
+    /// 侧栏位置（左 / 右）纵向排列；页面顶部 / 底部时按宽度自适应多列。
+    private func quotaCard(wide: Bool) -> some View {
+        let groups = quotaGroups
+        let limit = wide ? 12 : 8
+        let shown = Array(groups.prefix(limit))
         return VStack(alignment: .leading, spacing: 4) {
             CardHeader(title: L10n.text("配额")) {
-                Button { state.selection = .accounts } label: {
-                    HStack(spacing: 3) {
-                        Text(L10n.text("账号"))
-                        Image(systemName: "chevron.right").font(.caption2)
+                HStack(spacing: 10) {
+                    Button { state.selection = .accounts } label: {
+                        HStack(spacing: 3) {
+                            Text(L10n.text("账号"))
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .font(.caption)
                     }
-                    .font(.caption)
+                    .buttonStyle(.link)
+                    quotaPositionMenu
                 }
-                .buttonStyle(.link)
             }
             .padding(.bottom, 4)
-            if cards.isEmpty && unreadableAccounts == 0 {
+            if groups.isEmpty && unreadableAccounts == 0 {
                 Text(L10n.text("登录或添加 API Key 后，这里会显示官方配额与余额。"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(cards.prefix(6)) { card in
-                Button {
-                    state.accountFocus = card.id
-                    state.selection = .accounts
-                } label: {
-                    QuotaRow(card: card)
-                        .padding(.vertical, 5)
-                        .padding(.horizontal, 6)
-                        .hoverHighlight()
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            if wide {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: Metrics.gridSpacing)],
+                          alignment: .leading, spacing: 4) {
+                    ForEach(shown) { quotaButton($0) }
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, -6)
+            } else {
+                ForEach(shown) { quotaButton($0) }
             }
-            if unreadableAccounts > 0 {
-                Button { state.selection = .accounts } label: {
-                    Pill(text: L10n.text("\(unreadableAccounts) 个账号未能读取额度"), tint: .orange)
+            if groups.count > shown.count || unreadableAccounts > 0 {
+                HStack(spacing: 8) {
+                    if groups.count > shown.count {
+                        Button { state.selection = .accounts } label: {
+                            Pill(text: L10n.text("还有 \(groups.count - shown.count) 个账号"), tint: .secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if unreadableAccounts > 0 {
+                        Button { state.selection = .accounts } label: {
+                            Pill(text: L10n.text("\(unreadableAccounts) 个账号未能读取额度"), tint: .orange)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
                 .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
+    }
+
+    private func quotaButton(_ group: SubscriptionCardGroup) -> some View {
+        Button {
+            state.accountFocus = group.id
+            state.selection = .accounts
+        } label: {
+            QuotaRow(group: group)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 6)
+                .hoverHighlight()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -6)
+    }
+
+    /// 卡片右上角：直接改配额卡片的位置（同一设置也在「设置 › 外观与状态栏」）。
+    private var quotaPositionMenu: some View {
+        Menu {
+            Picker(L10n.text("显示位置"), selection: Binding(
+                get: { quotaPosition },
+                set: { state.updateSetting(key: "overview_quota_position", value: $0.rawValue) }
+            )) {
+                ForEach(OverviewQuotaPosition.allCases) { position in
+                    Label(position.title, systemImage: position.symbol).tag(position)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "rectangle.3.group")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(L10n.text("配额卡片显示位置"))
+        .accessibilityLabel(L10n.text("配额卡片显示位置"))
     }
 
     // -------------------------------------------------------- 首屏大数字 ----
@@ -429,9 +495,36 @@ struct OverviewView: View {
     }
 }
 
+/// 概览页「配额」卡片的位置（settings.json `overview_quota_position`）。
+enum OverviewQuotaPosition: String, CaseIterable, Identifiable {
+    case right, left, top, bottom, hidden
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .right: L10n.text("主图右侧")
+        case .left: L10n.text("主图左侧")
+        case .top: L10n.text("页面顶部")
+        case .bottom: L10n.text("页面底部")
+        case .hidden: L10n.text("不显示")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .right: "rectangle.righthalf.filled"
+        case .left: "rectangle.lefthalf.filled"
+        case .top: "rectangle.tophalf.filled"
+        case .bottom: "rectangle.bottomhalf.filled"
+        case .hidden: "eye.slash"
+        }
+    }
+}
+
 /// 概览配额列表里的一个账号：名称 + 最紧窗口的占用条与重置时间，或余额。
 private struct QuotaRow: View {
-    let card: SubscriptionCard
+    let group: SubscriptionCardGroup
+    private var card: SubscriptionCard { group.primary }
 
     private var tightest: SubscriptionWindow? {
         card.snapshot.windows.filter { $0.usedPercent != nil }
@@ -464,12 +557,12 @@ private struct QuotaRow: View {
                      + (tightest.resetsAt.map { " · " + L10n.text("\(L10n.Template(verbatim: SubscriptionText.time($0, relative: true))) 重置") } ?? ""))
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             } else {
-                Text(SubscriptionText.account(card.account))
+                Text(SubscriptionText.account(group))
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }
         .contentShape(Rectangle())
-        .help(SubscriptionText.account(card.account))
+        .help(SubscriptionText.account(group))
         .accessibilityElement(children: .combine)
     }
 }

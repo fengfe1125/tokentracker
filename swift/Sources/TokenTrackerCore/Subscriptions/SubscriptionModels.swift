@@ -286,6 +286,61 @@ public struct SubscriptionCard: Identifiable, Equatable, Sendable {
     }
 }
 
+/// 界面展示分组：同一账号的多把 API Key 合并为一行。
+///
+/// 有可靠账号 ID 的卡已由 `SubscriptionService.mergeByAccount` 合并。DeepSeek 等只返回余额、不返回账号 ID 的
+/// 供应商，同一账号下的多把 Key 查到的余额完全一致；这里仅对「同供应商 + API Key + 无账号 ID + 有官方余额 +
+/// 余额各字段完全相同且非零」的卡合并展示。存储与查询仍按 Key 独立，移除时逐把处理。
+public struct SubscriptionCardGroup: Identifiable, Equatable, Sendable {
+    /// 至少一张，保持输入顺序。
+    public let cards: [SubscriptionCard]
+    /// 代表卡：优先最新官方结果，其次排序靠前者。
+    public var primary: SubscriptionCard { cards.first { $0.snapshot.status == .current } ?? cards[0] }
+    /// 稳定 id：取排序第一张，不随各 Key 刷新状态变化。
+    public var id: String { cards[0].id }
+    public var isMerged: Bool { cards.count > 1 }
+
+    public init(cards: [SubscriptionCard]) {
+        precondition(!cards.isEmpty)
+        self.cards = cards
+    }
+
+    public func contains(_ cardID: String) -> Bool { cards.contains { $0.id == cardID } }
+
+    /// 保持输入顺序：合并组出现在其第一张卡的位置。
+    public static func group(_ cards: [SubscriptionCard]) -> [SubscriptionCardGroup] {
+        var buckets: [[SubscriptionCard]] = []
+        var indexByKey: [String: Int] = [:]
+        for card in cards {
+            guard let key = mergeKey(card) else {
+                buckets.append([card])
+                continue
+            }
+            if let index = indexByKey[key] {
+                buckets[index].append(card)
+            } else {
+                indexByKey[key] = buckets.count
+                buckets.append([card])
+            }
+        }
+        return buckets.map(SubscriptionCardGroup.init(cards:))
+    }
+
+    static func mergeKey(_ card: SubscriptionCard) -> String? {
+        let snapshot = card.snapshot
+        guard card.account.credential?.kind == .apiKey,
+              card.account.accountKey == nil, snapshot.accountKey == nil,
+              snapshot.status == .current || snapshot.status == .stale,
+              snapshot.windows.isEmpty, !snapshot.balances.isEmpty,
+              snapshot.balances.allSatisfy({ $0.total != nil }),
+              snapshot.balances.contains(where: { ($0.total ?? 0) != 0 }) else { return nil }
+        func text(_ value: Decimal?) -> String { value.map { "\($0)" } ?? "-" }
+        let balances = snapshot.balances.sorted { $0.currency < $1.currency }
+            .map { [$0.currency, text($0.total), text($0.granted), text($0.toppedUp)].joined(separator: ",") }
+        return card.account.provider.rawValue + "|" + balances.joined(separator: ";")
+    }
+}
+
 // ---------------------------------------------------------------- 工具 ----
 
 func subscriptionHash(_ text: String) -> String {

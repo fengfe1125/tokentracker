@@ -37,6 +37,8 @@ final class AppState: ObservableObject {
     @Published var today: MenuBarToday?
     @Published var quotaEntries: [MenuBarQuotaEntry] = []
     @Published var subscriptionCards: [SubscriptionCard] = []
+    /// 展示分组：同一账号（余额完全相同、无账号 ID）的多把 API Key 合并为一行。
+    var subscriptionGroups: [SubscriptionCardGroup] { SubscriptionCardGroup.group(subscriptionCards) }
     @Published private(set) var subscriptionRefreshing = false
     /// 进行中的订阅登录（设置页弹窗）
     @Published private(set) var subscriptionLogin: SubscriptionLoginState?

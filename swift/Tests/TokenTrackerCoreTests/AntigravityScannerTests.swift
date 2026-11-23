@@ -285,6 +285,54 @@ final class AntigravityScannerTests: XCTestCase {
         XCTAssertEqual(projects[0].totals.tokens, 1100)
     }
 
+    func testConversationSummariesProvideWorkspaceWithoutHook() throws {
+        let tmp = try TempDir()
+        let repo = tmp.path("中文 工作区")
+        let other = tmp.path("HookWins")
+        for dir in [repo, other] {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+        for id in ["conv-sum", "conv-hook"] {
+            writeJSONL(transcriptPath(tmp, "ag/brain", id), [
+                ["step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE",
+                 "created_at": "2026-08-25T01:00:05Z", "model": "gemini-4-neon-xhigh",
+                 "input_tokens": 800, "cache_read_tokens": 200, "output_tokens": 100],
+            ])
+        }
+        let store = try tmp.store()
+        let mapPath = tmp.path("map.json")
+        let scanner = AntigravityScanner(roots: [tmp.path("ag", "brain")], workspaceMapPath: mapPath)
+        _ = try scanner.scan(store, .default, full: false)
+        XCTAssertEqual(try store.projectSummaries(UsageQuery()).map(\.id), ["unassigned"])
+
+        // Antigravity 自带会话索引出现后：未改 transcript 也回填；Hook 记录优先于索引
+        let db = try SQLiteConnection(path: tmp.path("ag", "conversation_summaries.db"))
+        try db.execute("""
+        CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text,
+          preview text, workspace_uris text NOT NULL)
+        """)
+        let encoded = URL(fileURLWithPath: repo).absoluteString
+        try db.execute("INSERT INTO conversation_summaries VALUES (?,?,?,?)",
+                       ["conv-sum", "SECRET-TITLE", "SECRET-PREVIEW", "[\"\(encoded)\",\"file:///ignored\"]"])
+        try db.execute("INSERT INTO conversation_summaries VALUES (?,?,?,?)",
+                       ["conv-hook", "", "", "[\"\(encoded)\"]"])
+        XCTAssertTrue(AntigravityWorkspaceMap.record(conversationID: "conv-hook", workspace: other, path: mapPath))
+
+        let rescan = try scanner.scan(store, .default, full: false)
+        XCTAssertEqual(rescan.files, 0)
+        let resolved = { (path: String) in URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path }
+        let projects = try store.conn.query(
+            "SELECT session_id, project FROM usage_events WHERE tool='antigravity' ORDER BY session_id")
+        XCTAssertEqual(projects.map { $0.string("project") }, [resolved(other), resolved(repo)])
+        XCTAssertEqual(Set(try store.projectSummaries(UsageQuery()).map(\.name)), ["中文 工作区", "HookWins"])
+
+        // 摘要未变时不重复回填
+        _ = try store.conn.execute("UPDATE usage_events SET project='' WHERE session_id='conv-sum'")
+        _ = try scanner.scan(store, .default, full: false)
+        XCTAssertEqual(try store.conn.query(
+            "SELECT project FROM usage_events WHERE session_id='conv-sum'").first?.string("project"), "")
+    }
+
     func testHookPayloadValidationAndCwdFallback() throws {
         let tmp = try TempDir()
         let mapPath = tmp.path("map.json")

@@ -92,7 +92,7 @@ public struct ClaudeScanner: ScannerAdapter {
                                        model: model, input: inp, output: outp,
                                        cacheRead: cr, cacheWrite: cw, cost: quote?.cost,
                                        replace: old != nil,
-                                       provider: "anthropic", priceVersionID: quote?.priceVersionID)
+                                       provider: quote?.provider ?? "anthropic", priceVersionID: quote?.priceVersionID)
         return old == nil
             ? (added, 0, activityAdded, activityUpdated, title.isEmpty ? nil : title)
             : (0, 1, activityAdded, activityUpdated, title.isEmpty ? nil : title)
