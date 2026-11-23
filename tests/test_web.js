@@ -40,6 +40,35 @@ function clone(o) { return JSON.parse(JSON.stringify(o)); }
         const r = validatePayload(withAg, NOW);
         ok('接受 antigravity agent id 与 longest_burst.agent', r.ok, r.error);
     }
+    for (const ver of ['0.6.0-beta.1', '0.6.0-beta.5', '1.0.0-rc.1', '2.1.0-alpha.10']) {
+        const p = clone(golden);
+        p.app_version = ver;
+        const r = validatePayload(p, NOW);
+        ok('接受预发布版本号 ' + ver, r.ok, r.error);
+    }
+    {
+        const coreSwift = fs.readFileSync(
+            path.join(ROOT, 'swift/Sources/TokenTrackerCore/TokenTrackerCore.swift'), 'utf8');
+        const m = coreSwift.match(/public static let version = "([^"]+)"/);
+        ok('从 TokenTrackerCore.swift 提取当前版本号', Boolean(m));
+        if (m) {
+            const p = clone(golden);
+            p.app_version = m[1];
+            const r = validatePayload(p, NOW);
+            ok('接受当前 TokenTrackerCore.version (' + m[1] + ')', r.ok, r.error);
+        }
+        const adapterSwift = fs.readFileSync(
+            path.join(ROOT, 'swift/Sources/TokenTrackerCore/Scanners/ScannerAdapter.swift'), 'utf8');
+        const regMatch = adapterSwift.match(/public static let all = \[([^\]]+)\]/);
+        ok('从 ScannerAdapter.swift 提取 ScannerRegistry.all', Boolean(regMatch));
+        if (regMatch) {
+            const swiftAgents = [...regMatch[1].matchAll(/"([^"]+)"/g)].map(x => x[1]);
+            ok('ScannerRegistry.all 与 validate.js AGENT_IDS 完全一致',
+               swiftAgents.length === AGENT_IDS.length &&
+               swiftAgents.every(id => AGENT_IDS.includes(id)),
+               'swift=' + swiftAgents.join(',') + ' js=' + AGENT_IDS.join(','));
+        }
+    }
 
     // ---- 2. 必须拒绝的变异 ----
     const mutations = [
@@ -58,6 +87,9 @@ function clone(o) { return JSON.parse(JSON.stringify(o)); }
         ['重复 agent id', p => { p.agents[1].id = p.agents[0].id; }],
         ['agents 超过 16 项', p => { while (p.agents.length <= 17) p.agents.push(clone(p.agents[0])); }],
         ['tz 含换行', p => { p.tz = 'Asia/Shanghai\nX-Injected: 1'; }],
+        ['非法预发布版本号（尾随连字符）', p => { p.app_version = '0.6.0-'; }],
+        ['非法预发布版本号（空段）', p => { p.app_version = '0.6.0-beta..1'; }],
+        ['非法版本号（带 v 前缀）', p => { p.app_version = 'v0.6.0-beta.5'; }],
         ['非法日期 2026-13-45', p => { p.peak.day = '2026-13-45'; }],
         ['generated_at 偏离一年', p => { p.generated_at = '2027-09-09T08:00:00Z'; }],
         ['basis 不是 exact', p => { p.longest_burst.basis = 'observed'; }],

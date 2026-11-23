@@ -96,19 +96,21 @@ public enum PublicStatsBuilder {
 
         // ---- 总量：含未定位历史，与 App 的「全部」口径一致 ----
         let (toolRows, total, _) = try store.stats(rangeKey: "all")
-        let undatedTokens = max(total.tokens - datedTokens, 0)
+        let totalTokens = max(total.tokens, datedTokens)
+        let undatedTokens = totalTokens - datedTokens
         let undatedCost = max(total.cost - datedCost, 0)
 
-        // ---- 最长连续段：只认 exact，见 burstEvents() 的注释 ----
-        let burst = PublicMetrics.longestBurst(try store.burstEvents())
+        // ---- 最长连续段：只认 exact 与已知工具，见 burstEvents() 的注释 ----
+        let known = Set(ScannerRegistry.all)
+        let burst = PublicMetrics.longestBurst(
+            try store.burstEvents().filter { known.contains($0.tool) })
         let snapshotOnly = try store.eventQualityByTool()
-            .filter { $0.events > 0 && $0.exact == 0 }
+            .filter { $0.events > 0 && $0.exact == 0 && known.contains($0.tool) }
             .map(\.tool)
             .sorted()
 
         let streaks = PublicMetrics.streaks(activeDays: Set(activeDays),
                                             today: today, timeZone: timeZone)
-        let known = Set(ScannerRegistry.all)
         let agents = toolRows
             .filter { $0.tokens > 0 && known.contains($0.tool) }
             .sorted { $0.tokens > $1.tokens }
@@ -129,7 +131,7 @@ public enum PublicStatsBuilder {
             tzOffsetMinutes: timeZone.secondsFromGMT(for: Date(timeIntervalSince1970: TimeInterval(now) / 1000)) / 60,
             appVersion: appVersion,
             range: .init(from: window.first ?? today, to: window.last ?? today, days: window.count),
-            totals: .init(tokens: total.tokens,
+            totals: .init(tokens: totalTokens,
                           tokensDated: datedTokens,
                           tokensUndated: undatedTokens,
                           costUsd: round(total.cost, 2),
@@ -148,8 +150,8 @@ public enum PublicStatsBuilder {
                       basis: "exact")
             },
             agents: agents,
-            caveats: .init(undatedShare: total.tokens > 0
-                            ? round(Double(undatedTokens) / Double(total.tokens), 4) : 0,
+            caveats: .init(undatedShare: totalTokens > 0
+                            ? round(Double(undatedTokens) / Double(totalTokens), 4) : 0,
                            snapshotOnlyAgents: snapshotOnly))
     }
 }

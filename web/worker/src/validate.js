@@ -16,7 +16,7 @@ var AGENT_IDS = ['claude', 'codex', 'opencode', 'dsh', 'hermes', 'kimi', 'pi', '
 var RE_DAY = /^\d{4}-\d{2}-\d{2}$/;
 var RE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 var RE_TZ = /^([A-Za-z_]+\/[A-Za-z_+\-]+(\/[A-Za-z_+\-]+)?|UTC)$/;
-var RE_VER = /^[0-9]+\.[0-9]+(\.[0-9]+)?$/;
+var RE_VER = /^[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$/;
 
 // 形状表：key -> 类型标记。缺一不可，多一个即拒。
 var SHAPE = {
@@ -64,7 +64,7 @@ function checkOne(kind, v, path) {
     case 'tz':    return typeof v === 'string' && v.length <= 64 && RE_TZ.test(v)
                       ? null : path + ' 时区名非法';
     case 'tzoff': return Number.isSafeInteger(v) && v >= -840 && v <= 840 ? null : path + ' 越界';
-    case 'ver':   return typeof v === 'string' && v.length <= 16 && RE_VER.test(v)
+    case 'ver':   return typeof v === 'string' && v.length <= 32 && RE_VER.test(v)
                       ? null : path + ' 版本号非法';
     case 'agent': return typeof v === 'string' && AGENT_IDS.indexOf(v) >= 0
                       ? null : path + ' 不是已知的 CLI 工具';

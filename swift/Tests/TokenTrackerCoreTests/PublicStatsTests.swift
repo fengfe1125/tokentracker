@@ -299,4 +299,26 @@ final class PublicStatsTests: XCTestCase {
             XCTAssertFalse(encoded.contains(secret), "公开载荷泄漏敏感字段：\(secret)")
         }
     }
+
+    func testUnknownToolsFilteredFromAgentsBurstAndSnapshotOnly() throws {
+        let dir = try TempDir()
+        let store = try dir.store()
+        try store.putEvent(tool: "unknown-exact", srcKey: "u1", sessionID: "su",
+                           ts: daysAgo(1), input: 500)
+        try store.putEvent(tool: "unknown-exact", srcKey: "u2", sessionID: "su",
+                           ts: daysAgo(1) + 25 * 60_000, input: 500)
+        try store.putEvent(tool: "unknown-snap", srcKey: "s1", sessionID: "ss",
+                           ts: daysAgo(1), input: 500,
+                           timeQuality: "observed", intervalStart: daysAgo(1) - 600_000)
+        try store.putEvent(tool: "claude", srcKey: "c1", sessionID: "sc",
+                           ts: daysAgo(1), input: 100)
+        try store.putEvent(tool: "claude", srcKey: "c2", sessionID: "sc",
+                           ts: daysAgo(1) + 10 * 60_000, input: 100)
+        try store.conn.commit()
+
+        let payload = try PublicStatsBuilder.build(store: store, nowMs: noonToday())
+        XCTAssertEqual(payload.agents.map(\.id), ["claude"])
+        XCTAssertEqual(payload.longestBurst?.agent, "claude")
+        XCTAssertFalse(payload.caveats.snapshotOnlyAgents.contains("unknown-snap"))
+    }
 }
