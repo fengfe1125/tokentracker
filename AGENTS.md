@@ -2,10 +2,10 @@
 
 本机 AI 编程工具用量追踪器：扫描 Claude Code、Codex、Kimi Code、DSH / OpenCode Go、Pi、opencode、Hermes Agent、Antigravity 八类工具的本地日志，统计 Token、成本、订阅配额与 Agent 活动，并提供本机监听端口管理、刘海配额 HUD 与任务提醒/审批，以 macOS 原生状态栏 App（macOS 14+，Swift 6）和 CLI 呈现。Python 实现已移除，`swift/` 是唯一实现。
 
-## 程序现状（v0.6.0）
+## 程序现状（v0.6.1）
 
 - **版本与协议常量**（`TokenTrackerCore.swift` / `UsageStore.swift`）：
-  - 应用版本：`0.6.0`；数据库：`UsageStore.schemaVersion = 8`（`~/.tokentracker/usage.db`）；活动解析器：`v3`；冻结差分基线：`differentialFormatVersion = 4`；公开统计载荷：`publicStatsFormatVersion = 1`。
+  - 应用版本：`0.6.1`；数据库：`UsageStore.schemaVersion = 8`（`~/.tokentracker/usage.db`）；活动解析器：`v3`；冻结差分基线：`differentialFormatVersion = 4`；公开统计载荷：`publicStatsFormatVersion = 1`。
 - **支持的数据源（8 个，`Scanners/`）**：
   - 按事件明细扫描：`ClaudeScanner`（`~/.claude/projects/**/*.jsonl`）、`CodexScanner`（`~/.codex/sessions/**/*.jsonl` 与 `logs_*.sqlite`，同 turn 优先 JSONL）、`KimiScanner`（`~/.kimi-code/server/events/session_*.jsonl`）、`DshScanner`（`~/.dsh/sessions/**/session.jsonl.zstd`，需系统 `zstd`）、`PiScanner`（`~/.pi/agent/sessions/**/*.jsonl`）、`AntigravityScanner`（`~/.gemini/antigravity*/brain/*/.system_generated/logs/transcript.jsonl`，工作区由 `AntigravityWorkspaceMap` 合并 Antigravity 自带 `conversation_summaries.db`（只读 `conversation_id` / `workspace_uris`）与可选 Hook 映射，Hook 优先）。
   - 按累计快照差量扫描：`OpencodeScanner`（`~/.local/share/opencode/opencode.db`）、`HermesScanner`（`~/.hermes/**/*.db`）。
