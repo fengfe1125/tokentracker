@@ -39,10 +39,11 @@ final class UsageChartsTests: XCTestCase {
     }
 
     func testProjectDonutRollsOtherOnlyWhenMoreThanOneTailItem() {
-        let six = (1...6).map { idx in
-            ProjectSummary(id: "p\(idx)", name: "Proj \(idx)",
-                           totals: makeTotals(input: Int64(700 - idx * 100), cost: Double(7 - idx)),
-                           lastActivity: nil)
+        let six: [ProjectSummary] = (1...6).map { (idx: Int) -> ProjectSummary in
+            let input: Int64 = Int64(700 - idx * 100)
+            let cost: Double = Double(7 - idx)
+            return ProjectSummary(id: "p\(idx)", name: "Proj \(idx)",
+                                  totals: makeTotals(input: input, cost: cost), lastActivity: nil)
         }
         let sixData = UsageChartBuilder.projectDonut(projects: six, metric: .tokens, maxSlices: 5)
         XCTAssertEqual(sixData.slices.count, 6)
