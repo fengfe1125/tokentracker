@@ -83,7 +83,7 @@ final class NotchHUDTests: XCTestCase {
         XCTAssertEqual(agQuota.name, "Antigravity")
         XCTAssertEqual(agQuota.glyph, "A")
         XCTAssertEqual(agQuota.window?.label, "Gemini")
-        XCTAssertEqual(agQuota.summary, "剩余 8%")
+        XCTAssertEqual(agQuota.summary, L10n.text("剩余") + " 8%")
     }
 
     func testOutsideClicksUseTheEventAndIgnoreQueuedClicksBeforeOpening() {
