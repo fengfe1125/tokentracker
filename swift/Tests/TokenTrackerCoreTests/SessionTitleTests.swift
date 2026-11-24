@@ -13,6 +13,8 @@ final class SessionTitleTests: XCTestCase {
             "<bash-input>cd /tmp</bash-input>",
             "<task-notification> finished",
             "# Files mentioned by the user: ## a.png: /tmp/a.png",
+            // T3 Code 经 ACP 启动 Antigravity 时先发送一条交互模式说明
+            "<USER_REQUEST>\n<t3_code_instructions>\n## T3 Code interaction mode: Default\n</runtime_info>\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnow\n</ADDITIONAL_METADATA>",
             "   ",
         ] {
             XCTAssertNil(sessionTitle(fromUserText: noise), noise)

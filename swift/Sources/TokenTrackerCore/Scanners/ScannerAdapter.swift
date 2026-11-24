@@ -61,10 +61,26 @@ public struct ScanRoots: Sendable {
                 "\(home)/.gemini/antigravity/brain",
                 "\(home)/.gemini/antigravity-cli/brain",
                 "\(home)/.gemini/antigravity-ide/brain",
-            ]
+            ] + Self.t3CodeAntigravityRoots(
+                userData: environment["T3CODE_USERDATA_DIR"] ?? "\(home)/.t3/userdata")
         }
         antigravityWorkspaceMap = environment["TOKENTRACKER_ANTIGRAVITY_WORKSPACES"]
             ?? AntigravityWorkspaceMap.defaultPath
+    }
+
+    /// T3 Code 以 ACP 模式启动 Antigravity 时为每个安装实例使用独立数据目录：
+    /// `<userdata>/providers/antigravity/<实例哈希>/antigravity-acp/brain`，
+    /// 布局与 `~/.gemini/antigravity*/brain` 相同（含同级 `conversation_summaries.db`）。
+    static func t3CodeAntigravityRoots(userData: String) -> [String] {
+        let base = (expandPath(userData) as NSString).appendingPathComponent("providers/antigravity")
+        guard let instances = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
+        return instances.sorted().compactMap { instance in
+            guard !instance.hasPrefix(".") else { return nil }
+            let brain = (base as NSString).appendingPathComponent("\(instance)/antigravity-acp/brain")
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: brain, isDirectory: &isDir) && isDir.boolValue
+                ? brain : nil
+        }
     }
 }
 

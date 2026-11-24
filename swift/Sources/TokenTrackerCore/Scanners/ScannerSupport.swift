@@ -241,7 +241,8 @@ private let contextPrefixes = ["# AGENTS.md", "<INSTRUCTIONS>", "<environment_co
                                "The following is the Codex agent history",
                                "<turn_aborted>", "<external_codex_apps", "[Request interrupted by user",
                                "[Workflow harness", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
-                               "<SYSTEM_MESSAGE>", "<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>"]
+                               "<SYSTEM_MESSAGE>", "<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>",
+                               "<t3_code_instructions"]
 
 /// Codex 历史转储的行："[3] tool exec call: …"、"[176] assistant: …"
 private let historyDumpLine = try! NSRegularExpression(pattern: #"^\[\d+\] (tool|assistant|user)\b"#)

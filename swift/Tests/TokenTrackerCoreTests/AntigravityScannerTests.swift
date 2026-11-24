@@ -396,4 +396,32 @@ final class AntigravityScannerTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: tmp.path("config"))
             .contains { $0.contains("tokentracker-backup") })
     }
+
+    func testDefaultRootsIncludeT3CodeAntigravityACPInstances() throws {
+        let tmp = try TempDir()
+        let userData = tmp.path("t3-userdata")
+        let brain = tmp.path("t3-userdata", "providers", "antigravity", "abc123", "antigravity-acp", "brain")
+        writeJSONL(transcriptPath(tmp, "t3-userdata/providers/antigravity/abc123/antigravity-acp/brain", "conv-t3"), [
+            ["step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+             "created_at": "2026-11-24T08:30:00Z", "model": "gemini-4-neon",
+             "input_tokens": 1200, "cache_read_tokens": 300, "output_tokens": 45],
+        ])
+        // 没有 brain 目录的实例不应出现在根目录列表里
+        try FileManager.default.createDirectory(
+            atPath: tmp.path("t3-userdata", "providers", "antigravity", "empty", "config"),
+            withIntermediateDirectories: true)
+
+        let roots = ScanRoots(environment: ["T3CODE_USERDATA_DIR": userData])
+        XCTAssertTrue(roots.antigravityRoots.contains(brain))
+        XCTAssertFalse(roots.antigravityRoots.contains { $0.contains("/empty/") })
+        // 显式指定 Antigravity 目录时不混入 T3 Code 目录
+        XCTAssertFalse(ScanRoots(environment: ["T3CODE_USERDATA_DIR": userData,
+                                               "ANTIGRAVITY_HOME": tmp.path("ag")])
+            .antigravityRoots.contains(brain))
+
+        let store = try tmp.store()
+        let scanner = AntigravityScanner(roots: [brain], workspaceMapPath: tmp.path("map.json"))
+        let outcome = try scanner.scan(store, .default, full: false)
+        XCTAssertEqual(outcome.added, 1)
+    }
 }

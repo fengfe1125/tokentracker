@@ -6,6 +6,7 @@
 //    ~/.gemini/antigravity/brain/<conversation-id>/.system_generated/logs/transcript.jsonl
 //    ~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript.jsonl
 //    ~/.gemini/antigravity-ide/brain/<conversation-id>/.system_generated/logs/transcript.jsonl
+//    ~/.t3/userdata/providers/antigravity/<实例>/antigravity-acp/brain/<conversation-id>/...（T3 Code 以 ACP 模式启动的隔离目录）
 //
 //  - 只扫 transcript.jsonl，不扫 transcript_full.jsonl（防止重复计数且体积更小）。
 //  - input_tokens 已扣除 cache_read_tokens，四列与 TokenTracker 互斥口径直接对齐。
@@ -18,7 +19,7 @@ import Foundation
 
 public struct AntigravityScanner: ScannerAdapter {
     public let name = "antigravity"
-    public let detail = "~/.gemini/antigravity*/brain/*/.system_generated/logs/transcript.jsonl"
+    public let detail = "~/.gemini/antigravity*/brain/*/.system_generated/logs/transcript.jsonl, ~/.t3/userdata/providers/antigravity/*/antigravity-acp/brain"
     public let roots: [String]
     public let workspaceMapPath: String
     static let parserVersion = 1
