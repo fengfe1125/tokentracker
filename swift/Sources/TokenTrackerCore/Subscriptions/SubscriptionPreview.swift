@@ -40,8 +40,10 @@ extension SubscriptionCard {
             SubscriptionCard(account: account(.antigravity, "preview.ag@example.com", "Antigravity", "钥匙串",
                                               active: true, autoDiscovered: true),
                              snapshot: SubscriptionSnapshot(status: .current, windows: [
-                                window("gemini", nil, 62, name: "Gemini", hours: 3),
-                                window("claude-gpt", nil, 28, name: "Claude / GPT", hours: 2)],
+                                window("gemini-5h", 18_000, 54, name: "Gemini", hours: 3.5),
+                                window("gemini-weekly", 604_800, 15, name: "Gemini", hours: 166),
+                                SubscriptionWindow(id: "3p-5h", name: "Claude / GPT", duration: 18_000, usedPercent: 0),
+                                SubscriptionWindow(id: "3p-weekly", name: "Claude / GPT", duration: 604_800, usedPercent: 0)],
                                 plan: "Google AI Pro", sampledAt: sampled, privateAPI: true)),
             SubscriptionCard(account: account(.kimi, "", "Kimi Code", "~/.kimi-code", active: true),
                              snapshot: SubscriptionSnapshot(status: .stale, windows: [

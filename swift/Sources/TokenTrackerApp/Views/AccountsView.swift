@@ -346,7 +346,7 @@ private struct AccountDetail: View {
     }
 }
 
-/// 一个账号的额度区：每个窗口一个圆环块，余额账号显示金额。
+/// 一个账号的额度区：每个窗口一个圆环块（同名多周期按组归类），余额账号显示金额。
 struct AccountQuotaView: View {
     let card: SubscriptionCard
     private var snapshot: SubscriptionSnapshot { card.snapshot }
@@ -363,12 +363,20 @@ struct AccountQuotaView: View {
                 }
             }
         } else if hasData && !snapshot.windows.isEmpty {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                ForEach(snapshot.windows) { window in
-                    QuotaRingBlock(percent: window.usedPercent,
-                                   title: SubscriptionText.window(window),
-                                   detail: SubscriptionText.windowDetail(window),
-                                   dimmed: snapshot.status == .stale)
+            if let groups = SubscriptionWindowGroup.groups(from: snapshot.windows) {
+                AdaptiveTileGridLayout(maxColumns: 2, fallbackColumns: 1, minColumnWidth: 270, spacing: 10) {
+                    ForEach(groups) { group in
+                        QuotaGroupBlock(group: group, dimmed: snapshot.status == .stale)
+                    }
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                    ForEach(snapshot.windows) { window in
+                        QuotaRingBlock(percent: window.usedPercent,
+                                       title: SubscriptionText.window(window),
+                                       detail: SubscriptionText.windowDetail(window),
+                                       dimmed: snapshot.status == .stale)
+                    }
                 }
             }
         } else {
@@ -380,12 +388,54 @@ struct AccountQuotaView: View {
 
 }
 
+/// 同组多周期额度块：组名标题 + 并排圆环（如 Gemini / Claude 的 5 小时与周额度）。
+private struct QuotaGroupBlock: View {
+    let group: SubscriptionWindowGroup
+    let dimmed: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(group.title)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+            AdaptiveTileGridLayout(maxColumns: 2, fallbackColumns: 1, minColumnWidth: 112, spacing: 10) {
+                ForEach(group.windows) { window in
+                    QuotaRingContent(percent: window.usedPercent,
+                                     title: SubscriptionText.windowInGroup(window),
+                                     detail: SubscriptionText.windowDetail(window),
+                                     dimmed: dimmed,
+                                     ringSize: 72,
+                                     titleFont: .subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sunkPanel(padding: 14)
+    }
+}
+
 /// 一个额度窗口：大圆环 + 名称 + 重置时间。
 private struct QuotaRingBlock: View {
     let percent: Double?
     let title: String
     let detail: String
     let dimmed: Bool
+
+    var body: some View {
+        QuotaRingContent(percent: percent, title: title, detail: detail, dimmed: dimmed)
+            .frame(maxWidth: .infinity)
+            .sunkPanel(padding: 14)
+    }
+}
+
+private struct QuotaRingContent: View {
+    let percent: Double?
+    let title: String
+    let detail: String
+    let dimmed: Bool
+    var ringSize: CGFloat = 76
+    var titleFont: Font = .callout.weight(.semibold)
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -405,16 +455,14 @@ private struct QuotaRingBlock: View {
                     .monospacedDigit()
                     .foregroundStyle(percent == nil ? .secondary : .primary)
             }
-            .frame(width: 76, height: 76)
+            .frame(width: ringSize, height: ringSize)
             .padding(.bottom, 4)
-            Text(title).font(.callout.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(title).font(titleFont).lineLimit(1).minimumScaleFactor(0.8)
             Text(detail.isEmpty ? " " : detail)
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
-        .frame(maxWidth: .infinity)
-        .sunkPanel(padding: 14)
         .onAppear {
             if reduceMotion { shown = true } else { withAnimation(.easeOut(duration: 0.7)) { shown = true } }
         }

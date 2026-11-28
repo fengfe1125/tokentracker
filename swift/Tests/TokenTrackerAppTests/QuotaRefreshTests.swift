@@ -65,4 +65,46 @@ final class QuotaRefreshTests: XCTestCase {
         try QuotaRefresh.record(store: store, cards: cards)
         XCTAssertEqual(try store.conn.scalarInt("SELECT COUNT(*) FROM quota_samples WHERE identity LIKE 'codex:%'"), 2)
     }
+
+    func testAntigravityFourWindowsGroupingLabelsLocalizationAndHistory() throws {
+        let agWindows = [
+            SubscriptionWindow(id: "gemini-5h", name: "Gemini", duration: 18_000, usedPercent: 54),
+            SubscriptionWindow(id: "gemini-weekly", name: "Gemini", duration: 604_800, usedPercent: 15),
+            SubscriptionWindow(id: "3p-5h", name: "Claude / GPT", duration: 18_000, usedPercent: 0),
+            SubscriptionWindow(id: "3p-weekly", name: "Claude / GPT", duration: 604_800, usedPercent: 0),
+        ]
+        let agCard = card(.antigravity, token: "ag-4", active: true, status: .current, windows: agWindows)
+        let entries = QuotaRefresh.menuEntries([agCard])
+        let ag = try XCTUnwrap(entries.first { $0.id == "antigravity" })
+        XCTAssertEqual(ag.windows.map(\.label), [
+            "Gemini · 5 小时", "Gemini · 周 (7天)",
+            "Claude / GPT · 5 小时", "Claude / GPT · 周 (7天)",
+        ])
+        XCTAssertEqual(ag.windows.map(\.pct), [54, 15, 0, 0])
+
+        let previous = L10n.language
+        defer { L10n.setLanguage(previous) }
+        L10n.setLanguage("en")
+        let localized = UIFormat.quotaEntry(ag)
+        XCTAssertEqual(localized.windows.map(\.label), [
+            "Gemini · 5 hours", "Gemini · Week (7 days)",
+            "Claude / GPT · 5 hours", "Claude / GPT · Week (7 days)",
+        ])
+        L10n.setLanguage("zh-Hans")
+        let groups = try XCTUnwrap(SubscriptionWindowGroup.groups(from: agWindows))
+        XCTAssertEqual(groups.map(\.title), ["Gemini", "Claude / GPT"])
+        XCTAssertEqual(groups[0].windows.map(SubscriptionText.windowInGroup), ["5 小时", "周 (7天)"])
+        XCTAssertEqual(groups[1].windows.map(SubscriptionText.windowInGroup), ["5 小时", "周 (7天)"])
+        XCTAssertNil(SubscriptionWindowGroup.groups(from: windows), "Codex 无同名多周期窗口时保持平铺")
+        XCTAssertNil(SubscriptionWindowGroup.groups(from: [
+            SubscriptionWindow(id: "gemini", name: "Gemini", usedPercent: 54),
+            SubscriptionWindow(id: "claude-gpt", name: "Claude / GPT", usedPercent: 0),
+        ]), "旧版 2 项池快照保持平铺")
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try UsageStore(path: dir.appendingPathComponent("usage.db").path)
+        try QuotaRefresh.record(store: store, cards: [agCard])
+        XCTAssertEqual(try store.conn.scalarInt("SELECT COUNT(*) FROM quota_samples WHERE identity LIKE 'antigravity:%'"), 4)
+    }
 }

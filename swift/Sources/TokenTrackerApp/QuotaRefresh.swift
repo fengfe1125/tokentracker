@@ -27,14 +27,19 @@ enum QuotaRefresh {
 
     /// Built-in labels stay compatible with UIFormat.quotaLabel localization.
     static func windowLabel(_ window: SubscriptionWindow) -> String {
-        if let name = window.name { return name }
-        switch window.duration {
-        case 18_000: return "5 小时"
-        case 604_800: return "周 (7天)"
-        case 2_592_000, 2_678_400: return "月度"
-        case let seconds?: return seconds % 86_400 == 0 ? "\(seconds / 86_400)d" : "\(seconds / 3600)h"
-        case nil: return window.id
+        let span: String? = window.duration.map { seconds in
+            switch seconds {
+            case 18_000: return "5 小时"
+            case 86_400: return "每日"
+            case 604_800: return "周 (7天)"
+            case 2_592_000, 2_678_400: return "月度"
+            default: return seconds % 86_400 == 0 ? "\(seconds / 86_400)d" : "\(max(1, seconds / 3600))h"
+            }
         }
+        if let name = window.name {
+            return span.map { "\(name) · \($0)" } ?? name
+        }
+        return span ?? window.id
     }
 
     /// Records fresh official percentages of active accounts. A long scan owns the

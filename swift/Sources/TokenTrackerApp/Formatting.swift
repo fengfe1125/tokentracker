@@ -167,9 +167,14 @@ enum UIFormat {
 
 extension UIFormat {
     static func quotaLabel(_ label: String) -> String {
-        // Only built-in labels are localized; custom quota labels stay unchanged.
-        let builtins: Set<String> = ["5 小时", "周 (7天)", "月度", "5h", "7d"]
-        return builtins.contains(label) ? L10n.label(label) : label
+        // Only built-in labels (including segments inside compound "Group · Span" labels) are localized;
+        // custom quota labels stay unchanged.
+        let builtins: Set<String> = ["5 小时", "每日", "周 (7天)", "月度", "5h", "7d"]
+        if builtins.contains(label) { return L10n.label(label) }
+        guard label.contains(" · ") else { return label }
+        return label.components(separatedBy: " · ")
+            .map { builtins.contains($0) ? L10n.label($0) : $0 }
+            .joined(separator: " · ")
     }
     static func quotaEntry(_ entry: MenuBarQuotaEntry) -> MenuBarQuotaEntry {
         var entry = entry

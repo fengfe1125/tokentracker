@@ -852,6 +852,124 @@ final class SubscriptionTests: XCTestCase {
             .blocked)
     }
 
+    func testAntigravityQuotaSummaryFourWindowsAndEdgeCases() {
+        let fake = FakeTransport { request in
+            XCTAssertEqual(request.url.host, "daily-cloudcode-pa.googleapis.com")
+            switch request.url.path {
+            case "/v1internal:loadCodeAssist":
+                return SubscriptionResponse(status: 200, json: [
+                    "cloudaicompanionProject": "managed-proj-fixture",
+                    "paidTier": ["name": "Google AI Pro"],
+                ])
+            case "/v1internal:retrieveUserQuotaSummary":
+                return SubscriptionResponse(status: 200, json: [
+                    "groups": [
+                        [
+                            "displayName": "Gemini Models",
+                            "buckets": [
+                                [
+                                    "bucketId": "gemini-weekly",
+                                    "displayName": "Weekly Limit Remaining",
+                                    "window": "weekly",
+                                    "resetTime": "2026-12-05T10:56:46Z",
+                                    "remainingFraction": 0.85,
+                                ],
+                                [
+                                    "bucketId": "gemini-5h",
+                                    "displayName": "Five Hour Limit Remaining",
+                                    "window": "5h",
+                                    "resetTime": "2026-11-28T15:56:46Z",
+                                    "remainingFraction": 0.46,
+                                ],
+                            ],
+                        ],
+                        [
+                            "displayName": "Claude and GPT models",
+                            "buckets": [
+                                [
+                                    "bucketId": "3p-weekly",
+                                    "displayName": "Weekly Limit Remaining",
+                                    "window": "weekly",
+                                    "remainingFraction": 1,
+                                ],
+                                [
+                                    "bucketId": "3p-5h",
+                                    "displayName": "Five Hour Limit Remaining",
+                                    "window": "5h",
+                                    "remainingFraction": 1,
+                                ],
+                            ],
+                        ],
+                    ],
+                ])
+            default:
+                XCTFail("retrieveUserQuotaSummary 成功后不应继续请求回退接口: \(request.url.path)")
+                return SubscriptionResponse(status: 404)
+            }
+        }
+
+        let snapshot = SubscriptionAdapters.fetch(account(.antigravity, "ya29.tok", kind: .oauth, active: true), ctx(fake))
+        XCTAssertEqual(snapshot.status, .current)
+        XCTAssertEqual(snapshot.plan, "Google AI Pro")
+        XCTAssertTrue(snapshot.privateAPI)
+        XCTAssertEqual(fake.count, 2)
+        XCTAssertEqual(snapshot.windows.map(\.id), ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"])
+        XCTAssertEqual(snapshot.windows.map(\.name), ["Gemini", "Gemini", "Claude / GPT", "Claude / GPT"])
+        XCTAssertEqual(snapshot.windows.map(\.duration), [18_000, 604_800, 18_000, 604_800])
+        XCTAssertEqual(snapshot.windows[0].usedPercent ?? -1, 54, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[1].usedPercent ?? -1, 15, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[2].usedPercent ?? -1, 0, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[3].usedPercent ?? -1, 0, accuracy: 0.01)
+        XCTAssertNotNil(snapshot.windows[0].resetsAt)
+        XCTAssertNotNil(snapshot.windows[1].resetsAt)
+        XCTAssertNil(snapshot.windows[2].resetsAt)
+        XCTAssertNil(snapshot.windows[3].resetsAt)
+
+        // 边界：跳过 disabled 桶、耗尽省略 remainingFraction 时按 100% 已用计、支持顶层 buckets 与未知分组名。
+        let edgeWindows = SubscriptionAdapters.antigravityQuotaSummaryWindows([
+            "groups": [
+                [
+                    "displayName": "Image Models",
+                    "buckets": [
+                        ["bucketId": "img-daily", "window": "daily", "resetTime": "2026-12-01T00:00:00Z"],
+                        ["bucketId": "img-off", "window": "weekly", "remainingFraction": 0.5, "disabled": true],
+                        ["bucketId": "img-missing", "window": "5h"],
+                    ],
+                ],
+            ],
+        ])
+        XCTAssertEqual(edgeWindows.map(\.id), ["img-daily"])
+        XCTAssertEqual(edgeWindows[0].name, "Image Models")
+        XCTAssertEqual(edgeWindows[0].duration, 86_400)
+        XCTAssertEqual(edgeWindows[0].usedPercent ?? -1, 100, accuracy: 0.01)
+
+        let flatWindows = SubscriptionAdapters.antigravityQuotaSummaryWindows([
+            "buckets": [
+                ["bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.8],
+                ["bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.4],
+                ["bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.9],
+            ],
+        ])
+        XCTAssertEqual(flatWindows.map(\.id), ["gemini-5h", "gemini-weekly", "3p-5h"])
+        XCTAssertEqual(flatWindows.map(\.name), ["Gemini", "Gemini", "Claude / GPT"])
+
+        // 429 / 401 短路返回，不再继续触发回退接口。
+        let rateLimited = FakeTransport { request in
+            if request.url.path == "/v1internal:loadCodeAssist" {
+                return SubscriptionResponse(status: 200, json: ["cloudaicompanionProject": "p"])
+            }
+            if request.url.path == "/v1internal:retrieveUserQuotaSummary" {
+                return SubscriptionResponse(status: 429, retryAfter: 60)
+            }
+            XCTFail("限流后不应回退请求: \(request.url.path)")
+            return SubscriptionResponse(status: 200)
+        }
+        let limited = SubscriptionAdapters.fetch(account(.antigravity, "ya29.tok", kind: .oauth), ctx(rateLimited))
+        XCTAssertEqual(limited.status, .failed)
+        XCTAssertEqual(limited.problem, .rateLimited)
+        XCTAssertEqual(rateLimited.count, 2)
+    }
+
     func testAutoDiscoveredAntigravityRecoversWhenLocalTokenRefreshes() throws {
         let clock = Clock()
         final class TokenBox: @unchecked Sendable {

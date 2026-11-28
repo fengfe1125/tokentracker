@@ -383,7 +383,13 @@ case "subscriptions":
     for card in service.cards() {
         let account = card.account
         let windows = card.snapshot.windows.map { w in
-            (w.name ?? w.duration.map { "\($0 / 3600)h" } ?? w.id) + "=" + (w.usedPercent.map { String(format: "%.0f%%", $0) } ?? "—")
+            let span = w.duration.map { seconds in
+                seconds % 86_400 == 0 ? "\(seconds / 86_400)d" : "\(max(1, seconds / 3600))h"
+            }
+            let label: String
+            if let name = w.name, let span { label = "\(name)(\(span))" }
+            else { label = w.name ?? span ?? w.id }
+            return label + "=" + (w.usedPercent.map { String(format: "%.0f%%", $0) } ?? "—")
         }
         let balances = card.snapshot.balances.map { b in
             b.currency + " " + (b.total.map { "\($0)" } ?? "—")

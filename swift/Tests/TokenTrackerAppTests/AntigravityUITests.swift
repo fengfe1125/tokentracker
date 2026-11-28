@@ -123,10 +123,28 @@ final class AntigravityUITests: XCTestCase {
         state.selection = .settings
         try snap("ag_settings_appearance")
 
-        // 3. 账号页（Antigravity 自动读取本机登录、多池配额圆环、菜单栏绑定）
+        // 3. 账号页（Antigravity 自动读取本机登录、4 项分组配额圆环、菜单栏绑定）
         state.selection = .accounts
         state.accountFocus = state.subscriptionCards.first { $0.account.provider == .antigravity }?.id
         try snap("ag_accounts")
+
+        // 3b. 菜单栏速览面板（Antigravity 4 项分组配额条）
+        let popoverHosting = NSHostingController(
+            rootView: MenuBarPanelView(state: state, actions: MenuBarPanelActions()).appLanguage())
+        popoverHosting.sizingOptions = [.preferredContentSize]
+        let popoverWin = NSWindow(contentViewController: popoverHosting)
+        popoverWin.appearance = NSAppearance(named: .aqua)
+        popoverWin.setContentSize(popoverHosting.view.fittingSize)
+        popoverWin.orderFrontRegardless()
+        pump(0.25)
+        if let v = popoverWin.contentView,
+           let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            v.cacheDisplay(in: v.bounds, to: rep)
+            if let data = rep.representation(using: .png, properties: [:]) {
+                try data.write(to: URL(fileURLWithPath: "\(outDir)/ag_menubar_panel.png"))
+            }
+        }
+        popoverWin.orderOut(nil)
 
         // 4. 用量 -> 会话记录（显示 Antigravity 会话、项目目录、未计价、记录文件按钮）
         state.selection = .usage

@@ -130,25 +130,37 @@ enum SubscriptionText {
             : L10n.text("来源：\(L10n.Template(verbatim: main))")
     }
 
-    static func window(_ window: SubscriptionWindow) -> String {
-        let names = ["premium_interactions": "高级请求", "chat": "对话", "completions": "代码补全",
-                     "credits": "积分", "on-demand": "按需额度"]
-        let span: String? = window.duration.map { seconds in
-            switch seconds {
-            case 18_000: return L10n.text("5 小时")
-            case 86_400: return L10n.text("每日")
-            case 604_800: return L10n.text("周 (7天)")
-            case 2_592_000, 2_678_400: return L10n.text("月度")
-            default:
-                return seconds % 86_400 == 0 ? L10n.text("\(seconds / 86_400) 天")
-                    : L10n.text("\(max(1, seconds / 3600)) 小时")
-            }
+    static func windowDuration(_ seconds: Int) -> String {
+        switch seconds {
+        case 18_000: return L10n.text("5 小时")
+        case 86_400: return L10n.text("每日")
+        case 604_800: return L10n.text("周 (7天)")
+        case 2_592_000, 2_678_400: return L10n.text("月度")
+        default:
+            return seconds % 86_400 == 0 ? L10n.text("\(seconds / 86_400) 天")
+                : L10n.text("\(max(1, seconds / 3600)) 小时")
         }
+    }
+
+    static func window(_ window: SubscriptionWindow) -> String {
+        let span = window.duration.map(windowDuration)
         if let name = window.name {
-            let label = names[name].map(L10n.label) ?? name
+            let label = localizedWindowName(name)
             return span.map { label + " · " + $0 } ?? label
         }
         return span ?? L10n.text("额度")
+    }
+
+    static func localizedWindowName(_ name: String) -> String {
+        let names = ["premium_interactions": "高级请求", "chat": "对话", "completions": "代码补全",
+                     "credits": "积分", "on-demand": "按需额度"]
+        return names[name].map(L10n.label) ?? name
+    }
+
+    /// 分组展示时（组标题已显示模型/池名）仅展示时间窗口名。
+    static func windowInGroup(_ window: SubscriptionWindow) -> String {
+        if let duration = window.duration { return windowDuration(duration) }
+        return Self.window(window)
     }
 
     static func windowDetail(_ window: SubscriptionWindow) -> String {
@@ -182,5 +194,38 @@ enum SubscriptionText {
         }
         let template = Calendar.current.isDate(date, inSameDayAs: now) ? "HH:mm" : "MMMdHH:mm"
         return UIFormat.localizedDate(date, template: template, locale: L10n.locale)
+    }
+}
+
+/// 同名多周期窗口的分组（例如 Antigravity 的 Gemini 与 Claude / GPT 各含 5 小时和周额度）。
+struct SubscriptionWindowGroup: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let windows: [SubscriptionWindow]
+
+    /// 当至少有一个名称对应多个窗口时返回按组聚合的结果；否则返回 nil（保持平铺展示）。
+    static func groups(from windows: [SubscriptionWindow]) -> [Self]? {
+        var counts: [String: Int] = [:]
+        for window in windows {
+            if let name = window.name, !name.isEmpty {
+                counts[name, default: 0] += 1
+            }
+        }
+        guard counts.values.contains(where: { $0 >= 2 }) else { return nil }
+
+        var order: [String] = []
+        var grouped: [String: [SubscriptionWindow]] = [:]
+        for window in windows {
+            let key = (window.name?.isEmpty == false) ? window.name! : ""
+            if grouped[key] == nil { order.append(key) }
+            grouped[key, default: []].append(window)
+        }
+        return order.enumerated().map { index, key in
+            let title = key.isEmpty ? L10n.text("额度") : SubscriptionText.localizedWindowName(key)
+            return SubscriptionWindowGroup(
+                id: key.isEmpty ? "other-\(index)" : key,
+                title: title,
+                windows: grouped[key] ?? [])
+        }
     }
 }

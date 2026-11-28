@@ -245,7 +245,7 @@ struct MenuBarPanelView: View {
     }
 }
 
-/// 一个账号的配额摘要：名称 + 最紧的两个窗口（或余额）。
+/// 一个账号的配额摘要：名称 + 最紧的两个窗口（或按模型池分组的各周期窗口，或余额）。
 private struct QuotaSummaryRow: View {
     let card: SubscriptionCard
 
@@ -255,12 +255,34 @@ private struct QuotaSummaryRow: View {
             .sorted { ($0.usedPercent ?? 0) > ($1.usedPercent ?? 0) }
     }
 
+    private var groupedWindows: [SubscriptionWindowGroup]? {
+        let valid = card.snapshot.windows.filter { $0.usedPercent != nil }
+        return SubscriptionWindowGroup.groups(from: valid)
+    }
+
     private func color(_ percent: Double?) -> Color {
         switch MenuBarFmt.quotaUrgency(percent) {
         case "quota_crit": return .red
         case "quota_warn": return .orange
         default: return .green
         }
+    }
+
+    private func barRow(label: String, window: SubscriptionWindow, stale: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 74, alignment: .leading)
+            MeterBar(fraction: (window.usedPercent ?? 0) / 100,
+                     tint: color(window.usedPercent).opacity(stale ? 0.5 : 1), height: 4)
+            Text(window.usedPercent.map(SubscriptionText.percent) ?? "—")
+                .font(.caption.monospacedDigit().weight(.medium))
+                .foregroundStyle(color(window.usedPercent))
+                .frame(width: 36, alignment: .trailing)
+        }
+        .help(SubscriptionText.windowDetail(window))
     }
 
     var body: some View {
@@ -286,26 +308,33 @@ private struct QuotaSummaryRow: View {
                      + SubscriptionText.money(balance.total, currency: balance.currency))
                     .font(.caption.monospacedDigit())
             }
-            ForEach(windows.prefix(2)) { window in
-                HStack(spacing: 8) {
-                    Text(SubscriptionText.window(window))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(width: 74, alignment: .leading)
-                    MeterBar(fraction: (window.usedPercent ?? 0) / 100,
-                             tint: color(window.usedPercent).opacity(stale ? 0.5 : 1), height: 4)
-                    Text(window.usedPercent.map(SubscriptionText.percent) ?? "—")
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .foregroundStyle(color(window.usedPercent))
-                        .frame(width: 36, alignment: .trailing)
+            if let groups = groupedWindows {
+                ForEach(groups) { group in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(group.title)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        ForEach(group.windows) { window in
+                            barRow(label: SubscriptionText.windowInGroup(window), window: window, stale: stale)
+                        }
+                    }
+                    .padding(.top, group.id == groups.first?.id ? 0 : 2)
                 }
-                .help(SubscriptionText.windowDetail(window))
-            }
-            if let reset = windows.first?.resetsAt {
-                Text(L10n.text("\(L10n.Template(verbatim: SubscriptionText.time(reset, relative: true))) 重置"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if let tightest = windows.first, let reset = tightest.resetsAt {
+                    Text(SubscriptionText.window(tightest) + " · "
+                         + L10n.text("\(L10n.Template(verbatim: SubscriptionText.time(reset, relative: true))) 重置"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                ForEach(windows.prefix(2)) { window in
+                    barRow(label: SubscriptionText.window(window), window: window, stale: stale)
+                }
+                if let reset = windows.first?.resetsAt {
+                    Text(L10n.text("\(L10n.Template(verbatim: SubscriptionText.time(reset, relative: true))) 重置"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .accessibilityElement(children: .combine)

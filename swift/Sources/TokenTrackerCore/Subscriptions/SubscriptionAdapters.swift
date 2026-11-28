@@ -201,6 +201,20 @@ enum SubscriptionAdapters {
             ?? (load.json["currentTier"] as? [String: Any])?["name"] as? String ?? ""
         let queryBody = jsonBody(project.flatMap { $0.isEmpty ? nil : ["project": $0] } ?? [:])
 
+        let summary = send(.antigravity, SubscriptionRequest(
+            url: URL(string: base + "retrieveUserQuotaSummary")!,
+            method: "POST",
+            headers: headers,
+            body: queryBody), ctx)
+        if summary.status == 200 {
+            let windows = antigravityQuotaSummaryWindows(summary.json)
+            if !windows.isEmpty {
+                return current(windows, plan: plan)
+            }
+        } else if [401, 403, 429].contains(summary.status) || summary.failure != nil {
+            return failure(summary, ctx)
+        }
+
         let quota = send(.antigravity, SubscriptionRequest(
             url: URL(string: base + "retrieveUserQuota")!,
             method: "POST",
@@ -222,10 +236,173 @@ enum SubscriptionAdapters {
             headers: headers,
             body: queryBody), ctx)
         guard modelsResp.status == 200 else {
-            return quota.status == 200 ? .failure(.failed, .noWindows) : failure(modelsResp, ctx)
+            return (summary.status == 200 || quota.status == 200)
+                ? .failure(.failed, .noWindows) : failure(modelsResp, ctx)
         }
         let windows = antigravityModelWindows(models: modelsResp.json["models"] as? [String: Any] ?? [:])
         return current(windows, plan: plan)
+    }
+
+    static func antigravityQuotaSummaryWindows(_ data: [String: Any]) -> [SubscriptionWindow] {
+        struct ParsedBucket {
+            let order: Int
+            let id: String
+            let groupName: String
+            let bucketDisplayName: String
+            let duration: Int?
+            let usedPercent: Double
+            let resetsAt: Date?
+        }
+
+        func normalizeGroupName(_ raw: String, bucketID: String) -> String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let low = trimmed.lowercased()
+            if low == "gemini models" || low == "gemini" { return "Gemini" }
+            if low.contains("claude") && low.contains("gpt") { return "Claude / GPT" }
+            if !trimmed.isEmpty { return trimmed }
+            let idLow = bucketID.lowercased()
+            if idLow.hasPrefix("gemini") || idLow.hasPrefix("gemma") { return "Gemini" }
+            if idLow.hasPrefix("3p") || idLow.hasPrefix("claude") || idLow.hasPrefix("gpt") { return "Claude / GPT" }
+            return ""
+        }
+
+        func parseDuration(_ rawWindow: String?, bucketID: String, displayName: String) -> Int? {
+            func matchUnit(_ text: String) -> Int? {
+                let s = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if s.isEmpty { return nil }
+                switch s {
+                case "weekly", "week", "1w", "7d": return 604_800
+                case "daily", "day", "1d", "24h": return 86_400
+                case "monthly", "month", "30d", "1mo": return 2_592_000
+                default: break
+                }
+                if let regex = try? NSRegularExpression(pattern: #"^(\d+)\s*(h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|m|min|mins|minute|minutes)$"#),
+                   let match = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+                   let numRange = Range(match.range(at: 1), in: s),
+                   let unitRange = Range(match.range(at: 2), in: s),
+                   let amount = Int(s[numRange]), amount > 0 {
+                    let unit = String(s[unitRange])
+                    if unit.hasPrefix("h") { return amount * 3600 }
+                    if unit.hasPrefix("d") { return amount * 86_400 }
+                    if unit.hasPrefix("w") { return amount * 604_800 }
+                    if unit.hasPrefix("m") { return amount * 60 }
+                }
+                return nil
+            }
+            if let rawWindow, let seconds = matchUnit(rawWindow) { return seconds }
+            let idLow = bucketID.lowercased()
+            if idLow.hasSuffix("-5h") || idLow.hasSuffix("_5h") || idLow.contains("-5h-") { return 18_000 }
+            if idLow.contains("weekly") || idLow.hasSuffix("-7d") || idLow.hasSuffix("_7d") { return 604_800 }
+            if idLow.contains("daily") || idLow.hasSuffix("-1d") || idLow.hasSuffix("_1d") { return 86_400 }
+            if idLow.contains("monthly") || idLow.hasSuffix("-30d") { return 2_592_000 }
+            let nameLow = displayName.lowercased()
+            if nameLow.contains("five hour") || nameLow.contains("5-hour") || nameLow.contains("5 hour") || nameLow.contains("5h") {
+                return 18_000
+            }
+            if nameLow.contains("weekly") || nameLow.contains("7-day") || nameLow.contains("7 day") { return 604_800 }
+            if nameLow.contains("daily") || nameLow.contains("24-hour") { return 86_400 }
+            if nameLow.contains("monthly") { return 2_592_000 }
+            return nil
+        }
+
+        func parseBucket(_ bucket: [String: Any], groupDisplayName: String, order: Int) -> ParsedBucket? {
+            if (bucket["disabled"] as? Bool) == true { return nil }
+            let bucketID = (bucket["bucketId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = (bucket["displayName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let resetRaw = bucket["resetTime"] as? String ?? ""
+            let fraction: Double
+            if let value = subscriptionNumber(bucket["remainingFraction"]), value.isFinite {
+                fraction = max(0, min(1, value))
+            } else if bucket["remainingAmount"] != nil {
+                return nil
+            } else if !resetRaw.isEmpty || (bucket["isExhausted"] as? Bool) == true {
+                // Proto3 JSON 在配额耗尽（0%）时可能省略 remainingFraction，仅保留 resetTime。
+                fraction = 0
+            } else {
+                return nil
+            }
+            let groupName = normalizeGroupName(groupDisplayName, bucketID: bucketID)
+            let duration = parseDuration(bucket["window"] as? String, bucketID: bucketID, displayName: displayName)
+            let used = max(0, min(100, (1.0 - fraction) * 100.0))
+            return ParsedBucket(
+                order: order,
+                id: bucketID,
+                groupName: groupName,
+                bucketDisplayName: displayName,
+                duration: duration,
+                usedPercent: used,
+                resetsAt: subscriptionDate(bucket["resetTime"]))
+        }
+
+        func emitGroup(_ parsed: [ParsedBucket], usedIDs: inout [String: Int]) -> [SubscriptionWindow] {
+            let sorted = parsed.sorted { a, b in
+                switch (a.duration, b.duration) {
+                case let (da?, db?) where da != db: return da < db
+                case (.some, .none): return true
+                case (.none, .some): return false
+                default: return a.order < b.order
+                }
+            }
+            return sorted.map { item in
+                let rawID: String
+                if !item.id.isEmpty {
+                    rawID = item.id
+                } else {
+                    let slug = item.groupName.lowercased()
+                        .replacingOccurrences(of: " / ", with: "-")
+                        .replacingOccurrences(of: " ", with: "-")
+                    let span = item.duration.map { "\($0)" } ?? "\(item.order)"
+                    rawID = slug.isEmpty ? "bucket-\(span)" : "\(slug)-\(span)"
+                }
+                let seen = usedIDs[rawID, default: 0]
+                usedIDs[rawID] = seen + 1
+                let id = seen == 0 ? rawID : "\(rawID)-\(seen + 1)"
+                let name: String?
+                if !item.groupName.isEmpty {
+                    name = item.groupName
+                } else if item.duration == nil && !item.bucketDisplayName.isEmpty {
+                    name = item.bucketDisplayName
+                } else {
+                    name = nil
+                }
+                return SubscriptionWindow(
+                    id: id,
+                    name: name,
+                    duration: item.duration,
+                    usedPercent: item.usedPercent,
+                    resetsAt: item.resetsAt)
+            }
+        }
+
+        var usedIDs: [String: Int] = [:]
+        var result: [SubscriptionWindow] = []
+
+        if let groups = data["groups"] as? [[String: Any]], !groups.isEmpty {
+            for group in groups {
+                let groupName = group["displayName"] as? String ?? ""
+                let buckets = group["buckets"] as? [[String: Any]] ?? []
+                let parsed = buckets.enumerated().compactMap { index, bucket in
+                    parseBucket(bucket, groupDisplayName: groupName, order: index)
+                }
+                result.append(contentsOf: emitGroup(parsed, usedIDs: &usedIDs))
+            }
+            if !result.isEmpty { return result }
+        }
+
+        // 回退：部分响应直接把桶放在顶层 buckets（无 groups 包装）。
+        let topBuckets = data["buckets"] as? [[String: Any]] ?? []
+        var groupOrder: [String] = []
+        var grouped: [String: [ParsedBucket]] = [:]
+        for (index, bucket) in topBuckets.enumerated() {
+            guard let item = parseBucket(bucket, groupDisplayName: "", order: index) else { continue }
+            let key = item.groupName
+            if grouped[key] == nil { groupOrder.append(key) }
+            grouped[key, default: []].append(item)
+        }
+        for key in groupOrder {
+            result.append(contentsOf: emitGroup(grouped[key] ?? [], usedIDs: &usedIDs))
+        }
+        return result
     }
 
     private struct AntigravityPoolBucket {
