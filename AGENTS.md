@@ -2,10 +2,10 @@
 
 本机 AI 编程工具用量追踪器：扫描 Claude Code、Codex、Kimi Code、DSH / OpenCode Go、Pi、opencode、Hermes Agent、Antigravity 八类工具的本地日志，统计 Token、成本、订阅配额与 Agent 活动，并提供本机监听端口管理、刘海配额 HUD 与任务提醒/审批，以 macOS 原生状态栏 App（macOS 14+，Swift 6）和 CLI 呈现。Python 实现已移除，`swift/` 是唯一实现。
 
-## 程序现状（v0.6.2）
+## 程序现状（v0.6.3）
 
 - **版本与协议常量**（`TokenTrackerCore.swift` / `UsageStore.swift`）：
-  - 应用版本：`0.6.2`；数据库：`UsageStore.schemaVersion = 8`（`~/.tokentracker/usage.db`）；活动解析器：`v3`；冻结差分基线：`differentialFormatVersion = 4`；公开统计载荷：`publicStatsFormatVersion = 1`。
+  - 应用版本：`0.6.3`；数据库：`UsageStore.schemaVersion = 8`（`~/.tokentracker/usage.db`）；活动解析器：`v3`；冻结差分基线：`differentialFormatVersion = 4`；公开统计载荷：`publicStatsFormatVersion = 1`。
 - **支持的数据源（8 个，`Scanners/`）**：
   - 按事件明细扫描：`ClaudeScanner`（`~/.claude/projects/**/*.jsonl`）、`CodexScanner`（`~/.codex/sessions/**/*.jsonl` 与 `logs_*.sqlite`，同 turn 优先 JSONL）、`KimiScanner`（`~/.kimi-code/server/events/session_*.jsonl`）、`DshScanner`（`~/.dsh/sessions/**/session.jsonl.zstd`，需系统 `zstd`）、`PiScanner`（`~/.pi/agent/sessions/**/*.jsonl`）、`AntigravityScanner`（`~/.gemini/antigravity*/brain/*/.system_generated/logs/transcript.jsonl`，另含 T3 Code 以 ACP 模式启动的隔离目录 `~/.t3/userdata/providers/antigravity/*/antigravity-acp/brain`，工作区由 `AntigravityWorkspaceMap` 合并 Antigravity 自带 `conversation_summaries.db`（只读 `conversation_id` / `workspace_uris`）与可选 Hook 映射，Hook 优先）。
   - 按累计快照差量扫描：`OpencodeScanner`（`~/.local/share/opencode/opencode.db`）、`HermesScanner`（`~/.hermes/**/*.db`）。
@@ -19,7 +19,7 @@
   - **端口（`PortsView` / `PortsModel`）**：扫描本机 TCP 监听端口，解析绑定地址（区分仅本机与局域网可达）、RSS 内存占用、命令行与常见开发框架（Vite / Next.js / Wrangler / Uvicorn / FastAPI / Rails 等），按进程工作目录或命令行路径归属到项目并识别启动命令；支持搜索、默认过滤系统常驻进程、固定到状态栏、一键浏览器打开、终端内启停/重启项目及确认后关闭端口进程。
   - **活动（`ActivityView` / `ActivityDetailView`）**：活动解析 `v3`（Codex 已收到输出的 `response_item` 晋升为已确认执行，配对 DSH `tool/result`、Pi `toolResult` 与 Antigravity 后继 `GENERIC` 步骤的结果状态与耗时）；默认展示已确认执行事实、4 项核心指标、工具/Skill 榜单与 Agent × 工具矩阵，点击直达明细，底部折叠能力覆盖说明。
   - **报告与洞察（`ReportsView` / `InsightsStore`）**：按规范自然周主键（`week:yyyy-MM-dd`）生成与管理本地周报快照（ISO 周次标牌、生成区间预览、删除周报），提供预算/配额风险提醒、过去 14 天同刻异常检测、数据健康面板与脱敏 CSV/JSON 导出（`ReportsExport`）。
-  - **账号与订阅（`AccountsView` / `Subscriptions/`）**：左选账号、右看额度圆环与余额，无账号 ID 且官方余额完全相同的多把 API Key 合并为一行（`SubscriptionCardGroup`，逐把可移除）；支持 PKCE 授权码（Claude、Gemini）、设备码（Codex、Kimi、GitHub Copilot、Grok）、浏览器登录轮询（WorkBuddy、WorkBuddy AI、ZCode）、API Key 手动或一键导入（DeepSeek、OpenCode Go、MiniMax、Kimi）及 Antigravity 本机只读自动识别；另提供本地 Codex 多账号切换（`CodexAccountSwitcher`）。
+  - **账号与订阅（`AccountsView` / `Subscriptions/`）**：左选账号、右看额度圆环与余额，同名多周期额度（如 Antigravity 的 `Gemini` 与 `Claude / GPT` 各自 `5 小时` / `周 (7天)` 四项）按模型池分组等高双栏展示，无账号 ID 且官方余额完全相同的多把 API Key 合并为一行（`SubscriptionCardGroup`，逐把可移除）；支持 PKCE 授权码（Claude、Gemini）、设备码（Codex、Kimi、GitHub Copilot、Grok）、浏览器登录轮询（WorkBuddy、WorkBuddy AI、ZCode）、API Key 手动或一键导入（DeepSeek、OpenCode Go、MiniMax、Kimi）及 Antigravity 本机只读自动识别（优先读取 `retrieveUserQuotaSummary`，保留旧接口回退）；另提供本地 Codex 多账号切换（`CodexAccountSwitcher`）。
   - **状态栏、刘海 HUD 与任务提醒**：状态栏左键弹出 `MenuBarPanelView`（今日用量、配额、固定端口、最近会话）；内置刘海屏左侧可选显示配额圆环（`NotchHUDController`）；`TokenTrackerHook` 通过每用户私有临时目录 Unix Socket 与 `TaskHookServer` 通信，支持 Claude Code / Codex（CLI 与桌面本地会话）的 `PermissionRequest` 卡片内「允许一次 / 拒绝一次」审批代答与完成提醒，以及 Antigravity（`~/.gemini/config/hooks.json`）的会话提醒、工作区映射与一键切回原应用。
   - **设置（`SettingsView`）**：收拢为 5 类（`通用`、`外观与状态栏`、`提醒与集成`、`数据与同步`、`关于与更新`），兼容旧 8 分类持久化键；统一管理三类工具的 Hooks 差异预览与安装卸载，支持应用内更新与测试版更新通道（`UpdateChecker` / `UpdateInstaller`）。
   - **滚动与布局性能（`ScrollPerformance.swift`）**：`ScrollActivity` 在滚动期间 O(1) 抑制悬停重绘，以单遍测量 `Adaptive*Layout` 替代嵌套 `ViewThatFits`，长列表采用 `LazyVStack` 按行卡片渲染并复用日期格式化器。
