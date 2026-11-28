@@ -34,6 +34,7 @@
 
 ## 查询
 
+- CLI `tt quotas` 与 App 状态栏同源：官方窗口来自 TokenTracker 账号库的订阅快照（`SubscriptionQuotaBridge`，按窗口时长对应 5 小时 / 7 天 / 月度），共用 `subscription_cache.json` 的缓存与退避；某供应商没有唯一的当前账号时降级为本地估算。旧版直接读取、刷新并回写 Claude Code 钥匙串、`~/.claude/.credentials.json`、`~/.codex/auth.json`、`~/.kimi-code` 凭据的抓取链已移除；旧版留下的 `~/.tokentracker/claude_cred_backup.json` 不再读写，可自行删除。
 - 每家只把凭据发往登记的 https 域名（登录与查询分别登记），不跟随重定向，无 Cookie 与 URL 缓存。
 - 成功缓存 5 分钟；网络错误 1 分钟后重试；遵守 Retry-After（含强制刷新）；单请求 15 秒；
   最多 4 个并发。

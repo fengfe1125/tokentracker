@@ -53,14 +53,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     private func log2(_ message: String) {
-        let path = ProcessInfo.processInfo.environment["TT_UI_PREVIEW"] == "1"
-            ? NSTemporaryDirectory() + "/tokentracker-preview.log" : NSHomeDirectory() + "/.tokentracker/app.log"
-        let line = "\(Date()) \(message)\n"
-        if let h = FileHandle(forWritingAtPath: path) {
-            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
-        }
+        AppLog.write(message)
     }
 
     func hide() {

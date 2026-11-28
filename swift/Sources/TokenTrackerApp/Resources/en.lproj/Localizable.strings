@@ -1157,3 +1157,9 @@
 "原文过长，预览只保留前 {0} 个字符" = "Original is too long; the preview keeps only the first {0} characters";
 "未命名工具" = "Unnamed tool";
 "收起全文" = "Show less";
+"用量数据库来自更新版本的 TokenTracker" = "The usage database was written by a newer TokenTracker";
+"数据库版本 {0} 高于当前版本支持的 {1}。请安装最新版 TokenTracker；为避免损坏数据，当前版本不会读写它。\n\n{2}" = "Database version {0} is newer than version {1} supported by this build. Install the latest TokenTracker; to avoid damaging your data, this version will not read or write it.\n\n{2}";
+"无法打开用量数据库" = "Can't open the usage database";
+"请检查磁盘空间与文件权限后重新启动 TokenTracker。\n\n{0}\n{1}" = "Check disk space and file permissions, then restart TokenTracker.\n\n{0}\n{1}";
+"退出" = "Quit";
+"这个版本没有提供安装包校验值，无法自动安装，请从发布页手动下载" = "This release has no installer checksum, so it can't be installed automatically. Download it from the release page instead.";

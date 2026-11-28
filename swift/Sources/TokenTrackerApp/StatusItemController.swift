@@ -367,19 +367,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // ------------------------------------------------------------ 自愈 ----
 
     private func log(_ message: String) {
-        let path = NSHomeDirectory() + "/.tokentracker/app.log"
-        try? FileManager.default.createDirectory(
-            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"   // 与 Python time.strftime 本地时间一致
-        let line = "\(fmt.string(from: Date())) \(message)\n"
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(Data(line.utf8))
-            try? handle.close()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
-        }
+        AppLog.write(message)
     }
 
     /// 图标被系统隐藏 → 延迟后自愈（先强制重排，再销毁重建），失败退避。

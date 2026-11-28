@@ -38,6 +38,7 @@ extension UIFormat {
             case .badJSON: return "GitHub 返回的内容无法解析"
             case .checksumMismatch(let expected, let actual):
                 return "下载校验失败（期望 \(expected.prefix(12))…，实际 \(actual.prefix(12))…）"
+            case .missingChecksum: return "这个版本没有提供安装包校验值，无法自动安装，请从发布页手动下载"
             case .notAnAppBundle(let path): return "当前不是以 .app 方式运行（\(path)），无法自我更新"
             case .appNotFoundInDMG: return "安装包里找不到 TokenTracker.app"
             case .bundleIDMismatch(let expected, let actual): return "安装包的标识不匹配（期望 \(expected)，实际 \(actual)）"

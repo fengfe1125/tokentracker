@@ -88,4 +88,18 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(UIFormat.overviewTokens(4_650_000, yi: true), "≈ 465.00 万")
         XCTAssertEqual(UIFormat.overviewTokens(100_000_000, yi: true), "≈ 1.00 亿")
     }
+
+    func testUnopenableStoreMessagesAreLocalizedAndNameThePath() {
+        let previous = L10n.language
+        defer { L10n.setLanguage(previous) }
+        L10n.setLanguage("en")
+        let newer = AppState.storeFailureMessage(UsageStoreError.newerSchema(found: 9, supported: 8), path: "/tmp/u.db")
+        XCTAssertEqual(newer.title, "The usage database was written by a newer TokenTracker")
+        XCTAssertTrue(newer.detail.hasPrefix("Database version 9 is newer than version 8"), newer.detail)
+        XCTAssertTrue(newer.detail.hasSuffix("/tmp/u.db"), newer.detail)
+        L10n.setLanguage("zh-Hans")
+        let other = AppState.storeFailureMessage(SQLiteError(message: "disk I/O error"), path: "/tmp/u.db")
+        XCTAssertEqual(other.title, "无法打开用量数据库")
+        XCTAssertTrue(other.detail.contains("/tmp/u.db") && other.detail.contains("disk I/O error"), other.detail)
+    }
 }

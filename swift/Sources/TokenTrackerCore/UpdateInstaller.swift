@@ -9,7 +9,7 @@
 //  ⚠️ 签名现状：仓库目前是 ad-hoc 签名、未公证。从网上下回来的 dmg 带
 //  com.apple.quarantine，ad-hoc 的包过不了 Gatekeeper 评估，所以安装的最后
 //  一步必须清掉 quarantine 属性，否则换完直接起不来。这是在给自己开后门，
-//  因此清之前必须全部通过：GitHub API（HTTPS）给出的 sha256、codesign 校验、
+//  因此清之前必须全部通过：GitHub API（HTTPS）给出的 sha256（缺失即拒装）、codesign 校验、
 //  bundle id 一致。正经解法是 Developer ID 签名 + 公证，那样这一步就能删掉。
 //
 
@@ -35,6 +35,8 @@ public enum UpdateInstallError: LocalizedError, Equatable {
     case noAsset
     case badJSON
     case checksumMismatch(expected: String, actual: String)
+    /// 发布资产没有 GitHub digest：ad-hoc 签名包无法另行证明来源，拒绝自动安装。
+    case missingChecksum
     case notAnAppBundle(String)
     case appNotFoundInDMG
     case bundleIDMismatch(expected: String, actual: String)
@@ -47,6 +49,7 @@ public enum UpdateInstallError: LocalizedError, Equatable {
         case .badJSON: return "GitHub 返回的内容无法解析"
         case .checksumMismatch(let e, let a):
             return "下载校验失败（期望 \(e.prefix(12))…，实际 \(a.prefix(12))…）"
+        case .missingChecksum: return "这个版本没有提供安装包校验值，无法自动安装，请从发布页手动下载"
         case .notAnAppBundle(let p): return "当前不是以 .app 方式运行（\(p)），无法自我更新"
         case .appNotFoundInDMG: return "安装包里找不到 TokenTracker.app"
         case .bundleIDMismatch(let e, let a):
@@ -129,9 +132,11 @@ public struct UpdateInstaller: Sendable {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// release 没给 digest 时跳过（老版本没有这个字段），给了就必须对上。
+    /// 必须有 GitHub 给出的 digest 且对上。ad-hoc 签名的 codesign --verify 只能证明
+    /// 包内部完整、不能证明来源，缺少 digest 时没有别的依据，因此拒绝而不是跳过。
     public static func verifyChecksum(_ file: URL, expected: String?) throws {
-        guard let expected, !expected.isEmpty else { return }
+        guard let expected = expected?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !expected.isEmpty else { throw UpdateInstallError.missingChecksum }
         let actual = try sha256Hex(of: file)
         guard actual.caseInsensitiveCompare(expected) == .orderedSame else {
             throw UpdateInstallError.checksumMismatch(expected: expected, actual: actual)
@@ -153,7 +158,7 @@ public struct UpdateInstaller: Sendable {
     /// 下载 → 校验 → 挂载 → 校验签名与 bundle id → 就地替换 → 卸载。
     /// 返回被替换的 .app 路径。中途任何一步失败都不会动原来的 bundle。
     @discardableResult
-    public func install(dmg: URL, into appPath: String, expectedSHA256: String? = nil) throws
+    public func install(dmg: URL, into appPath: String, expectedSHA256: String?) throws
         -> String {
         guard appPath.hasSuffix(".app") else {
             throw UpdateInstallError.notAnAppBundle(appPath)
@@ -222,24 +227,34 @@ public struct UpdateInstaller: Sendable {
         request.setValue("TokenTracker-update-check", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 10
         final class Box: @unchecked Sendable {
-            var result: Result<Data, Error> = .failure(SQLiteError(message: "no response"))
+            private let lock = NSLock()
+            private var stored: Result<Data, Error>?
+            func set(_ value: Result<Data, Error>) { lock.lock(); stored = value; lock.unlock() }
+            var result: Result<Data, Error>? { lock.lock(); defer { lock.unlock() }; return stored }
         }
         let box = Box()
         let semaphore = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { data, _, error in
-            if let data { box.result = .success(data) }
-            else { box.result = .failure(error ?? SQLiteError(message: "unknown")) }
+        let task = URLSession.shared.dataTask(with: request) { data, _, error in
+            if let data { box.set(.success(data)) }
+            else { box.set(.failure(error ?? URLError(.unknown))) }
             semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 20)
-        return try box.result.get()
+        }
+        task.resume()
+        guard semaphore.wait(timeout: .now() + 20) == .success, let result = box.result else {
+            task.cancel()
+            throw URLError(.timedOut)
+        }
+        return try result.get()
     }
 
     private static let defaultDownload:
         @Sendable (String, @escaping @Sendable (Double) -> Void) throws -> URL = { url, progress in
         final class Box: @unchecked Sendable {
-            var result: Result<URL, Error> = .failure(SQLiteError(message: "no response"))
+            private let lock = NSLock()
+            private var stored: Result<URL, Error>?
             var observation: NSKeyValueObservation?
+            func set(_ value: Result<URL, Error>) { lock.lock(); stored = value; lock.unlock() }
+            var result: Result<URL, Error>? { lock.lock(); defer { lock.unlock() }; return stored }
         }
         let box = Box()
         let semaphore = DispatchSemaphore(value: 0)
@@ -250,12 +265,12 @@ public struct UpdateInstaller: Sendable {
                     .appendingPathComponent("tokentracker-update-\(UUID().uuidString).dmg")
                 do {
                     try FileManager.default.moveItem(at: temp, to: dest)
-                    box.result = .success(dest)
+                    box.set(.success(dest))
                 } catch {
-                    box.result = .failure(error)
+                    box.set(.failure(error))
                 }
             } else {
-                box.result = .failure(error ?? SQLiteError(message: "unknown"))
+                box.set(.failure(error ?? URLError(.unknown)))
             }
             semaphore.signal()
         }
@@ -263,9 +278,14 @@ public struct UpdateInstaller: Sendable {
             progress(p.fractionCompleted)
         }
         task.resume()
-        _ = semaphore.wait(timeout: .now() + 300)
+        let finished = semaphore.wait(timeout: .now() + 300) == .success
         box.observation?.invalidate()
-        return try box.result.get()
+        guard finished, let result = box.result else {
+            // 超时：取消下载，避免它在后台继续跑并留下临时文件。
+            task.cancel()
+            throw URLError(.timedOut)
+        }
+        return try result.get()
     }
 
     private static let defaultRun: @Sendable ([String]) throws -> String = { args in

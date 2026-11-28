@@ -44,7 +44,7 @@ codesign --verify --deep --strict 'build/TokenTracker Dev.app'
 真实问题与修正：
 
 - 此前圆环只有百分比，缺少已用／剩余文字；现在悬停和无障碍名称显示方向，详情显示全部窗口和官方数据获取时间。
-- 本机 Claude Code 钥匙串 OAuth 为空壳且没有当前凭据文件，但旧逻辑继续使用本地备用登录态查询得到 0%。App 现在启用 `OfficialQuotaService(currentLoginOnly: true)`，只取当前有效钥匙串（优先）或凭据文件，不跨到备用登录态或没有账号归属的桌面样本。按当前凭据指纹隔离缓存，退出或切换登录后不能沿用前账号的官方结果。兼容 CLI 默认调用策略不变，不修改登录态。
+- 本机 Claude Code 钥匙串 OAuth 为空壳且没有当前凭据文件，但旧逻辑继续使用本地备用登录态查询得到 0%。App 现在启用 `OfficialQuotaService(currentLoginOnly: true)`，只取当前有效钥匙串（优先）或凭据文件，不跨到备用登录态或没有账号归属的桌面样本。按当前凭据指纹隔离缓存，退出或切换登录后不能沿用前账号的官方结果。兼容 CLI 默认调用策略不变，不修改登录态。（2026-11-28 更新：`OfficialQuotaService` 及其读取、刷新、回写其他工具登录态的旧抓取链已整体移除；App 与 CLI `quotas` 都只使用 TokenTracker 账号库，见 `docs/subscriptions.md`。）
 - 官方接口缺少某个窗口或查询失败时，圆环把该窗口标记暂无数据，本地 Token 预算百分比不能参与最紧窗口选择。旧缓存依然存在但不会被当前登录策略使用，无需删除真实缓存或数据库。
 
 独立核对：当次 Codex 当前桌面会话官方查询已用 88%、周已用 14%，与当时 TokenTracker 官方结果相同；剩余应为 12%／86%，验证时须考虑查询时间差。今天 00:00 至 15:45（Asia/Shanghai，左闭右开）两个本地库中 Claude 611 条记录的四项 Token 完全一致；Codex 511 条记录在将 CC Switch 缓存包含输入转换为非缓存输入后也完全一致。本轮未修改 Token 扫描器、去重、数据库 schema、费用和公开统计字段。

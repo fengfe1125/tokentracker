@@ -52,7 +52,12 @@ final class ChecksumTests: XCTestCase {
         let want = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         XCTAssertEqual(try UpdateInstaller.sha256Hex(of: file), want)
         XCTAssertNoThrow(try UpdateInstaller.verifyChecksum(file, expected: want))
-        XCTAssertNoThrow(try UpdateInstaller.verifyChecksum(file, expected: nil))  // 老 release 无 digest
+        XCTAssertNoThrow(try UpdateInstaller.verifyChecksum(file, expected: want.uppercased()))
+        for missing in [nil, "", "  "] {
+            XCTAssertThrowsError(try UpdateInstaller.verifyChecksum(file, expected: missing)) { error in
+                XCTAssertEqual(error as? UpdateInstallError, .missingChecksum)
+            }
+        }
         XCTAssertThrowsError(try UpdateInstaller.verifyChecksum(file, expected: "deadbeef"))
     }
 }
@@ -105,6 +110,14 @@ final class InstallTests: XCTestCase {
         return (mount, mount.url.path)
     }
 
+    /// 真实写一个载荷文件并给出其 sha256：安装必须带校验值。
+    private func verifiedInstall(_ installer: UpdateInstaller, into appPath: String) throws -> String {
+        let dir = try TempDir()
+        let dmg = URL(fileURLWithPath: dir.path("x.dmg"))
+        try Data("payload".utf8).write(to: dmg)
+        return try installer.install(dmg: dmg, into: appPath, expectedSHA256: UpdateInstaller.sha256Hex(of: dmg))
+    }
+
     private func recorder(mount: String, bundleID: String = UpdateInstaller.bundleID) -> Recorder {
         let rec = Recorder()
         rec.outputs["hdiutil"] = "/dev/disk4s1\tApple_HFS\t\(mount)"
@@ -117,9 +130,7 @@ final class InstallTests: XCTestCase {
         _ = mount
         let rec = recorder(mount: mountPath)
         let installer = UpdateInstaller(run: rec.run)
-        let dmg = URL(fileURLWithPath: "/tmp/x.dmg")
-
-        let path = try installer.install(dmg: dmg, into: "/Applications/TokenTracker.app")
+        let path = try verifiedInstall(installer, into: "/Applications/TokenTracker.app")
         XCTAssertEqual(path, "/Applications/TokenTracker.app")
 
         // 先校验签名与 bundle id，再拷贝，最后才动原来的 bundle
@@ -146,8 +157,7 @@ final class InstallTests: XCTestCase {
         let installer = UpdateInstaller(run: rec.run)
 
         XCTAssertThrowsError(
-            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
-                                  into: "/Applications/TokenTracker.app")) { error in
+            try verifiedInstall(installer, into: "/Applications/TokenTracker.app")) { error in
             XCTAssertEqual(error as? UpdateInstallError,
                            .bundleIDMismatch(expected: UpdateInstaller.bundleIDRoot + ".*",
                                              actual: "com.evil.app"))
@@ -185,8 +195,7 @@ final class InstallTests: XCTestCase {
         let rec = recorder(mount: mountPath, bundleID: "com.tokentracker.desktop")
         let installer = UpdateInstaller(run: rec.run)
         XCTAssertNoThrow(
-            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
-                                  into: "/Applications/TokenTracker.app"))
+            try verifiedInstall(installer, into: "/Applications/TokenTracker.app"))
     }
 
     func testRollsBackWhenSwapFails() throws {
@@ -198,8 +207,7 @@ final class InstallTests: XCTestCase {
         let installer = UpdateInstaller(run: rec.run)
 
         XCTAssertThrowsError(
-            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
-                                  into: "/Applications/TokenTracker.app"))
+            try verifiedInstall(installer, into: "/Applications/TokenTracker.app"))
         // mv 三次：搬走 → 搬入（失败）→ 回滚
         let mvs = rec.calls.filter { $0[0].hasSuffix("/mv") }
         XCTAssertEqual(mvs.count, 3)
@@ -220,8 +228,7 @@ final class InstallTests: XCTestCase {
         let installer = UpdateInstaller(run: rec.run)
 
         XCTAssertThrowsError(
-            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
-                                  into: "/Applications/TokenTracker.app"))
+            try verifiedInstall(installer, into: "/Applications/TokenTracker.app"))
         let mvs = rec.calls.filter { $0[0].hasSuffix("/mv") }
         XCTAssertEqual(mvs.count, 1)
         XCTAssertEqual(mvs.first.map { Array($0[1...]) },
@@ -231,8 +238,7 @@ final class InstallTests: XCTestCase {
     func testRejectsNonAppPath() {
         let installer = UpdateInstaller(run: { _ in "" })
         XCTAssertThrowsError(
-            try installer.install(dmg: URL(fileURLWithPath: "/tmp/x.dmg"),
-                                  into: "/usr/local/bin/tt")) { error in
+            try verifiedInstall(installer, into: "/usr/local/bin/tt")) { error in
             XCTAssertEqual(error as? UpdateInstallError, .notAnAppBundle("/usr/local/bin/tt"))
         }
     }
@@ -246,5 +252,18 @@ final class InstallTests: XCTestCase {
         XCTAssertThrowsError(try installer.install(dmg: dmg, into: "/Applications/TokenTracker.app",
                                                    expectedSHA256: "deadbeef"))
         XCTAssertTrue(rec.calls.isEmpty, "校验和不对就不该挂载")
+    }
+
+    func testMissingChecksumNeverMounts() throws {
+        let dir = try TempDir()
+        let dmg = URL(fileURLWithPath: dir.path("x.dmg"))
+        try Data("payload".utf8).write(to: dmg)
+        let rec = Recorder()
+        let installer = UpdateInstaller(run: rec.run)
+        XCTAssertThrowsError(try installer.install(dmg: dmg, into: "/Applications/TokenTracker.app",
+                                                   expectedSHA256: nil)) { error in
+            XCTAssertEqual(error as? UpdateInstallError, .missingChecksum)
+        }
+        XCTAssertTrue(rec.calls.isEmpty, "没有校验值就不该挂载")
     }
 }

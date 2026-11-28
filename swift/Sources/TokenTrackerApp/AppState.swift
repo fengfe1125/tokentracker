@@ -198,11 +198,46 @@ final class AppState: ObservableObject {
         return ids.indices.contains(index + offset)
     }
 
+    /// 用量库打开失败的提示文案（独立出来便于测试）。
+    nonisolated static func storeFailureMessage(_ error: Error, path: String) -> (title: String, detail: String) {
+        if case let UsageStoreError.newerSchema(found, supported) = error {
+            return (L10n.text("用量数据库来自更新版本的 TokenTracker"),
+                    L10n.text("数据库版本 \(found) 高于当前版本支持的 \(supported)。请安装最新版 TokenTracker；为避免损坏数据，当前版本不会读写它。\n\n\(path)"))
+        }
+        return (L10n.text("无法打开用量数据库"),
+                L10n.text("请检查磁盘空间与文件权限后重新启动 TokenTracker。\n\n\(path)\n\(String(describing: error))"))
+    }
+
+    private static func terminateForUnopenableStore(_ error: Error, path: String) -> Never {
+        let message = storeFailureMessage(error, path: path)
+        FileHandle.standardError.write(Data("TokenTracker: \(message.title): \(error)\n".utf8))
+        if NSApp != nil, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            NSApp.setActivationPolicy(.accessory)
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = message.title
+            alert.informativeText = message.detail
+            alert.addButton(withTitle: L10n.text("退出"))
+            alert.addButton(withTitle: L10n.text("在 Finder 中显示"))
+            if alert.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            }
+        }
+        exit(1)
+    }
+
     init(dbPath: String? = nil) {
         let env = ProcessInfo.processInfo.environment
         let path = dbPath ?? env["TOKENTRACKER_DB"]
             ?? NSHomeDirectory() + "/.tokentracker/usage.db"
-        readStore = try! UsageStore(path: path)
+        do {
+            readStore = try UsageStore(path: path)
+        } catch {
+            // 打不开用量库（更高版本写入、磁盘已满、文件损坏……）时说明原因后退出，
+            // 不静默崩溃，也不尝试改动库文件。
+            Self.terminateForUnopenableStore(error, path: path)
+        }
         queryLoader = OverviewQueryLoader(path: path)
         insights = InsightsModel(path: path)
         heatmap = UsageHeatmapModel(path: path)

@@ -70,6 +70,11 @@ final class UpdaterModel: ObservableObject {
 
     func downloadAndInstall(_ release: ReleaseInfo) {
         guard !busy, let appPath, let asset = release.dmg else { return }
+        // 没有校验值的安装包装不上（见 UpdateInstaller.verifyChecksum），不必先下载。
+        guard let digest = asset.sha256, !digest.trimmingCharacters(in: .whitespaces).isEmpty else {
+            stage = .failed(Self.describe(UpdateInstallError.missingChecksum))
+            return
+        }
         stage = .downloading(0)
         let installer = self.installer
         Task {

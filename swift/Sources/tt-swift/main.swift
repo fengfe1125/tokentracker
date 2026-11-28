@@ -337,10 +337,14 @@ case "publish":
 case "quotas":
     let store = try openStore()
     let config = QuotasConfig.load(from: env["TOKENTRACKER_QUOTAS"] ?? "")
-    let service = OfficialQuotaService()
+    // 官方窗口只来自 TokenTracker 账号库（与 App 状态栏同源），不读写其他工具的登录态。
+    let service = SubscriptionService()
+    service.discover()
+    service.refresh()
+    let cards = service.cards()
     let entries = try QuotaEstimator.compute(store: store, config: config,
                                              nowMs: store.nowMs()) { name in
-        service.providerResult(name)
+        SubscriptionQuotaBridge.officialResult(name, cards: cards)
     }
     for entry in entries {
         let official = entry.source == "official" ? "[官方]" : "[本地]"

@@ -87,9 +87,16 @@ public final class UsageStore {
         self.path = path
         if path != ":memory:" {
             let dir = URL(fileURLWithPath: path).deletingLastPathComponent().path
-            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: dir) {
+                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+            }
         }
         conn = try SQLiteConnection(path: path)
+        // 库里有项目路径与会话标题（取自首条提问），只允许本人读写。
+        // SQLite 的日志文件沿用库文件权限。
+        // 首次收紧（旧版本建的 0644 库）时，一并收紧同目录的迁移备份。
+        if path != ":memory:", Self.restrictToOwner(path) { restrictMigrationBackups() }
         let version = Int32(try conn.scalarInt("PRAGMA user_version"))
         let missingIndex = try version == UsageStore.schemaVersion && conn.queryOne(
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_activity_call'") == nil
@@ -98,7 +105,7 @@ public final class UsageStore {
                 try upgrade()
             } else {
                 let lockPath = path + ".migrate.lock"
-                let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+                let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
                 if fd >= 0 {
                     flock(fd, LOCK_EX)
                     defer { flock(fd, LOCK_UN); close(fd) }
@@ -119,7 +126,7 @@ public final class UsageStore {
         // the upgrade while this one waited.
         let version = Int32(try conn.scalarInt("PRAGMA user_version"))
         if version > UsageStore.schemaVersion {
-            throw SQLiteError(message: "Database version \(version) is newer than supported \(UsageStore.schemaVersion)")
+            throw UsageStoreError.newerSchema(found: Int(version), supported: Int(UsageStore.schemaVersion))
         }
         if version == UsageStore.schemaVersion {
             // Same-version indexes stay readable by older builds, so they need
@@ -134,6 +141,7 @@ public final class UsageStore {
             let stamp = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
             let backupPath = "\(path).v\(version).backup-\(stamp).db"
             let backup = try SQLiteConnection(path: backupPath)
+            Self.restrictToOwner(backupPath)
             try conn.backup(to: backup)
         }
         if version < 3 { try validateResidualActivityTable() }
@@ -324,21 +332,41 @@ public final class UsageStore {
 
     /// Keep only the newest automatic backups once an upgrade has committed.
     /// Manually named copies never match the pattern and are left alone.
-    private func pruneMigrationBackups() {
+    /// 去掉组/其他用户的读写位；只处理本人拥有的普通文件，失败不影响使用。
+    /// 返回是否实际收紧了权限。
+    @discardableResult
+    static func restrictToOwner(_ file: String) -> Bool {
+        var info = stat()
+        guard lstat(file, &info) == 0, info.st_uid == getuid(),
+              info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o077 != 0 else { return false }
+        return chmod(file, info.st_mode & 0o700) == 0
+    }
+
+    private func migrationBackups() -> [String] {
         let url = URL(fileURLWithPath: path)
         let directory = url.deletingLastPathComponent().path
         let name = NSRegularExpression.escapedPattern(for: url.lastPathComponent)
         guard let pattern = try? NSRegularExpression(pattern: "^\(name)\\.v\\d+\\.backup-\\d+\\.db$"),
-              let files = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return }
-        let backups = files.filter {
+              let files = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return [] }
+        return files.filter {
             pattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
         }.map { (directory as NSString).appendingPathComponent($0) }
+    }
+
+    private func restrictMigrationBackups() {
+        migrationBackups().forEach { Self.restrictToOwner($0) }
+    }
+
+    private func pruneMigrationBackups() {
+        let backups = migrationBackups()
         func modified(_ file: String) -> Date {
             ((try? FileManager.default.attributesOfItem(atPath: file))?[.modificationDate] as? Date) ?? .distantPast
         }
-        for old in backups.sorted(by: { modified($0) > modified($1) }).dropFirst(UsageStore.migrationBackupsKept) {
+        let sorted = backups.sorted(by: { modified($0) > modified($1) })
+        for old in sorted.dropFirst(UsageStore.migrationBackupsKept) {
             try? FileManager.default.removeItem(atPath: old)
         }
+        sorted.prefix(UsageStore.migrationBackupsKept).forEach { Self.restrictToOwner($0) }
     }
 
     /// Some rollback builds reset user_version to 2 while leaving the complete
@@ -1480,6 +1508,19 @@ public final class UsageStore {
             }
         }
         return rows
+    }
+}
+
+/// 打开用量库时可识别的失败原因（App 据此给出可操作的提示，而不是直接崩溃）。
+public enum UsageStoreError: Error, CustomStringConvertible, Equatable {
+    /// 库由更新版本的 TokenTracker 写入（例如从测试版降级）；旧版不能安全读写。
+    case newerSchema(found: Int, supported: Int)
+
+    public var description: String {
+        switch self {
+        case let .newerSchema(found, supported):
+            return "Database version \(found) is newer than supported \(supported)"
+        }
     }
 }
 

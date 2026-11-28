@@ -19,7 +19,9 @@ public struct SubscriptionDiscovery {
 
     public init(home: String = NSHomeDirectory(),
                 env: [String: String] = ProcessInfo.processInfo.environment) {
-        self.init(home: home, env: env, keychainRead: { BillingContext.defaultKeychainRead() })
+        // 一键导入只复制 API Key，不读取 Claude Code 钥匙串（OAuth 登录态本就不导入，
+        // 读取只会触发钥匙串授权弹窗）。测试可经内部 init 注入钥匙串内容。
+        self.init(home: home, env: env, keychainRead: { nil })
     }
 
     init(home: String, env: [String: String], keychainRead: @escaping () -> [String: Any]?) {

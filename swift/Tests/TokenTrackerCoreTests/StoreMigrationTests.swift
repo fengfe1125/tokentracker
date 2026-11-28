@@ -109,6 +109,46 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(backups2.count, 1)
     }
 
+    /// 更新版本写入的库：打开时报可识别的错误，且不改动库内容、不生成备份。
+    func testNewerSchemaIsRejectedWithTypedErrorAndLeftUntouched() throws {
+        let tmp = try TempDir()
+        let path = tmp.path("usage.db")
+        let future = Int(UsageStore.schemaVersion) + 1
+        _ = try UsageStore(path: path).conn.execute("PRAGMA user_version=\(future)")
+        XCTAssertThrowsError(try UsageStore(path: path)) { error in
+            XCTAssertEqual(error as? UsageStoreError,
+                           .newerSchema(found: future, supported: Int(UsageStore.schemaVersion)))
+        }
+        XCTAssertEqual(try SQLiteConnection(path: path, readOnly: true).scalarInt("PRAGMA user_version"), Int64(future))
+        let backups = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+            .filter { $0.contains(".backup-") }
+        XCTAssertEqual(backups, [])
+    }
+
+    /// 库文件含项目路径与会话标题：新建与已有的库都只留本人读写。
+    func testDatabaseFileIsOwnerOnly() throws {
+        let tmp = try TempDir()
+        let fresh = tmp.path("nested", "usage.db")
+        _ = try UsageStore(path: fresh)
+        func mode(_ path: String) throws -> Int {
+            (try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        }
+        XCTAssertEqual(try mode(fresh) & 0o077, 0)
+        XCTAssertEqual(try mode(tmp.path("nested")) & 0o077, 0, "新建的数据目录也只给本人")
+
+        let existing = tmp.path("old.db")
+        _ = try UsageStore(path: existing)
+        chmod(existing, 0o644)
+        let oldBackup = tmp.path("old.db.v7.backup-1.db")
+        FileManager.default.createFile(atPath: oldBackup, contents: Data(), attributes: [.posixPermissions: 0o644])
+        let unrelated = tmp.path("notes.txt")
+        FileManager.default.createFile(atPath: unrelated, contents: Data(), attributes: [.posixPermissions: 0o644])
+        _ = try UsageStore(path: existing)
+        XCTAssertEqual(try mode(existing), 0o600)
+        XCTAssertEqual(try mode(oldBackup), 0o600, "旧版本留下的迁移备份一并收紧")
+        XCTAssertEqual(try mode(unrelated), 0o644, "不动同目录的其他文件")
+    }
+
     /// 对齐 test_current_version_gains_call_index_without_backup。
     func testCurrentVersionGainsCallIndexWithoutBackup() throws {
         let tmp = try TempDir()
@@ -149,6 +189,10 @@ final class StoreMigrationTests: XCTestCase {
         XCTAssertEqual(kept.count, UsageStore.migrationBackupsKept)
         XCTAssertTrue(kept.contains("usage.db.v5.backup-3.db"))
         XCTAssertTrue(kept.contains { $0.hasPrefix("usage.db.v0.backup-") })
+        for name in kept {
+            let mode = (try FileManager.default.attributesOfItem(atPath: tmp.path(name))[.posixPermissions] as? NSNumber)?.intValue
+            XCTAssertEqual((mode ?? -1) & 0o077, 0, "迁移备份同样只给本人：\(name)")
+        }
         XCTAssertTrue(FileManager.default.fileExists(atPath: manual))
     }
 
